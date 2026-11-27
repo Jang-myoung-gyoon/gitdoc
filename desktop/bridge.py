@@ -17,6 +17,7 @@ from editing import read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from page_alignment import comparison_pages, footer_regions
+from page_text import page_text
 from preview import CACHE, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
@@ -150,6 +151,10 @@ def font_raster(path, number):
     return str(output)
 
 
+def preview_text(paths, pages, number):
+    return [page_text(Path(path), page) if path and page else [] for path, page in zip(paths, pages)]
+
+
 def register(file, title):
     upload = load_local_file(file)
     with database(write=True) as db:
@@ -217,7 +222,7 @@ def restore(doc, branch, version, base, reason):
 
 OPERATIONS = {
     "workspace": workspace_info, "library": library, "detail": detail, "branch_compare": branch_comparison,
-    "view": view, "page_notes": page_notes, "register": register,
+    "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "review": review,
     "restore": restore, "save": save_file, "print": print_preview, "merge": merge,
     "browser": open_browser_view, "font_raster": font_raster,

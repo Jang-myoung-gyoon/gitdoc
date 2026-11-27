@@ -3,6 +3,7 @@
 mod bridge;
 mod pages;
 mod paper;
+mod paper_text;
 mod printing;
 mod screen;
 

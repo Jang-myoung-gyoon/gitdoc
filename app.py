@@ -13,6 +13,7 @@ from editing import MODES, read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
 from page_alignment import comparison_pages, footer_regions
+from page_text import page_text
 from preview import PreviewError, page_dimensions, preview_path, preview_png, requires_poppler
 from workbook import read_workbook
 from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
@@ -448,6 +449,17 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
         sheet_widths=[width for width, _ in dimensions] if item["extension"] in WORKBOOK_EXTENSIONS else [],
         pdf=url_for("preview_pdf", document_id=document_id, version_id=version_id),
     )
+
+
+@app.get("/documents/<int:document_id>/versions/<int:version_id>/preview/<int:page>/text")
+def preview_text(document_id, version_id, page):
+    try:
+        _, path = document_preview(document_id, version_id)
+        if not 1 <= page <= len(page_dimensions(path)):
+            abort(404)
+        return jsonify(lines=page_text(path, page))
+    except PreviewError as error:
+        return jsonify(error=str(error)), 422
 
 
 @app.errorhandler(MissingEntity)

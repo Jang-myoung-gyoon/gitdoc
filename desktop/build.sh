@@ -24,6 +24,8 @@ mkdir -p "$staged/Contents/MacOS"
 cp desktop/Info.plist "$staged/Contents/Info.plist"
 cp "$target/debug/gitdoc-desktop" "$staged/Contents/MacOS/gitdoc-desktop"
 swiftc -target "$(uname -m)-apple-macosx12.0" -parse-as-library -swift-version 5 -O -framework AppKit desktop/GitDoc.swift -o "$staged/Contents/MacOS/GitDoc"
+swiftc -target "$(uname -m)-apple-macosx12.0" -parse-as-library -swift-version 5 -O -framework Vision desktop/OCR.swift -o "$staged/Contents/MacOS/gitdoc-ocr"
+codesign --force --sign - "$staged/Contents/MacOS/gitdoc-ocr"
 codesign --force --sign - "$staged"
 codesign --verify --deep "$staged"
 

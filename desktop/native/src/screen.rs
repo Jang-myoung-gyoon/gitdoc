@@ -2,6 +2,7 @@ use crate::{
     Destination,
     bridge::{Bridge, Message, Reply},
     paper::{self, PaperRow},
+    paper_text::{self, Lines},
 };
 use eframe::egui::*;
 use serde_json::{Value, json};
@@ -92,6 +93,7 @@ struct PagePreview {
     regions: Vec<[f32; 4]>,
     notes: Vec<String>,
     footer_only: bool,
+    text: Option<Vec<Lines>>,
 }
 
 #[derive(Default)]
@@ -111,6 +113,8 @@ struct Pane {
     page_jump: Option<usize>,
     follow_region: bool,
     paper_offset: Option<f32>,
+    text_request: Option<usize>,
+    text_selection: Option<paper_text::Selection>,
     scroll_to: bool,
     sheet: usize,
     cell: String,
@@ -191,7 +195,7 @@ impl GitDoc {
     }
     fn request(&mut self, op: &'static str, scope: u64, params: Value) -> bool {
         if self.bridge.send.send(Message { op, scope, params }).is_ok() {
-            if !matches!(op, "page" | "changes") {
+            if !matches!(op, "page" | "changes" | "page_text") {
                 self.busy += 1;
             }
             true
@@ -373,14 +377,33 @@ impl GitDoc {
     }
 
     fn receive(&mut self, ctx: &Context, frame: &eframe::Frame, reply: Reply) {
-        if !matches!(reply.op, "page" | "changes") {
+        if !matches!(reply.op, "page" | "changes" | "page_text") {
             self.busy = self.busy.saturating_sub(1);
         }
         let wanted = match reply.op {
-            "page" | "detail" | "view" | "changes" | "branch_compare" => reply.scope == self.epoch,
+            "page" | "detail" | "view" | "changes" | "page_text" | "branch_compare" => {
+                reply.scope == self.epoch
+            }
             _ => true,
         };
         if !wanted {
+            return;
+        }
+        if reply.op == "page_text" {
+            self.pane.text_request = None;
+            if let Some(preview) = reply
+                .page
+                .and_then(|page| self.pane.previews.get_mut(&page))
+                .and_then(Option::as_mut)
+            {
+                preview.text = Some(
+                    reply
+                        .result
+                        .ok()
+                        .and_then(|value| serde_json::from_value(value).ok())
+                        .unwrap_or_default(),
+                );
+            }
             return;
         }
         if reply.op == "page"
@@ -519,6 +542,7 @@ impl GitDoc {
                             .unwrap_or_default(),
                         notes: serde_json::from_value(result["notes"].clone()).unwrap_or_default(),
                         footer_only: result["footer_only"] == true,
+                        text: None,
                     }),
                 );
                 if self.pane.follow_region
@@ -1078,6 +1102,9 @@ impl GitDoc {
         let jump = self.pane.page_jump.take();
         let mut area = ScrollArea::both()
             .id_salt("paper")
+            .scroll_source(
+                scroll_area::ScrollSource::SCROLL_BAR | scroll_area::ScrollSource::MOUSE_WHEEL,
+            )
             .auto_shrink([false, false]);
         if let Some(number) = jump {
             let row = &paper[number - 1];
@@ -1147,6 +1174,18 @@ impl GitDoc {
         }
         self.pane.paper_offset = Some(offset);
 
+        if self.pane.text_request.is_none()
+            && let Some(page) = std::iter::once(self.pane.page)
+                .chain(visible.clone().map(|index| index + 1))
+                .find(|page| self.pane.previews.get(page).and_then(Option::as_ref).is_some_and(|preview| {
+                    preview.text.is_none() && preview.textures.iter().any(Option::is_some)
+                }))
+            && self.request("page_text", self.epoch, json!({
+                "number":page, "pages":self.pane.page_pairs[page - 1], "paths":self.pane.data["paths"]
+            }))
+        {
+            self.pane.text_request = Some(page);
+        }
         let order = paper::render_order(visible, pages, self.pane.page);
         self.pane.previews.retain(|number, preview| {
             preview.is_none() || order.clone().any(|page| page == *number)
@@ -1162,7 +1201,7 @@ impl GitDoc {
     }
 
     fn draw_paper_row(
-        &self,
+        &mut self,
         ui: &mut Ui,
         origin: Pos2,
         row: &PaperRow,
@@ -1241,6 +1280,16 @@ impl GitDoc {
                             StrokeKind::Inside,
                         );
                     }
+                }
+                if let Some(lines) = preview.text.as_ref().and_then(|sides| sides.get(side)) {
+                    paper_text::interact(
+                        ui,
+                        image,
+                        number,
+                        side,
+                        lines,
+                        &mut self.pane.text_selection,
+                    );
                 }
             } else {
                 ui.painter()

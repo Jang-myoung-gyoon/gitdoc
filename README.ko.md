@@ -66,6 +66,8 @@ python docvers.py open 1 --base 2 --target 3 --browser --url
 
 네이티브 앱은 Rust 작업 스레드에서 PDFium으로 페이지를 렌더링하고 시각적 변경 영역을 계산합니다. Python 브리지는 캐시된 PDF의 경로와 문서 정보를 전달합니다. GitDoc은 저장된 페이지 지문을 브라우저와 데스크톱 앱에서 함께 사용합니다. 브라우저는 일반 PDF 미리보기에 PDFium을 사용하고, 양식이나 글꼴 대체가 필요한 경우 Poppler의 `pdftoppm`를 사용합니다. 비교할 때 어느 한쪽이라도 Poppler가 필요하면 양쪽에 적용합니다. LibreOffice의 `soffice`는 PATH와 일반 설치 경로에서 찾습니다. HWP/HWPX는 [rhwp](https://github.com/edwardkim/rhwp)의 `rhwp` 실행 파일을 PATH나 `data/tools/rhwp/rhwp`에 둡니다. 도구 경로는 `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, `DOCVERS_RHWP`로 직접 지정할 수 있습니다.
 
+렌더링된 페이지의 글자를 드래그한 뒤 macOS에서는 **Cmd+C**, Windows에서는 **Ctrl+C**로 복사하세요. 두 버전을 비교할 때도 양쪽에서 선택할 수 있습니다. 내장 텍스트를 우선 사용하며, 스캔이나 윤곽선으로 된 글자는 페이지를 표시한 뒤 OCR로 준비합니다. macOS 앱 빌드에는 Apple Vision OCR 도구가 포함됩니다. 이 도구 없이 OCR을 쓰려면 한글·영어 언어 데이터가 포함된 Tesseract를 설치해 PATH에 추가하거나 `DOCVERS_TESSERACT`를 지정하세요. `DOCVERS_OCR_LANGUAGES`로 언어를 바꿀 수 있으며 기본값은 `kor+eng`입니다. OCR 결과에는 오인식이 있을 수 있습니다.
+
 삽입·삭제된 페이지는 따로 표시하고 반대쪽에는 대응하는 페이지가 없다고 표시합니다. 위치가 밀려도 같은 페이지는 변경으로 집계하지 않습니다. 쪽이 밀린 뒤 같은 하단 위치에 반복되는 차이만 있으면 화면에 강조하되 본문 변경 목록과 건수에서 분리합니다. HWP와 Office의 글꼴 및 배치는 변환기와 설치된 글꼴에 따라 달라집니다. 스프레드시트 화면에서는 값과 XLSX 수식을 확인하고, 셀 값·병합·일부 서식의 변경을 찾을 수 있습니다. 인쇄 배치와 차트는 PDF 미리보기에서 확인할 수 있습니다. 암호화됐거나 변환할 수 없는 파일도 원본을 내려받을 수 있습니다. DOCM·XLSM·PPTM은 원본 그대로 보관하고 변환 환경에서 매크로 실행을 비활성화합니다. ODS는 페이지 단위로 비교합니다. CSV는 쉼표, TSV는 탭으로 구분합니다. UTF-8, BOM이 있는 UTF-16, CP949를 지원합니다. 순서가 바뀐 행을 비교하려면 두 버전에서 같은 위치에 있으며 중복이나 빈 값이 없는 열 제목을 선택합니다. 표 보기는 버전당 최대 25,000개 필드를 지원하며, 더 큰 표는 원본과 PDF로 내보낼 수 있습니다.
 
 ## 문서 미리보기 글꼴

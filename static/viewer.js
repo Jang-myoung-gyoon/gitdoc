@@ -217,6 +217,16 @@ async function mountViewer(root) {
 
   const resident = new Map();
   const scanned = new Map();
+  const textMeasure = document.createElement('canvas').getContext('2d');
+  textMeasure.font = '100px sans-serif';
+  const textLayers = new Map();
+  let visibleText = new Set();
+  const textResize = new ResizeObserver(entries => {
+    for (const { target, contentRect } of entries) {
+      const spans = textLayers.get(target);
+      if (spans) positionText(spans, contentRect.width, contentRect.height);
+    }
+  });
   let pageNumber = 0;
   let activeRegion = -1;
   let positioning = false;
@@ -365,6 +375,60 @@ async function mountViewer(root) {
     }
   }
 
+  function positionText(spans, width, height) {
+    for (const { span, first, last, box, measured } of spans) {
+      const dx = (last[0] - first[0]) * width;
+      const dy = (last[1] - first[1]) * height;
+      const vertical = Math.abs(dy) > Math.abs(dx);
+      const flipped = (vertical ? dy : dx) < 0 && !span.textContent.match(/[\u0590-\u08ff]/u);
+      const angle = vertical ? (flipped ? -90 : 90) : (flipped ? 180 : 0);
+      const [x0, y0, x1, y1] = box;
+      const w = (x1 - x0) * width, h = (y1 - y0) * height;
+      const size = vertical ? w : h;
+      if (!(size > 0)) continue;
+      span.style.left = `${(angle === 90 || angle === 180 ? x1 : x0) * 100}%`;
+      span.style.top = `${(angle === -90 || angle === 180 ? y1 : y0) * 100}%`;
+      span.style.fontSize = `${size}px`;
+      span.style.transform = `rotate(${angle}deg) scaleX(${(vertical ? h : w) / (size * measured)})`;
+    }
+  }
+
+  async function showText(cell, side, state, priority) {
+    try {
+      const response = await fetch(`${sides[side].url}/${cell.physicalPage}/text`,
+        { signal: state.controller.signal, priority });
+      if (!response.ok) return;
+      const { lines } = await response.json();
+      if (state.controller.signal.aborted || !lines.length) return;
+      const layer = document.createElement('div');
+      layer.className = 'viewer-text';
+      const spans = lines.map(line => {
+        const span = document.createElement('span');
+        span.dir = 'auto';
+        span.textContent = line.map(([value]) => value).join('');
+        const box = line.reduce(([x0, y0, x1, y1], [, b]) =>
+          [Math.min(x0, b[0]), Math.min(y0, b[1]), Math.max(x1, b[2]), Math.max(y1, b[3])],
+        [1, 1, 0, 0]);
+        layer.append(span, '\n');
+        return { span, box, first: line[0][1], last: line.at(-1)[1],
+          measured: Math.max(1, textMeasure.measureText(span.textContent).width) / 100 };
+      });
+      textLayers.set(cell.sheet, spans);
+      cell.sheet.append(layer);
+      textResize.observe(cell.sheet);
+    } catch {
+      // The raster preview remains available if extracting selectable text fails.
+    }
+  }
+
+  function loadVisibleText(number, state) {
+    if (!visibleText.has(number) || !state?.done || state.requestedText) return;
+    state.requestedText = true;
+    for (const { side } of state.rendered) {
+      showText(rows[number - 1].cells[side], side, state, number === pageNumber ? 'high' : 'low');
+    }
+  }
+
   function showRow(number, priority = 'high') {
     if (resident.has(number)) return resident.get(number).promise;
     const state = { done: false, controller: new AbortController(), rendered: [], regions: [] };
@@ -388,6 +452,7 @@ async function mountViewer(root) {
           }
           const image = result.value;
           image.alt = cell.label;
+          image.draggable = false;
           cell.sheet.append(image);
           const canvas = document.createElement('canvas');
           canvas.className = 'viewer-overlay';
@@ -403,6 +468,7 @@ async function mountViewer(root) {
           if (!scanned.has(number)) scanned.set(number, Promise.resolve(result));
           drawMarks(number, state);
         }
+        loadVisibleText(number, state);
         if (number === pageNumber) updateStatus();
       });
     return state.promise;
@@ -413,7 +479,12 @@ async function mountViewer(root) {
     if (!state) return;
     state.controller.abort();
     resident.delete(number);
-    rows[number - 1].cells.forEach(cell => cell?.sheet.replaceChildren());
+    rows[number - 1].cells.forEach(cell => {
+      if (!cell) return;
+      textResize.unobserve(cell.sheet);
+      textLayers.delete(cell.sheet);
+      cell.sheet.replaceChildren();
+    });
   }
 
   function countRowsBefore(isBefore) {
@@ -434,6 +505,8 @@ async function mountViewer(root) {
     const bottom = top + scroll.clientHeight;
     const first = countRowsBefore(bounds => bounds.bottom <= top) + 1;
     const last = countRowsBefore(bounds => bounds.top < bottom);
+    visibleText = new Set([pageNumber]);
+    for (let number = first; number <= last; number += 1) visibleText.add(number);
     for (const number of resident.keys()) {
       if (number !== pageNumber && (number < first - 1 || number > last + 1)) hideRow(number);
     }
@@ -441,6 +514,7 @@ async function mountViewer(root) {
     for (let number = first; number <= last; number += 1) showRow(number);
     if (first > 1) showRow(first - 1, 'low');
     if (last < total) showRow(last + 1, 'low');
+    for (const number of visibleText) loadVisibleText(number, resident.get(number));
   }
 
   function topOf(element) {
