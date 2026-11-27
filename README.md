@@ -207,6 +207,8 @@ Edit checked-out originals in your usual editor. Branch switching protects uncom
 
 ## MCP and the desktop skill
 
+In **Settings → 에이전트 연결**, choose Codex or Claude Code and copy the installation prompt, or run the local preflight. Confirm the displayed argument array, skill path, and workspace before installing. The connection gives the local agent read-only tool access to that single document database. Restart the agent to load the new skill. Use the same dialog to remove the matching configuration and skill. Move the Mac app out of its disk image before registering. When the CLI is unavailable, use the copied prompt for manual setup. [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli), [Claude Code MCP](https://code.claude.com/docs/en/mcp), [Claude Code skills](https://code.claude.com/docs/en/skills).
+
 ```sh
 codex mcp add gitdoc -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"
 ```

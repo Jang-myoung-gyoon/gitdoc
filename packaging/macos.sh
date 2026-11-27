@@ -43,6 +43,8 @@ assemble() {
     app="$bundle/Contents/Resources/app"
     cp ./*.py LICENSE "$app/"
     cp desktop/*.py "$app/desktop/"
+    mkdir -p "$app/skills"
+    cp -R .agents/skills/document-versions-desktop "$app/skills/"
     cp -R templates static "$app/"
     echo "$version" > "$app/PACKAGED"
 

@@ -1,5 +1,6 @@
 use crate::{
     Destination,
+    agent_setup::AgentSetup,
     bridge::{Bridge, Message, Reply},
     office_editor::Editor,
     paper::{self, PaperRow},
@@ -142,6 +143,7 @@ struct Pane {
 
 pub struct GitDoc {
     bridge: Bridge,
+    agent_setup: AgentSetup,
     busy: usize,
     epoch: u64,
     doc: i64,
@@ -172,6 +174,7 @@ impl GitDoc {
     pub fn new(bridge: Bridge, destination: Result<Destination, String>) -> Self {
         let mut app = Self {
             bridge,
+            agent_setup: AgentSetup::default(),
             busy: 0,
             epoch: 0,
             doc: 0,
@@ -388,7 +391,10 @@ impl GitDoc {
 
     fn open_editor_form(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
+        let extension = self
+            .record(self.head())
+            .map(|row| text(&row["extension"]))
+            .unwrap_or("");
         let mode = match extension {
             "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
@@ -469,6 +475,10 @@ impl GitDoc {
     }
 
     fn receive(&mut self, ctx: &Context, frame: &eframe::Frame, reply: Reply) {
+        if reply.op.starts_with("agent_setup_") {
+            self.agent_setup.receive(reply.op, reply.result);
+            return;
+        }
         if !matches!(reply.op, "page" | "changes" | "page_text") {
             self.busy = self.busy.saturating_sub(1);
         }
@@ -821,6 +831,11 @@ impl GitDoc {
                                 self.request("desktop_review", 0, json!({"enabled":review}));
                         }
                         ui.weak("켜면 새 수정안에 승인 또는 반려가 필요합니다.");
+                        ui.separator();
+                        if ui.button("에이전트 연결…").clicked() {
+                            self.agent_setup.open = true;
+                            ui.close();
+                        }
                     });
                     if ui.button("＋ 문서 등록").clicked() {
                         self.register_form(None);
@@ -2306,6 +2321,20 @@ impl eframe::App for GitDoc {
         self.sidebar(ctx);
         self.central(ctx);
         self.edit_dialog(ctx);
+        if let Some((op, params)) = self.agent_setup.show(ctx)
+            && self
+                .bridge
+                .send
+                .send(Message {
+                    op,
+                    scope: 0,
+                    params,
+                })
+                .is_err()
+        {
+            self.agent_setup
+                .receive(op, Err("에이전트 설치 처리기에 연결할 수 없습니다.".into()));
+        }
     }
 }
 

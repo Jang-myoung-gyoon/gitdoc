@@ -1,5 +1,6 @@
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -465,5 +466,18 @@ def reset_document_branch(document_id: int, version_id: int, expected_head_id: i
 
 
 if __name__ == "__main__":
-    initialize()
+    if sys.argv[1:] == ["--read-only"]:
+        import asyncio
+
+        allowed = {"search_documents", "list_branches", "list_versions", "read_version",
+                   "get_document_capabilities", "get_preview_info", "render_document_page",
+                   "list_visual_changes", "get_pdf_notes", "inspect_workbook", "compare_versions",
+                   "compare_branches", "list_editable_blocks"}
+        for tool in asyncio.run(server.list_tools()):
+            if tool.name not in allowed:
+                server.remove_tool(tool.name)
+    elif sys.argv[1:]:
+        raise SystemExit("Unexpected MCP server options.")
+    else:
+        initialize()
     server.run(transport="stdio")

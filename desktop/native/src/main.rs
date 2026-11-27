@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod agent_setup;
 mod bridge;
 mod editor_fonts;
 mod office_editor;

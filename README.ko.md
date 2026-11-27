@@ -207,6 +207,8 @@ docvers commit -m '산출내역 수정'
 
 ## MCP와 데스크톱 스킬
 
+**설정 → 에이전트 연결**에서 Codex 또는 Claude Code를 고른 뒤 설치 프롬프트를 복사하거나 로컬 사전 검사를 실행합니다. 표시된 명령 인자, 스킬 경로, 문서함을 확인한 뒤 설치를 승인하세요. 로컬 에이전트에는 지정한 문서함 하나를 읽는 MCP 도구가 제공됩니다. 새 스킬을 불러오려면 에이전트를 다시 시작하세요. 같은 창에서 등록한 연결을 해제할 수 있습니다. macOS에서는 설치 위치로 앱을 이동한 뒤 등록하고, CLI가 없으면 복사한 프롬프트로 수동 설정합니다. [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli), [Claude Code MCP](https://code.claude.com/docs/en/mcp), [Claude Code 스킬](https://code.claude.com/docs/en/skills).
+
 ```sh
 codex mcp add gitdoc -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"
 ```

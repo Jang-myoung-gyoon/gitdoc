@@ -32,6 +32,8 @@ Copy-Item "$native\gitdoc-desktop.exe", "$native\gitdoc-pdf.exe" $stage
 Copy-Item *.py, LICENSE "$stage\app"
 Copy-Item desktop\*.py "$stage\app\desktop"
 Copy-Item -Recurse templates, static "$stage\app"
+New-Item -ItemType Directory -Force "$stage\app\skills" | Out-Null
+Copy-Item .agents/skills/document-versions-desktop "$stage\app\skills" -Recurse
 Set-Content -Path "$stage\app\PACKAGED" -Value $version -Encoding ascii
 
 $archive = if ($env:GITDOC_PYTHON_ARCHIVE) { $env:GITDOC_PYTHON_ARCHIVE } else { "dist\cache\$pythonArchive" }
