@@ -170,3 +170,18 @@ summary { margin-top: 12px; color: var(--accent); cursor: pointer; }
 .visual-viewer[data-magnification="125"] .viewer-single .viewer-sheet { width: min(125%, var(--sheet-width, 1025px)); }
 .visual-viewer[data-magnification="150"] .viewer-single .viewer-sheet { width: min(150%, var(--sheet-width, 1230px)); }
 .visual-viewer[data-magnification="200"] .viewer-single .viewer-sheet { width: min(200%, var(--sheet-width, 1640px)); }
+
+.edit-link { font-weight: 750; }
+.editing-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(245px, 320px); gap: 16px; align-items: start; }
+.editing-workspace .visual-viewer { margin: 0; }
+.editing-workspace [data-note-field][hidden] { display: none; }
+.editing-workspace .sheet-table td[data-address] { cursor: cell; }
+.editing-workspace .sheet-table td[data-address]:hover { background-color: #edf3fd; }
+@media (max-width: 780px) {
+  .editing-workspace { grid-template-columns: minmax(0, 1fr); }
+  .editing-workspace > section { grid-row: 1; }
+}
+
+.viewer-notes { padding: 0 14px 12px; }
+.viewer-notes ul { max-height: 180px; overflow: auto; padding-inline-start: 23px; }
+.viewer-notes li { white-space: pre-wrap; overflow-wrap: anywhere; }

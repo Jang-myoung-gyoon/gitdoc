@@ -6,8 +6,10 @@ from pathlib import Path
 from zipfile import BadZipFile
 
 from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
+from pypdf.errors import PyPdfError
 from werkzeug.exceptions import SecurityError
 
+from editing import MODES, modify_document, read_pdf_notes
 from extract import extract_for_version, matches_format
 from preview import PreviewError, page_sizes, preview_path, preview_png
 from workbook import read_workbook
@@ -150,7 +152,8 @@ def detail(document_id):
         versions = branch_history(db, active)
         current = version(db, document_id, active["head_id"])
     return render_template("detail.html", doc=doc, versions=versions, current=current,
-                           opened=opened or current, active=active, branches=branches)
+                           opened=opened or current, active=active, branches=branches,
+                           edit_mode=MODES.get(current["extension"]))
 
 
 @app.post("/documents/<int:document_id>/branches")
@@ -230,6 +233,55 @@ def merge_branches(document_id):
     return redirect(url_for("detail", document_id=document_id, branch=target_name), 303)
 
 
+def save_proposal(document_id, name, base, upload, reason):
+    with database(write=True) as db:
+        active = branch(db, document_id, name)
+        if active["head_id"] != base:
+            raise ValueError("확정본이 변경되었습니다. 새 확정본을 기준으로 다시 제출하세요.")
+        current = version(db, document_id, active["head_id"])
+        if current["extension"] != upload[1]:
+            raise ValueError("확정본과 같은 확장자의 파일을 선택하세요.")
+        if current["sha256"] == upload[3]:
+            raise ValueError("확정본과 같은 파일입니다.")
+        return append_version(db, active, upload, reason, "pending")
+
+
+def review_draft(document_id, name, version_id):
+    flash("수정안을 검토 대기로 등록했습니다.")
+    return redirect(url_for("compare", document_id=document_id, target=version_id, branch=name), 303)
+
+
+@app.route("/documents/<int:document_id>/edit", methods=("GET", "POST"))
+def edit_document(document_id):
+    name = request.args.get("branch", "main")
+    submitted = request.method == "POST"
+    with database() as db:
+        doc = document(db, document_id)
+        active = branch(db, document_id, name)
+        base = request.form.get("base", type=int) if submitted else active["head_id"]
+        item = version(db, document_id, base, VERSION_FIELDS + (", content" if submitted else ""))
+    mode = MODES.get(item["extension"])
+    if not mode:
+        abort(400, description="이 형식의 내장 편집을 지원하지 않습니다.")
+    params = request.form if submitted else request.args
+    context = dict(doc=doc, active=active, item=item, mode=mode, fields=params)
+    if not submitted:
+        return render_template("edit.html", **context)
+    if base != active["head_id"]:
+        return render_template("edit.html", **context,
+                               error="확정본이 변경되었습니다. 최신 확정본에서 다시 편집하세요."), 409
+    try:
+        reason = request.form.get("reason", "").strip()
+        if not 1 <= len(reason) <= 500:
+            raise ValueError("변경 사유를 1~500자로 입력하세요.")
+        updated = modify_document(item["extension"], item["content"], request.form, MAX_FILE)
+        upload = prepare_upload(item["filename"], updated)
+        version_id = save_proposal(document_id, name, base, upload, reason)
+    except ValueError as error:
+        return render_template("edit.html", **context, error=str(error)), 422
+    return review_draft(document_id, name, version_id)
+
+
 @app.post("/documents/<int:document_id>/versions")
 def propose(document_id):
     name = request.form.get("branch", "main")
@@ -239,21 +291,11 @@ def propose(document_id):
         if not 1 <= len(reason) <= 500:
             raise ValueError("변경 사유를 1~500자로 입력하세요.")
         upload = read_upload()
-        with database(write=True) as db:
-            active = branch(db, document_id, name)
-            if str(active["head_id"]) != request.form.get("base"):
-                raise ValueError("확정본이 변경되었습니다. 새 확정본을 기준으로 다시 제출하세요.")
-            current = version(db, document_id, active["head_id"])
-            if current["extension"] != upload[1]:
-                raise ValueError("확정본과 같은 확장자의 파일을 선택하세요.")
-            if current["sha256"] == upload[3]:
-                raise ValueError("확정본과 같은 파일입니다.")
-            version_id = append_version(db, active, upload, reason, "pending")
+        version_id = save_proposal(document_id, name, request.form.get("base", type=int), upload, reason)
     except ValueError as error:
         flash(str(error), "error")
         return redirect(destination, 303)
-    flash("수정안을 검토 대기로 등록했습니다.")
-    return redirect(url_for("compare", document_id=document_id, target=version_id, branch=name), 303)
+    return review_draft(document_id, name, version_id)
 
 
 @app.get("/documents/<int:document_id>/compare")
@@ -332,6 +374,18 @@ def download(document_id, version_id):
     return send_file(io.BytesIO(item["content"]),
                      mimetype="application/pdf" if pdf else "application/octet-stream",
                      as_attachment=not pdf, download_name=item["filename"])
+
+
+@app.get("/documents/<int:document_id>/versions/<int:version_id>/notes/<int:page>")
+def pdf_notes(document_id, version_id, page):
+    with database() as db:
+        item = version(db, document_id, version_id, "extension, content")
+    if item["extension"] != "pdf":
+        abort(404)
+    try:
+        return jsonify(notes=read_pdf_notes(item["content"], page))
+    except (PyPdfError, ValueError, OSError, RecursionError):
+        return jsonify(notes=[])
 
 
 @app.get("/documents/<int:document_id>/versions/<int:version_id>/workbook")

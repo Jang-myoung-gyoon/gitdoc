@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% from "viewer.html" import viewer %}
+{% block main_class %}comparison-wrap reader-wrap{% endblock %}
+{% block title %}문서 편집 · {{ doc.title }}{% endblock %}
+{% block main %}
+<nav class="breadcrumb" aria-label="현재 위치">
+  <a href="{{ url_for('index') }}">문서함</a><span aria-hidden="true">/</span>
+  <a href="{{ url_for('detail', document_id=doc.id, branch=active.name) }}">{{ doc.title }}</a>
+</nav>
+<div class="page-heading">
+  <h1>문서 편집</h1>
+  <p>{{ active.name }} · v{{ item.number }} · {{ item.filename }}</p>
+</div>
+<div class="editing-workspace" data-document-editor
+     data-page="{{ fields.get('page', '') }}" data-sheet="{{ fields.get('sheet', '') }}" data-cell="{{ fields.get('cell', '') }}">
+  <div>{{ viewer(doc.id, item) }}</div>
+  <section class="panel" aria-labelledby="edit-title">
+    <h2 id="edit-title">{{ {'replace': '문구 바꾸기', 'cell': '셀 편집', 'page': 'PDF 페이지 편집'}[mode] }}</h2>
+    {% if error %}
+    <p class="notice error" role="alert">{{ error }}</p>
+    {% endif %}
+    {% if active.head_id != item.id %}
+    <a href="{{ url_for('edit_document', document_id=doc.id, branch=active.name) }}">최신 확정본 편집</a>
+    {% else %}
+    <form action="{{ url_for('edit_document', document_id=doc.id, branch=active.name) }}" method="post" class="stack" data-edit-form>
+      <input type="hidden" name="base" value="{{ item.id }}">
+      {% if mode == 'replace' %}
+      <p class="small subtle">문서에서 일치하는 문구를 모두 바꿉니다. 바꿀 문구를 비우면 찾은 문구가 삭제됩니다.</p>
+      <label for="edit-find">찾을 문구</label>
+      <input id="edit-find" name="find" value="{{ fields.get('find', '') }}" required maxlength="300">
+      <label for="edit-replacement">바꿀 문구</label>
+      <input id="edit-replacement" name="replacement" value="{{ fields.get('replacement', '') }}" maxlength="2000">
+      {% elif mode == 'cell' %}
+      <p class="small subtle">표에서 셀을 선택하거나 주소를 입력하세요.</p>
+      <label for="edit-sheet">시트 이름</label>
+      <input id="edit-sheet" name="sheet" value="{{ fields.get('sheet', '') }}" required maxlength="100" list="edit-sheets">
+      <datalist id="edit-sheets"></datalist>
+      <label for="edit-cell">편집할 셀 주소</label>
+      <input id="edit-cell" name="cell" value="{{ fields.get('cell', '') }}" required maxlength="10" placeholder="B4">
+      <label for="edit-kind">값 종류</label>
+      <select id="edit-kind" name="value_kind">
+        {% for kind, label in [('text', '텍스트'), ('number', '숫자'), ('formula', '수식'), ('clear', '값 비우기')] %}
+        <option value="{{ kind }}" {% if fields.get('value_kind') == kind %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <label for="edit-value">새 값</label>
+      <textarea id="edit-value" name="value" rows="3" maxlength="10000">{{ fields.get('value', '') }}</textarea>
+      {% else %}
+      <label for="edit-page">편집할 페이지</label>
+      <input id="edit-page" name="page" type="number" min="1" value="{{ fields.get('page', 1) }}" required>
+      <label for="edit-operation">작업</label>
+      <select id="edit-operation" name="operation">
+        {% for operation, label in [('right', '시계 방향으로 90° 회전'), ('left', '반시계 방향으로 90° 회전'), ('note', '메모 추가')] %}
+        <option value="{{ operation }}" {% if fields.get('operation') == operation %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <div class="stack" data-note-field{% if fields.get('operation') != 'note' %} hidden{% endif %}>
+        <label for="edit-note">메모</label>
+        <textarea id="edit-note" name="note" rows="3" maxlength="1000">{{ fields.get('note', '') }}</textarea>
+      </div>
+      {% endif %}
+      <label for="edit-reason">변경 사유</label>
+      <textarea id="edit-reason" name="reason" rows="3" required maxlength="500">{{ fields.get('reason', '') }}</textarea>
+      <button>수정안으로 저장</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+<script src="{{ url_for('static', filename='editing.js') }}" defer></script>
+{% endblock %}

@@ -60,7 +60,8 @@ def xlsx_sheets(data):
                     value = "TRUE" if value == "1" else "FALSE"
                 style_index = int(node.get("s", 0))
                 if address and (value is not None or formula is not None or style_index):
-                    cells[address] = [value, formula, styles[style_index] if styles else {}]
+                    value_kind = "number" if kind in (None, "n") and value is not None else "text"
+                    cells[address] = [value, formula, styles[style_index] if styles else {}, value_kind]
                     if len(cells) > MAX_CELLS:
                         raise ValueError("시트 미리보기의 셀 한도를 초과했습니다.")
             yield {"name": name, "cells": cells, "merges": merges}

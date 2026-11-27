@@ -49,6 +49,12 @@
           {% if comparing %}<canvas class="viewer-overlay" aria-hidden="true" hidden></canvas>{% endif %}
         </div>
       </div>
+      {% if not comparing and item.extension == 'pdf' %}
+      <details class="viewer-notes" data-pdf-notes="{{ url_for('pdf_notes', document_id=document_id, version_id=item.id, page=0).rsplit('/', 1)[0] }}" hidden>
+        <summary>페이지 메모</summary>
+        <ul></ul>
+      </details>
+      {% endif %}
     </article>
     {% endfor %}
   </div>

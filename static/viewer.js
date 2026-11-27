@@ -134,6 +134,7 @@ async function mountViewer(root) {
   const highlight = root.querySelector('[data-highlight]');
   const zoom = root.querySelector('[data-zoom]');
   const sync = root.querySelector('[data-sync]');
+  const notes = root.querySelector('[data-pdf-notes]');
   let generation = 0;
   let pageNumber = 1;
   let pixels = null;
@@ -208,11 +209,31 @@ async function mountViewer(root) {
     }
   }
 
+  async function showNotes(number, current) {
+    if (!notes) return;
+    try {
+      const response = await fetch(`${notes.dataset.pdfNotes}/${number}`);
+      if (!response.ok || current !== generation) return;
+      const { notes: entries } = await response.json();
+      if (current !== generation) return;
+      notes.querySelector('ul').replaceChildren(...entries.map(entry => {
+        const item = document.createElement('li');
+        item.textContent = entry;
+        return item;
+      }));
+      notes.hidden = !entries.length;
+    } catch {
+      // A missing annotation list leaves the page preview available.
+    }
+  }
+
   async function render(number) {
     if (!Number.isInteger(number)) number = pageNumber;
     pageNumber = Math.max(1, Math.min(total, number));
     const current = ++generation;
+    if (notes) notes.hidden = true;
     page.value = pageNumber;
+    root.dispatchEvent(new CustomEvent('gitdoc:page', { detail: { number: pageNumber, total } }));
     setSheetWidths();
     loading = true;
     updateControls();
@@ -260,6 +281,7 @@ async function mountViewer(root) {
     if (!comparing) {
       status.textContent = loaded[0] ? '' : '원본을 다운로드해 확인할 수 있습니다.';
       updateControls();
+      if (loaded[0]) showNotes(pageNumber, current);
       return;
     }
     if (!loaded.every(Boolean)) {
@@ -392,7 +414,7 @@ async function mountViewer(root) {
     list.hidden = !comparable;
   }
   const params = new URLSearchParams(location.search);
-  await render(Number(params.get('page') || 1));
+  await render(Number(root.closest('[data-document-editor]')?.dataset.page || params.get('page') || 1));
   const initialChange = Number(params.get('change'));
   if (Number.isInteger(initialChange) && initialChange > 0 && initialChange <= regions.length) {
     focusRegion(initialChange - 1);

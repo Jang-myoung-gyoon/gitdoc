@@ -78,6 +78,7 @@ function grid(sheet, row, col, changed, selected) {
       const td = tr.insertCell();
       const span = spans.get(address);
       const origin = span?.origin ?? address;
+      td.dataset.address = origin;
       const [value, formula, style] = sheet.cells[origin] || [];
       if (span) {
         td.rowSpan = span.rows;
@@ -104,7 +105,7 @@ function changesFor(name, left, right) {
     const oldCell = left.cells[address];
     const newCell = right.cells[address];
     if (JSON.stringify(oldCell) === JSON.stringify(newCell) || !parseCell(address)) continue;
-    const styleOnly = oldCell && newCell && oldCell[0] === newCell[0] && oldCell[1] === newCell[1];
+    const styleOnly = oldCell && newCell && oldCell[0] === newCell[0] && oldCell[1] === newCell[1] && oldCell[3] === newCell[3];
     all.set(address, styleOnly ? '서식 변경' : '셀 변경');
   }
   for (const range of new Set([...left.merges, ...right.merges])) {
@@ -141,6 +142,7 @@ async function mountWorkbook(root) {
   const comparing = sides.length === 2;
   const names = Array.from(new Set(books.flatMap(book => Array.from(book.keys()))));
   if (!names.length) throw new Error('표시할 시트가 없습니다.');
+  root.dispatchEvent(new CustomEvent('gitdoc:sheets', { detail: { names } }));
   const sheetChanges = new Map(names.map(name => [
     name, comparing ? changesFor(name, ...books.map(book => book.get(name))) : [],
   ]));
@@ -171,6 +173,7 @@ async function mountWorkbook(root) {
     });
     for (const [sheet, button] of buttons) button.setAttribute('aria-pressed', String(sheet === name));
     form.elements.cell.value = address;
+    root.dispatchEvent(new CustomEvent('gitdoc:sheet', { detail: { name, address } }));
     const label = address ? `${name} · ${address}` : name;
     status.textContent = label;
     if (comparing) {
@@ -249,9 +252,22 @@ async function mountWorkbook(root) {
       requestAnimationFrame(() => { synchronizing = false; });
     }, { passive: true }));
   }
+  if (root.closest('[data-document-editor]')) {
+    root.addEventListener('click', event => {
+      const target = event.target.closest('td[data-address]');
+      if (!target) return;
+      const name = activeSheet;
+      const address = target.dataset.address;
+      const [value, formula, , kind] = books[0].get(name)?.cells[address] || [];
+      show(name, address);
+      root.dispatchEvent(new CustomEvent('gitdoc:cell-edit', { detail: { value, formula, kind } }));
+    });
+  }
   const params = new URLSearchParams(location.search);
-  const sheet = names.includes(params.get('sheet')) ? params.get('sheet') : names[0];
-  const address = params.get('cell')?.toUpperCase() || '';
+  const editor = root.closest('[data-document-editor]');
+  const requestedSheet = editor?.dataset.sheet || params.get('sheet');
+  const sheet = names.includes(requestedSheet) ? requestedSheet : names[0];
+  const address = (editor?.dataset.cell || params.get('cell') || '').toUpperCase();
   show(sheet, parseCell(address) ? address : '',
     changes.findIndex(change => change.name === sheet && address && change.address === address));
 }

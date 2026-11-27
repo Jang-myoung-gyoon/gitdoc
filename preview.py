@@ -64,11 +64,15 @@ def office_profile(folder):
     return profile
 
 
+def rhwp_command():
+    return executable("rhwp", "DOCVERS_RHWP", ROOT / "data/tools/rhwp/rhwp")
+
+
 def convert(source, destination, extension):
     folder = source.parent
     env = dict(os.environ, RHWP_WEBFONT_OFFLINE="1")
     if extension in ("hwp", "hwpx"):
-        command = executable("rhwp", "DOCVERS_RHWP", ROOT / "data/tools/rhwp/rhwp")
+        command = rhwp_command()
         args = [command, "export-pdf", str(source), "-o", str(destination), "--profile", "screen"]
         if HANCOM_FONTS.is_dir():
             args.extend(["--font-path", str(HANCOM_FONTS)])

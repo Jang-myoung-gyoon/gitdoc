@@ -34,6 +34,20 @@ python3.12 -m venv .venv
 
 문서 페이지는 같은 페이지 번호끼리 대조합니다. 페이지가 중간에 삽입되면 이후 페이지 차이도 함께 잡힐 수 있습니다. HWP와 Office의 글꼴 및 배치는 변환기와 설치된 글꼴에 따라 달라집니다. 스프레드시트 화면은 값, XLSX 수식 문자열, 병합 셀과 일부 서식을 표시합니다. 인쇄 배치와 차트는 PDF 미리보기에서 확인할 수 있습니다. 암호화됐거나 변환할 수 없는 파일도 원본을 내려받을 수 있습니다.
 
+## 앱에서 문서 편집
+
+확정본의 **문서 편집**을 열면 미리보기 옆에서 변경을 입력할 수 있습니다. **수정안으로 저장**하면 원본과 수정본의 비교가 열리며, 승인하면 브랜치의 최신 버전이 갱신됩니다. 편집하는 동안 최신 버전이 바뀐 경우 최신본에서 다시 시작할 수 있습니다.
+
+| 형식 | 직접 편집 |
+| --- | --- |
+| HWP, HWPX | rhwp로 본문·표의 문구 일괄 변경. 편집 명령을 제공하는 rhwp 0.9 계열 필요 |
+| DOCX, PPTX | Word 본문·표·머리말·꼬리말·각주, PowerPoint 슬라이드의 기존 문구 변경 |
+| XLSX | 셀을 선택해 텍스트·숫자·수식 입력 또는 값 삭제. 수정본을 Excel에서 열면 계산 설정에 따라 수식이 갱신됩니다 |
+| PDF | 페이지 회전 및 메모 주석 추가 |
+| PPT, XLS | 기존 편집기에서 수정한 파일을 GitDoc에 제출 |
+
+Word와 PowerPoint에서 하나의 문구가 여러 서식에 걸쳐 있으면 교체 문구에는 시작 지점의 서식이 적용됩니다. 앱의 페이지 미리보기는 서식과 배치 검토에 사용할 수 있습니다.
+
 ## 로컬 작업 폴더
 
 `/path/to/gitdoc`은 이 프로젝트의 실제 절대 경로로 바꿉니다.
@@ -66,3 +80,7 @@ codex mcp add gitdoc -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"
 .venv/bin/python docvers.py open 1 --base 2 --target 5 --page 2 --change 1
 .venv/bin/python docvers.py open 1 --base 2 --target 5 --sheet '산출 내역' --cell B4
 ```
+
+## 라이선스
+
+GitDoc 소스는 [MIT 라이선스](LICENSE)로 배포합니다. 편집에 사용하는 [rhwp](https://github.com/edwardkim/rhwp)는 MIT 라이선스이며, [lxml](https://github.com/lxml/lxml/blob/master/LICENSES.txt)과 [pypdf](https://github.com/py-pdf/pypdf/blob/main/LICENSE)는 BSD 계열 라이선스를 적용합니다. 외부 도구와 라이브러리에는 각각의 원본 라이선스와 고지가 적용됩니다.
