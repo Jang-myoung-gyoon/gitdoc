@@ -72,6 +72,8 @@ To build locally, run `sh packaging/macos.sh` on an Apple Silicon Mac or `./pack
 
 ## Browser viewer
 
+The document viewer fills the browser window. Page and sheet controls, version history, and comparison navigation stay above the scrolling document area. Use **더보기** for file actions, branch tools, the change list, and location copying.
+
 The desktop app and web viewer share the same document workspace. Check the workspace label and ID in both headers. Select **브라우저에서 보기** to open the current version or comparison in your default browser. To open it in Codex's built-in browser, paste the address from **웹 링크 복사**. Use **웹 문서함 링크 복사** to open the workspace library instead. Document links carry over the branch, versions, page or changed region, and spreadsheet position. Reload the browser to see changes saved from the desktop app or command-line tools. Compare a pending draft with the current branch head and choose **검토 및 확정** to approve it in the same workspace.
 
 Use `python docvers.py open --browser` to open the local library. For Codex's built-in browser, use the MCP tool `open_browser_view` or add `--url` to start the local viewer and print its URL without opening the default browser.

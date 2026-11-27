@@ -121,9 +121,10 @@ function changesFor(name, left, right) {
 }
 
 async function mountWorkbook(root) {
-  const sides = Array.from(root.querySelectorAll('[data-workbook]'), node => ({
+  const links = root.querySelectorAll('[data-sheet-view-link]');
+  const sides = Array.from(root.querySelectorAll('[data-workbook]'), (node, index) => ({
     url: node.dataset.workbook, scroll: node.querySelector('.viewer-scroll'),
-    viewLink: node.querySelector('[data-view-link]'), version: versionLocation(node),
+    viewLink: links[index], version: versionLocation(node),
   }));
   const setEditLocation = editLocationControl(root);
   const status = root.querySelector('[data-status]');
@@ -299,6 +300,6 @@ async function mountWorkbook(root) {
 
 for (const root of document.querySelectorAll('[data-workbook-viewer]')) {
   mountWorkbook(root).catch(error => {
-    root.querySelector('[data-status]').textContent = error.message || '시트를 읽을 수 없습니다.';
+    root.querySelector('[data-reader-alert]').textContent = error.message || '시트를 읽을 수 없습니다.';
   });
 }

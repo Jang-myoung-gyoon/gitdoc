@@ -214,6 +214,7 @@ async function mountViewer(root) {
   if (!total) {
     const errors = [...new Set(infos.map(info => info.error).filter(Boolean))];
     status.textContent = errors.join(' ') || '미리보기를 열 수 없습니다. 원본을 다운로드해 확인할 수 있습니다.';
+    root.querySelector('[data-reader-alert]').textContent = status.textContent;
     scroll.hidden = true;
     return;
   }

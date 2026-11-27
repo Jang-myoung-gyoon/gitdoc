@@ -8,49 +8,62 @@
 data-version-id="{{ item.id }}" data-version-label="{{ item.version_label }}" data-version-branch="{{ item.branch_name }}"
 {% endmacro %}
 
-{% macro viewer(document_id, before, after=none, branch=none) %}
+{% macro reader_home(title) %}
+<a class="reader-home" href="{{ url_for('index') }}" title="문서함" aria-label="문서함">▤</a>
+<h1 class="screen-title">{{ title }}</h1>
+{% endmacro %}
+
+{% macro history(before, after) %}
+<button class="secondary reader-history" type="button" data-open-document-dialog aria-haspopup="dialog"
+        aria-controls="history-dialog" title="버전 이력" aria-label="버전 이력">
+  {{ before.version_label }}{% if after %}<span aria-hidden="true">→</span>{{ after.version_label }}{% endif %}
+</button>
+{% endmacro %}
+
+{% macro viewer(document_id, before, after=none, branch=none, title='', actions='') %}
 {% set comparing = after is not none %}
 {% set row_key = request.args.get('row_key') if comparing else none %}
 {% set destination = url_for('compare', document_id=document_id, base=before.id, target=after.id, branch=branch, row_key=row_key) if comparing else
                      url_for('detail', document_id=document_id, version=before.id, branch=branch) %}
 <script src="{{ url_for('static', filename='edit_location.js') }}" defer></script>
 {% if before.extension in workbook_extensions and request.args.get('view') != 'pages' %}
-  {{ sheet_viewer(document_id, before, after, destination) }}
+  {{ sheet_viewer(document_id, before, after, destination, title, actions) }}
 {% else %}
-<section class="panel comparison visual-viewer" data-visual-viewer data-document-id="{{ document_id }}"
+<section class="visual-viewer reading-viewport" data-visual-viewer data-document-id="{{ document_id }}"
          data-workspace-id="{{ workspace.workspace_id }}" data-location-url="{{ destination }}"
          data-print-layout="{{ 'true' if request.args.get('view') == 'pages' else 'false' }}"
          {% if comparing %}data-page-alignment="{{ url_for('page_alignment', document_id=document_id, base=before.id, target=after.id) }}"{% endif %} aria-labelledby="visual-title">
-  <div class="viewer-heading">
-    <h2 id="visual-title">{{ "문서 페이지 대조" if comparing else "문서 뷰어" }}</h2>
-    {% if before.extension in workbook_extensions %}<a href="?{{ request.args.to_dict()|without_view|urlencode }}">{{ "시트 대조" if comparing else "시트 보기" }}</a>{% endif %}
-  </div>
-  <div class="viewer-controls">
-    <div class="viewer-navigation">
-      <button class="secondary" type="button" data-previous disabled aria-label="이전 페이지">←</button>
-      <label>{{ '비교 위치' if comparing else '페이지' }} <input type="number" min="1" value="1" data-page disabled></label>
+  <div class="reader-controls" aria-label="문서 보기 도구">
+    {{ reader_home(title) }}
+    <h2 id="visual-title" class="sr-only">{{ "문서 페이지 대조" if comparing else "문서 뷰어" }}</h2>
+    {{ history(before, after) }}
+    <div class="viewer-navigation" aria-label="페이지 이동">
+      <button class="secondary" type="button" data-previous disabled aria-label="이전 페이지" title="이전 페이지">‹</button>
+      <input type="number" min="1" value="1" data-page disabled aria-label="{{ '비교 위치' if comparing else '페이지' }}" title="{{ '비교 위치' if comparing else '페이지' }}">
       <span data-total>/ —</span>
-      <button class="secondary" type="button" data-next disabled aria-label="다음 페이지">→</button>
+      <button class="secondary" type="button" data-next disabled aria-label="다음 페이지" title="다음 페이지">›</button>
     </div>
-    <label>확대 <select data-zoom><option value="100">맞춤</option><option value="125">125%</option><option value="150">150%</option><option value="200">200%</option></select></label>
-    {{ location_button() }}
-  </div>
-  {% if comparing %}
-  <div class="viewer-controls">
+    <select data-zoom aria-label="확대" title="확대"><option value="100">맞춤</option><option value="125">125%</option><option value="150">150%</option><option value="200">200%</option></select>
+    {% if comparing %}
     <div class="viewer-navigation" aria-label="변경 위치 이동">
-      <button class="secondary" type="button" data-previous-change disabled>이전 변경</button>
-      <button class="secondary" type="button" data-next-change disabled>다음 변경</button>
-      <span class="small" data-change-position aria-live="polite"></span>
-      <span class="small" data-change-total></span>
+      <button class="secondary" type="button" data-previous-change disabled aria-label="이전 변경" title="이전 변경">↑</button>
+      <button class="secondary" type="button" data-next-change disabled aria-label="다음 변경" title="다음 변경">↓</button>
+      <span class="small reader-count" data-change-position aria-live="polite"></span>
     </div>
-    <label class="viewer-check"><input type="checkbox" data-highlight checked> 시각적 차이 표시</label>
-  </div>
-  {% endif %}
-  {% if comparing %}<p class="subtle small">페이지 내용으로 두 버전을 맞추고 각 버전의 원래 페이지 번호를 표시합니다.</p>{% endif %}
-  {% if before.extension in workbook_extensions %}<p class="subtle small">엑셀은 시트마다 한 페이지로 표시하며, 숨김 시트도 포함될 수 있습니다.</p>{% endif %}
-  {% if comparing %}{{ change_list(paged=true) }}{% endif %}
-  <p class="viewer-message small" data-status role="status">문서를 불러오는 중입니다.</p>
-  <noscript><p>뷰어를 사용하려면 JavaScript를 활성화하세요. 원본 다운로드도 사용할 수 있습니다.</p></noscript>
+    {% endif %}
+    <details class="reader-more">
+      <summary aria-label="더보기" title="더보기">⋯</summary>
+      <div class="reader-popover">
+        <p><strong>{{ title }}</strong><br><span class="subtle">{{ workspace.workspace_name }}</span></p>
+        {{ actions }}
+        <p class="viewer-message small" data-status role="status">문서를 불러오는 중입니다.</p>
+        {{ location_button() }}
+        {% if before.extension in workbook_extensions %}<a href="?{{ request.args.to_dict()|without_view|urlencode }}">{{ "시트 대조" if comparing else "시트 보기" }}</a>{% endif %}
+        {% if comparing %}
+        <label class="viewer-check"><input type="checkbox" data-highlight checked> 시각적 차이 표시</label>
+        <span class="small" data-change-total></span>
+        {{ change_list(paged=true) }}
+        {% endif %}
   <div class="viewer-grid paper-versions{{ ' viewer-single' if not comparing }}">
     {% for item in ((before, after) if comparing else (before,)) %}
     <article class="viewer-side" data-preview="{{ url_for('visual_preview', document_id=document_id, version_id=item.id) }}"
@@ -72,6 +85,11 @@ data-version-id="{{ item.id }}" data-version-label="{{ item.version_label }}" da
     </article>
     {% endfor %}
   </div>
+      </div>
+    </details>
+  </div>
+  <p class="viewer-message reader-message small" data-reader-alert role="status"></p>
+  <noscript><p>뷰어를 사용하려면 JavaScript를 활성화하세요.</p></noscript>
   <div class="viewer-scroll paper-scroll{{ ' paper-single' if not comparing }}" data-paper-scroll tabindex="0" aria-label="문서 페이지">
     <div class="paper-stack" data-paper-stack></div>
   </div>
@@ -91,45 +109,54 @@ data-version-id="{{ item.id }}" data-version-label="{{ item.version_label }}" da
 </details>
 {% endmacro %}
 
-{% macro sheet_viewer(document_id, before, after, destination) %}
+{% macro sheet_viewer(document_id, before, after, destination, title, actions) %}
 {% set comparing = after is not none %}
-<section class="panel comparison visual-viewer" data-workbook-viewer data-document-id="{{ document_id }}"
+<section class="visual-viewer reading-viewport" data-workbook-viewer data-document-id="{{ document_id }}"
          data-workspace-id="{{ workspace.workspace_id }}" data-location-url="{{ destination }}" aria-labelledby="visual-title">
-  <div class="viewer-heading">
-    <h2 id="visual-title">{{ '시트 대조' if comparing else '문서 뷰어' }}</h2>
-    {% set params = request.args.to_dict()|without_view|urlencode %}
-    <a href="?{% if params %}{{ params }}&amp;{% endif %}view=pages">{{ 'PDF 페이지 대조' if comparing else '인쇄 레이아웃 보기' }}</a>
-  </div>
-  <div class="viewer-controls">
+  <div class="reader-controls sheet-controls" aria-label="시트 보기 도구">
+    {{ reader_home(title) }}
+    <h2 id="visual-title" class="sr-only">{{ '시트 대조' if comparing else '문서 뷰어' }}</h2>
+    {{ history(before, after) }}
     {% if comparing %}
-    <div class="viewer-navigation">
-      <button class="secondary" type="button" data-previous-change disabled>이전 변경</button>
-      <button class="secondary" type="button" data-next-change disabled>다음 변경</button>
-      <span class="small" data-change-position aria-live="polite"></span>
+    <div class="viewer-navigation" aria-label="변경 위치 이동">
+      <button class="secondary" type="button" data-previous-change disabled aria-label="이전 변경" title="이전 변경">↑</button>
+      <button class="secondary" type="button" data-next-change disabled aria-label="다음 변경" title="다음 변경">↓</button>
+      <span class="small reader-count" data-change-position aria-live="polite"></span>
     </div>
     {% endif %}
     <form class="viewer-navigation" data-cell-form>
-      <label>셀 주소 <input name="cell" type="text" required maxlength="10" placeholder="A1" autocomplete="off"></label>
+      <input name="cell" aria-label="셀 주소" type="text" required maxlength="10" placeholder="A1" autocomplete="off">
       <button class="secondary" disabled>이동</button>
     </form>
-    {{ location_button() }}
+    <div class="sheet-tabs" data-sheet-tabs role="group" aria-label="시트"></div>
+    <details class="reader-more">
+      <summary aria-label="더보기" title="더보기">⋯</summary>
+      <div class="reader-popover">
+        <p><strong>{{ title }}</strong><br><span class="subtle">{{ workspace.workspace_name }}</span></p>
+        {{ actions }}
+        <p class="viewer-message small" data-status role="status">시트를 불러오는 중입니다.</p>
+        {% set params = request.args.to_dict()|without_view|urlencode %}
+        <a href="?{% if params %}{{ params }}&amp;{% endif %}view=pages">{{ 'PDF 페이지 대조' if comparing else '인쇄 레이아웃 보기' }}</a>
+        {{ location_button() }}
+        {% if comparing %}{{ change_list() }}{% endif %}
+        <nav class="sheet-links" aria-label="시트 파일">
+          {% for item in ((before, after) if comparing else (before,)) %}
+            {% if comparing %}
+            <a data-sheet-view-link href="{{ url_for('detail', document_id=document_id, version=item.id) }}">문서 보기 {{ item.version_label }}</a>
+            {% else %}
+            <a href="{{ url_for('download', document_id=document_id, version_id=item.id) }}">원본 다운로드</a>
+            {% endif %}
+          {% endfor %}
+        </nav>
+      </div>
+    </details>
   </div>
-  {% if comparing %}{{ change_list() }}{% endif %}
-  <div class="sheet-tabs" data-sheet-tabs role="group" aria-label="시트"></div>
-  <p class="viewer-message small" data-status role="status">시트를 불러오는 중입니다.</p>
+  <p class="viewer-message reader-message small" data-reader-alert role="status"></p>
   <div class="viewer-grid{{ ' viewer-single' if not comparing }}">
     {% set row_key = request.args.get('row_key') if comparing else none %}
     {% for item in ((before, after) if comparing else (before,)) %}
     <article class="viewer-side" data-workbook="{{ url_for('workbook', document_id=document_id, version_id=item.id, row_key=row_key, base=before.id if row_key else none, target=after.id if row_key else none) }}"
              {{ version_location(item) }}>
-      <div class="viewer-side-title">
-        <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · {{ item.version_label }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
-        {% if comparing %}
-        <a data-view-link href="{{ url_for('detail', document_id=document_id, version=item.id) }}">문서 보기<span class="sr-only"> {{ item.version_label }}</span></a>
-        {% else %}
-        <a href="{{ url_for('download', document_id=document_id, version_id=item.id) }}">원본 다운로드<span class="sr-only"> {{ item.version_label }}</span></a>
-        {% endif %}
-      </div>
       <div class="viewer-scroll sheet-scroll" tabindex="0" aria-label="{{ '기준본' if loop.first else '수정본' }} 시트"></div>
     </article>
     {% endfor %}

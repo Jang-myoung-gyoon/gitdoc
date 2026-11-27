@@ -6,7 +6,7 @@
   <title>{% block title %}문서 버전 관리{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
   <header class="top"><div class="wrap"><a class="brand" href="{{ url_for('index') }}"><span class="mark" aria-hidden="true">▤</span> 문서 버전 관리</a><span class="subtle" title="로컬 작업 공간">{{ workspace.workspace_name }} · {{ workspace.workspace_id[:8] }}</span></div></header>
   <main class="wrap {% block main_class %}{% endblock %}">
     {% block main %}{% endblock %}
