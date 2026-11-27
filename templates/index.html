@@ -32,7 +32,7 @@
       <form action="{{ url_for('create') }}" method="post" enctype="multipart/form-data" class="stack">
         <label for="title">문서 제목</label><input id="title" name="title" required maxlength="120" placeholder="예시: 사업 제안서">
         <label for="file">원본 파일</label><input id="file" type="file" name="file" required accept=".{{ extensions | join(',.') }}" aria-describedby="formats">
-        <p id="formats" class="subtle small">{{ extensions | join(', ') | upper }} · 최대 30MB</p>
+        <p id="formats" class="subtle small">{{ extensions | join(', ') | upper }} · 최대 {{ max_file_mib }}MiB</p>
         <button>문서 등록</button>
       </form>
     </section>

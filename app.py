@@ -12,7 +12,7 @@ from editing import MODES, read_pdf_notes
 from formats import EXTENSIONS, WORKBOOK_EXTENSIONS
 from preview import PreviewError, page_sizes, preview_path, preview_png
 from workbook import read_workbook
-from uploads import MAX_FILE, prepare_upload
+from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
 from workflow import MissingEntity, merge_revision, restore_revision, review_revision, save_document_edit, save_proposal
 from store import (
     DATABASE, VERSION_FIELDS, branch_history, branch_list, create_document, database,
@@ -22,7 +22,8 @@ from store import (
 
 STORE_ID = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
 app = Flask(__name__)
-app.jinja_env.globals.update(extensions=EXTENSIONS, workbook_extensions=WORKBOOK_EXTENSIONS)
+app.jinja_env.globals.update(extensions=EXTENSIONS, workbook_extensions=WORKBOOK_EXTENSIONS,
+                            max_file_mib=MAX_FILE_MIB)
 app.config.update(SECRET_KEY=os.urandom(32), MAX_CONTENT_LENGTH=MAX_FILE + 256 * 1024,
                   TRUSTED_HOSTS=["localhost", "127.0.0.1"], SESSION_COOKIE_SAMESITE="Strict")
 @app.before_request
@@ -383,7 +384,7 @@ def untrusted_host(error):
 @app.errorhandler(413)
 def show_error(error):
     messages = {403: "이 요청을 허용할 수 없습니다.", 404: "문서나 페이지를 찾을 수 없습니다.",
-                413: "파일이 허용 크기인 30MB를 초과했습니다."}
+                413: f"파일이 허용 크기인 {MAX_FILE_MIB}MiB를 초과했습니다."}
     return render_template("error.html", message=messages.get(error.code, error.description)), error.code
 
 

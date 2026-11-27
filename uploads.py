@@ -1,13 +1,17 @@
 """Validate and extract supported document uploads."""
 
 import hashlib
+import os
 from pathlib import Path
 from zipfile import BadZipFile
 
 from extract import extract_for_version, matches_format
 from formats import EXTENSIONS
 
-MAX_FILE = 30 * 1024 * 1024
+MAX_FILE_MIB = int(os.environ.get("DOCVERS_MAX_FILE_MIB", "30"))
+if not 1 <= MAX_FILE_MIB <= 100:
+    raise ValueError("DOCVERS_MAX_FILE_MIB는 1~100 사이의 정수여야 합니다.")
+MAX_FILE = MAX_FILE_MIB * 1024 * 1024
 
 
 def prepare_upload(name, data):
@@ -18,7 +22,7 @@ def prepare_upload(name, data):
     if extension not in EXTENSIONS:
         raise ValueError("지원 파일 형식을 확인하세요.")
     if not data or len(data) > MAX_FILE:
-        raise ValueError("파일은 1바이트 이상, 30MB 이하여야 합니다.")
+        raise ValueError(f"파일은 1바이트 이상, {MAX_FILE_MIB}MiB 이하여야 합니다.")
     try:
         valid = matches_format(extension, data)
     except (BadZipFile, OSError, ValueError):
