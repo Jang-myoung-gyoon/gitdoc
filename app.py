@@ -12,7 +12,7 @@ from delimited import aligned_rows, key_columns, lines as table_lines, sheet as 
 from editing import MODES, read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
-from page_alignment import comparison_pages
+from page_alignment import comparison_pages, footer_regions
 from preview import PreviewError, page_dimensions, preview_path, preview_png
 from workbook import read_workbook
 from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
@@ -400,7 +400,7 @@ def page_alignment(document_id):
     except PreviewError as error:
         return jsonify(error=str(error)), 422
     pairs, sources = comparison_pages(document_id, ids, paths, counts)
-    return jsonify(pairs=pairs, sources=sources)
+    return jsonify(pairs=pairs, sources=sources, footers=footer_regions(paths, pairs))
 
 
 @app.get("/documents/<int:document_id>/versions/<int:version_id>/preview")

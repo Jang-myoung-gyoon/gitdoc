@@ -9,6 +9,16 @@ pub type PageImage = Arc<ColorImage>;
 pub type Region = [f32; 4];
 type Bounds = [usize; 4];
 
+pub fn only_footer(regions: &[Region], footer: Region) -> bool {
+    !regions.is_empty()
+        && regions.iter().all(|region| {
+            region[0] >= footer[0]
+                && region[1] >= footer[1]
+                && region[2] <= footer[2]
+                && region[3] <= footer[3]
+        })
+}
+
 pub struct Pages {
     pdfium: Pdfium,
     cache: VecDeque<((PathBuf, usize, bool), PageImage)>,
@@ -285,6 +295,15 @@ fn compact_regions(mut regions: Vec<Bounds>, width: usize, height: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_footer_hint_never_hides_a_visible_body_edit() {
+        let hint = [0.88, 0.89, 1.0, 1.0];
+        let footer = [0.92, 0.92, 0.96, 0.97];
+        assert!(only_footer(&[footer], hint));
+        assert!(!only_footer(&[], hint));
+        assert!(!only_footer(&[footer, [0.2, 0.3, 0.22, 0.32]], hint));
+    }
 
     #[test]
     fn regions_keep_threshold_diagonal_connectivity_and_order() {

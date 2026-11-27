@@ -3,6 +3,7 @@
 from difflib import SequenceMatcher
 from functools import lru_cache
 from hashlib import sha256
+from math import ceil
 from threading import Lock
 
 from pypdfium2 import PdfDocument, PdfiumError
@@ -156,6 +157,60 @@ def aligned_pages(paths, counts, *, keep=None):
         before, after = (tuple(pages[i - 1] for i in selected)
                          for pages, selected in zip((before, after), keep))
     return match_pages([key for key, _ in before], [key for key, _ in after], renders=(before, after))
+
+
+def compact_footer(before, after):
+    key, left = before
+    other_key, right = after
+    if not key or not other_key or key[:2] != other_key[:2] or left == right or len(left) != len(right):
+        return None
+    width, height = key[:2]
+    columns = ceil(width * min(72 / max(width, height), 1))
+    if columns < 1 or len(left) % columns:
+        return None
+    lines = len(left) // columns
+    changed = [divmod(i, columns) for i, (a, b) in enumerate(zip(left, right)) if abs(a - b) >= 7]
+    if not changed:
+        return None
+    first_y, last_y = changed[0][0], changed[-1][0]
+    first_x = min(x for _, x in changed)
+    last_x = max(x for _, x in changed)
+    if first_y < lines * 0.89 or last_y - first_y + 1 > lines * 0.06 or last_x - first_x + 1 > columns * 0.09:
+        return None
+    return (first_x / columns, first_y / lines, (last_x + 1) / columns, (last_y + 1) / lines)
+
+
+def recurring_footers(before, after, pairs):
+    candidates = []
+    for left, right in pairs:
+        box = compact_footer(before[left - 1], after[right - 1]) if left and right and left != right else None
+        candidates.append((right - left, box) if box else None)
+    masks = []
+    for i, candidate in enumerate(candidates):
+        if candidate is None:
+            masks.append(None)
+            continue
+        offset, box = candidate
+        nearby = sum(peer is not None and peer[0] == offset and all(
+            abs((box[axis] + box[axis + 2]) - (peer[1][axis] + peer[1][axis + 2])) <= 0.08
+            for axis in (0, 1)
+        ) for peer in candidates[max(0, i - 4):i + 5])
+        # Use this hint only for a repeated footer at the same position after a page shift.
+        # The renderer still checks the full-resolution difference against the hint.
+        masks.append((max(0, box[0] - 0.035), max(0.88, box[1] - 0.045),
+                      min(1, box[2] + 0.035), min(1, box[3] + 0.045)) if nearby >= 3 else None)
+    return masks
+
+
+def footer_regions(paths, pairs):
+    if len(paths) == 2 and all(paths) and any(a and b and a != b for a, b in pairs):
+        try:
+            before, after = (fingerprints(path) for path in paths)
+            if all((a is None or a <= len(before)) and (b is None or b <= len(after)) for a, b in pairs):
+                return recurring_footers(before, after, pairs)
+        except (PdfiumError, OSError, ValueError):
+            pass
+    return [None] * len(pairs)
 
 
 def page_lineage(db, document_id, version_id, count):

@@ -120,7 +120,10 @@ body:has(.document-dialog[open]) { overflow: hidden; }
 .paper-stack { width: var(--paper-zoom, 100%); }
 .paper-row { align-items: start; margin-bottom: 20px; }
 .paper-row:last-child { margin-bottom: 0; }
+.paper-row-with-gap { align-items: stretch; }
 .paper-page { min-width: 0; }
+.paper-page-missing { display: flex; flex-direction: column; }
+.paper-page-missing .viewer-placeholder { display: grid; place-items: center; flex: 1; min-height: 76px; border: 1px dashed #9baec6; border-radius: 6px; background: #f4f7fb; }
 .paper-page-heading { display: block; margin-bottom: 5px; color: var(--muted); font-size: 13px; text-align: center; }
 .paper-page-badge { border-radius: 5px; padding: 2px 5px; }
 .paper-page-badge.inserted { color: #166139; background: #e5f5eb; }

@@ -124,6 +124,15 @@ function compactRegions(regions, width, height) {
   return regions.sort((a, b) => a[1] - b[1] || a[0] - b[0] || a[3] - b[3] || a[2] - b[2]);
 }
 
+function pageChanges(pixels, footer) {
+  if (!pixels) return { regions: [null], footerOnly: false };
+  const regions = changeRegions(pixels);
+  const footerOnly = Boolean(footer && regions.length && regions.every(([left, top, right, bottom]) =>
+    left >= footer[0] * pixels.width && top >= footer[1] * pixels.height &&
+    right <= footer[2] * pixels.width && bottom <= footer[3] * pixels.height));
+  return { regions, footerOnly };
+}
+
 function showMarks(sides, result, regions, highlight, selected) {
   sides.forEach(({ canvas }, side) => {
     canvas.hidden = !result || (!highlight && !selected);
@@ -187,10 +196,11 @@ async function mountViewer(root) {
   let pairs = Array.from({ length: maxPages }, (_, index) =>
     infos.map(info => index < info.pages ? index + 1 : null));
   let sources = [];
+  let footers = [];
   if (comparable) {
     try {
       const response = await fetch(root.dataset.pageAlignment);
-      if (response.ok) ({ pairs, sources } = await response.json());
+      if (response.ok) ({ pairs, sources, footers = [] } = await response.json());
     } catch {
       // Keep the existing positional preview available if alignment cannot be loaded.
     }
@@ -220,6 +230,7 @@ async function mountViewer(root) {
     const gap = comparable && !pair[0] ? '삽입된 페이지'
       : comparable && !pair[1] ? '삭제된 페이지' : '';
     const change = gap ? `${gap} · ${sources[index] === 'recorded' ? 'GitDoc 편집 기록' : '자동 판정'}` : '';
+    if (gap) element.classList.add('paper-row-with-gap');
     const cells = infos.map((info, side) => {
       const physicalPage = pair[side];
       const cell = document.createElement('section');
@@ -227,12 +238,13 @@ async function mountViewer(root) {
       const heading = document.createElement('strong');
       heading.className = 'paper-page-heading';
       const label = comparing ? (side === 0 ? '기준 버전' : '비교 버전') : '문서';
-      heading.textContent = physicalPage ? `${label} ${physicalPage}쪽` : label;
+      heading.textContent = physicalPage ? `${label} ${physicalPage}쪽` : `${label}${gap ? ' · 페이지 없음' : ''}`;
       cell.append(heading);
       if (!physicalPage) {
+        if (gap) cell.classList.add('paper-page-missing');
         const placeholder = document.createElement('p');
         placeholder.className = 'viewer-placeholder';
-        placeholder.textContent = info.error || (change ? '대응하는 페이지가 없습니다.' : '이 버전에는 해당 페이지가 없습니다.');
+        placeholder.textContent = info.error || '이 버전에 대응하는 페이지가 없습니다.';
         cell.append(placeholder);
         element.append(cell);
         return null;
@@ -279,7 +291,7 @@ async function mountViewer(root) {
     const state = resident.get(pageNumber);
     if (comparing) {
       highlight.disabled = !comparable;
-      changePosition.textContent = activeRegion >= 0 && state?.regions?.length
+      changePosition.textContent = state?.footerOnly ? '' : activeRegion >= 0 && state?.regions?.length
         ? `이 페이지의 변경 ${activeRegion + 1} / ${state.regions.length}`
         : state?.regions?.length ? `이 페이지에 변경 ${state.regions.length}곳` : '';
     }
@@ -289,6 +301,7 @@ async function mountViewer(root) {
     else if (!comparing) status.textContent = '';
     else if (!comparable) status.textContent = '양쪽에서 문서를 열 수 있을 때 시각적 차이를 표시합니다.';
     else if (rows[pageNumber - 1].change) status.textContent = rows[pageNumber - 1].change;
+    else if (state.footerOnly) status.textContent = '본문은 동일하며 하단 표시만 달라졌습니다.';
     else if (!state.pixels) status.textContent = '페이지 크기가 달라 변경 위치를 겹쳐 표시할 수 없습니다.';
     else status.textContent = state.regions.length ? '분홍색은 기준본, 초록색은 수정본의 달라진 영역입니다.'
       : '이 페이지에서 눈에 띄는 시각적 차이가 없습니다.';
@@ -383,8 +396,9 @@ async function mountViewer(root) {
         });
         if (comparable && !state.error) {
           state.pixels = state.rendered.length === 2 ? comparePixels(...state.rendered.map(item => item.image)) : null;
-          state.regions = state.pixels ? changeRegions(state.pixels) : [null];
-          if (!scanned.has(number)) scanned.set(number, Promise.resolve(state.regions));
+          const result = pageChanges(state.pixels, footers[number - 1]);
+          Object.assign(state, result);
+          if (!scanned.has(number)) scanned.set(number, Promise.resolve(result));
           drawMarks(number, state);
         }
         if (number === pageNumber) updateStatus();
@@ -463,7 +477,7 @@ async function mountViewer(root) {
     await showRow(number);
     if (number !== pageNumber) return;
     const state = resident.get(number);
-    if (!state?.regions?.length || index >= state.regions.length) return;
+    if (!state?.regions?.length || state.footerOnly || index >= state.regions.length) return;
     activeRegion = index;
     items.querySelector('[aria-current]')?.removeAttribute('aria-current');
     items.querySelector(`[data-location="${number}:${index}"]`)?.setAttribute('aria-current', 'true');
@@ -481,12 +495,11 @@ async function mountViewer(root) {
     if (!scanned.has(number)) {
       scanned.set(number, (async () => {
         const row = rows[number - 1];
-        if (row.change) return [null];
+        if (row.change) return pageChanges(null);
         const state = resident.get(number);
-        if (state?.done && !state.error) return state.regions;
+        if (state?.done && !state.error) return { regions: state.regions, footerOnly: state.footerOnly };
         const images = await Promise.all(row.cells.map((cell, index) => imageFor(index, cell.physicalPage)));
-        const result = comparePixels(...images);
-        return result ? changeRegions(result) : [null];
+        return pageChanges(comparePixels(...images), footers[number - 1]);
       })());
     }
     return scanned.get(number);
@@ -501,7 +514,8 @@ async function mountViewer(root) {
     status.textContent = '변경 위치를 찾는 중입니다.';
     try {
       for (let number = startPage; number >= 1 && number <= total && pageNumber === startPage; number += direction) {
-        const changes = await scan(number).catch(() => []);
+        const result = await scan(number).catch(() => null);
+        const changes = result && !result.footerOnly ? result.regions : [];
         if (pageNumber !== startPage) break;
         const index = number === startPage && startRegion >= 0
           ? startRegion + direction : direction > 0 ? 0 : changes.length - 1;
@@ -543,16 +557,18 @@ async function mountViewer(root) {
 
   async function countChanges() {
     let failures = 0;
+    let footerPages = 0;
     for (let number = 1; number <= total; number += 1) {
       changeTotal.textContent = `전체 변경 확인 중 · ${number} / ${total}쪽`;
       try {
-        const changes = await scan(number);
-        changes.forEach((region, index) => locations.push({ number, index, region }));
+        const { regions, footerOnly } = await scan(number);
+        if (footerOnly) footerPages += 1;
+        else regions.forEach((region, index) => locations.push({ number, index, region }));
       } catch {
         failures += 1;
       }
     }
-    changeTotal.textContent = `전체 변경 ${locations.length}건${failures ? ` · 확인 실패 ${failures}쪽` : ''}`;
+    changeTotal.textContent = `전체 변경 ${locations.length}건${footerPages ? ` · 하단 표시만 변경 ${footerPages}쪽` : ''}${failures ? ` · 확인 실패 ${failures}쪽` : ''}`;
     updateList();
   }
 

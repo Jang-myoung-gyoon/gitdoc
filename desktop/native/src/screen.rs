@@ -91,6 +91,7 @@ struct PagePreview {
     textures: Vec<Option<TextureHandle>>,
     regions: Vec<[f32; 4]>,
     notes: Vec<String>,
+    footer_only: bool,
 }
 
 #[derive(Default)]
@@ -102,6 +103,7 @@ struct Pane {
     index: Vec<(usize, usize)>,
     indexed_through: usize,
     index_failures: usize,
+    footer_pages: usize,
     indexing: bool,
     seek: Option<((usize, Option<usize>), bool)>,
     page: usize,
@@ -324,6 +326,7 @@ impl GitDoc {
             self.epoch,
             json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable,
                 "pages":self.pane.page_pairs.get(page - 1),
+                "footer":self.pane.data["footers"][page - 1],
                 "substitute_fonts":self.pane.data["substitute_fonts"],
                 "paths":self.pane.data["paths"],"pdfium_directory":self.pane.data["pdfium_directory"],
                 "pdf_notes":self.pane.data["pdf_notes"]}),
@@ -515,6 +518,7 @@ impl GitDoc {
                         regions: serde_json::from_value(result["regions"].clone())
                             .unwrap_or_default(),
                         notes: serde_json::from_value(result["notes"].clone()).unwrap_or_default(),
+                        footer_only: result["footer_only"] == true,
                     }),
                 );
                 if self.pane.follow_region
@@ -536,7 +540,8 @@ impl GitDoc {
                 } else {
                     self.pane
                         .index
-                        .extend((0..count(&result)).map(|delta| (number, delta)));
+                        .extend((0..count(&result["count"])).map(|delta| (number, delta)));
+                    self.pane.footer_pages += usize::from(result["footer_only"] == true);
                 }
                 if let Some((last, forward)) = self.pane.seek.take() {
                     self.seek_pages(last, forward);
@@ -996,6 +1001,9 @@ impl GitDoc {
                         self.pane.index_failures
                     ));
                 }
+                if self.pane.footer_pages > 0 && self.pane.indexed_through == pages {
+                    ui.label(format!("하단 표시만 변경 {}쪽", self.pane.footer_pages));
+                }
                 ui.checkbox(&mut self.list_changes, "변경 목록");
             });
             if self.list_changes {
@@ -1145,6 +1153,7 @@ impl GitDoc {
         let pair = &self.pane.page_pairs[number - 1];
         let gap_label = self.page_gap(number);
         for side in 0..self.ids.len() {
+            let missing = pair[side].is_none() && gap_label.is_some();
             let start = origin + vec2(side as f32 * (width + gap), row.top);
             let header = Rect::from_min_size(start, vec2(width, paper::HEADER));
             ui.scope_builder(
@@ -1158,9 +1167,14 @@ impl GitDoc {
                             ui.strong(format!("{version} · {page}쪽"));
                             if let Some(label) = gap_label {
                                 ui.strong(label);
+                            } else if preview.is_some_and(|page| page.footer_only) {
+                                ui.weak("하단 표시만 변경");
                             }
                         } else {
                             ui.strong(version);
+                            if missing {
+                                ui.strong("페이지 없음");
+                            }
                         }
                         if side == 0
                             && let Some(preview) = preview.filter(|page| !page.notes.is_empty())
@@ -1175,8 +1189,12 @@ impl GitDoc {
                 },
             );
             let page_origin = start + vec2(0.0, paper::HEADER);
-            let rect =
-                Rect::from_min_size(page_origin, vec2(width, row.heights[side].unwrap_or(36.0)));
+            let page_height = if missing {
+                row.heights[1 - side]
+            } else {
+                row.heights[side]
+            };
+            let rect = Rect::from_min_size(page_origin, vec2(width, page_height.unwrap_or(36.0)));
             if let Some((preview, texture)) =
                 preview.and_then(|page| Some((page, page.textures.get(side)?.as_ref()?)))
             {
@@ -1206,11 +1224,19 @@ impl GitDoc {
             } else {
                 ui.painter()
                     .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                if missing {
+                    ui.painter().rect_stroke(
+                        rect,
+                        6.0,
+                        Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+                        StrokeKind::Inside,
+                    );
+                }
                 let fault = text(&self.pane.data["faults"][side]);
                 let message = if !fault.is_empty() {
                     fault
                 } else if row.heights[side].is_none() {
-                    "이 버전에는 이 쪽이 없습니다."
+                    "이 버전에 대응하는 페이지가 없습니다."
                 } else if preview.is_none() {
                     "페이지 불러오는 중…"
                 } else {
@@ -1260,6 +1286,7 @@ impl GitDoc {
             "changes",
             self.epoch,
             json!({"number":number, "pages":self.pane.page_pairs.get(number - 1), "paths":self.pane.data["paths"],
+                "footer":self.pane.data["footers"][number - 1],
                 "substitute_fonts":self.pane.data["substitute_fonts"],
                 "pdfium_directory":self.pane.data["pdfium_directory"]}),
         );

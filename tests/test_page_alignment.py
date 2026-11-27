@@ -6,7 +6,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject
 
 from extract import comparison_text
-from page_alignment import aligned_pages, match_pages, matching_blocks
+from page_alignment import aligned_pages, match_pages, matching_blocks, recurring_footers
 
 
 def write_pdf(path, offsets):
@@ -57,3 +57,18 @@ class PageAlignmentTests(unittest.TestCase):
                          "5쪽\n본문")
         self.assertEqual(comparison_text({"extension": "pptx", "extracted": "[슬라이드 3]\n제목"}),
                          "제목")
+
+    def test_footer_hints_require_repeated_shifted_footers_and_preserve_body_edits(self):
+        def thumbnail(key, *marks):
+            pixels = bytearray(72 * 72)
+            for row, column in marks:
+                pixels[row * 72 + column] = 255
+            return ((72, 72, key), bytes(pixels))
+
+        base = [thumbnail(i, (68, 65)) for i in range(4)]
+        changed = [thumbnail("inserted"), *(thumbnail(i, (68, 66)) for i in range(3)),
+                   thumbnail("body edit", (68, 66), (24, 35))]
+        pairs = [[None, 1], [1, 2], [2, 3], [3, 4], [4, 5]]
+        self.assertEqual([bool(box) for box in recurring_footers(base, changed, pairs)],
+                         [False, True, True, True, False])
+        self.assertEqual(recurring_footers(base, changed, [[1, 1], [2, 3]]), [None, None])

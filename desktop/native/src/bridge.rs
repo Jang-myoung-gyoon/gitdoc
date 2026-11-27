@@ -143,7 +143,7 @@ fn render(
         && paths.first() == paths.get(1)
         && physical_pages.first() == physical_pages.get(1)
     {
-        return Ok(json!(0));
+        return Ok(json!({"count":0, "footer_only":false}));
     }
     let mut rendered = Vec::new();
     for (path, page) in paths.iter().zip(physical_pages) {
@@ -175,11 +175,13 @@ fn render(
         }
         _ => vec![],
     };
+    let footer_only = serde_json::from_value::<pages::Region>(params["footer"].clone())
+        .is_ok_and(|footer| pages::only_footer(&regions, footer));
     if request.op == "changes" {
         return Ok(if failed {
             Value::Null
         } else {
-            json!(regions.len())
+            json!({"count": if footer_only { 0 } else { regions.len() }, "footer_only": footer_only})
         });
     }
     images.extend(rendered);
@@ -194,5 +196,5 @@ fn render(
     } else {
         json!([])
     };
-    Ok(json!({"regions": regions, "notes": notes}))
+    Ok(json!({"regions": regions, "notes": notes, "footer_only":footer_only}))
 }

@@ -16,7 +16,7 @@ from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
-from page_alignment import comparison_pages
+from page_alignment import comparison_pages, footer_regions
 from preview import CACHE, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
@@ -112,6 +112,7 @@ def view(doc, ids, mode="auto", row_key=None):
     counts, faults, paths, ratios = map(list, zip(*previews))
     pairs, sources = comparison_pages(doc, ids, paths, counts)
     return dict(result, pages=len(pairs), pairs=pairs, sources=sources, counts=counts, faults=faults, paths=paths, ratios=ratios,
+                footers=footer_regions(paths, pairs),
                 substitute_fonts=poppler_available() and any(path and unembedded_fonts(Path(path)) for path in paths),
                 pdfium_directory=str(Path(pypdfium2_raw.__file__).resolve().parent),
                 pdf_notes=len(records) == 1 and records[0]["extension"] == "pdf")
