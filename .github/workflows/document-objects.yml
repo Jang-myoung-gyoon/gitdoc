@@ -2,7 +2,7 @@ name: Document editor regression
 
 on:
   push:
-    branches: ["codex/**"]
+    branches: ["main", "codex/**"]
     paths:
       - ".github/workflows/document-objects.yml"
       - "desktop/**"
