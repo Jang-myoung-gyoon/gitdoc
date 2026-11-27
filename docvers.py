@@ -203,11 +203,11 @@ def native_executable():
 def open_desktop(args):
     if args.document_id is None and any(value is not None for value in
                                         (args.branch, args.base, args.target, args.version, args.page,
-                                         args.change, args.sheet, args.cell)):
+                                         args.change, args.sheet, args.cell, args.row_key)):
         raise ValueError("위치를 열려면 문서 ID를 지정하세요.")
     if args.target is not None and args.version is not None:
         raise ValueError("--version은 문서 보기에서 사용합니다. 비교할 때는 --target을 사용하세요.")
-    if args.target is None and (args.base is not None or args.change is not None):
+    if args.target is None and (args.base is not None or args.change is not None or args.row_key is not None):
         raise ValueError("비교 위치를 열려면 --target 버전 ID를 지정하세요.")
     if any(value is not None and value < 1 for value in (args.page, args.change)):
         raise ValueError("페이지와 변경 번호는 1 이상이어야 합니다.")
@@ -223,7 +223,7 @@ def open_desktop(args):
                 require(find_branch(db, args.document_id, args.branch), "브랜치를 찾을 수 없습니다.")
     path = document_path(args.document_id, branch=args.branch, base=args.base, target=args.target,
                          version=args.version, page=args.page, change=args.change,
-                         sheet=args.sheet, cell=args.cell)
+                         sheet=args.sheet, cell=args.cell, row_key=args.row_key)
     link = desktop_url(path)
     if args.url:
         print(link)
@@ -271,6 +271,7 @@ def main():
     desktop.add_argument("--change", type=int)
     desktop.add_argument("--sheet")
     desktop.add_argument("--cell")
+    desktop.add_argument("--row-key", help="CSV/TSV 비교에 사용할 열 제목")
     desktop.add_argument("--url", action="store_true", help="앱을 실행하지 않고 링크 출력")
     desktop.set_defaults(run=open_desktop)
     args = parser.parse_args()

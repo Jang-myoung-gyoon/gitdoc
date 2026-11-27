@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pypdfium2_raw
 
+from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
-from formats import WORKBOOK_EXTENSIONS
+from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from preview import page_dimensions, page_sizes, preview_path
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
@@ -67,14 +68,30 @@ def page_path(record):
                         lambda: content(record["document_id"], record["id"]))
 
 
-def view(doc, ids, mode="auto"):
+def view(doc, ids, mode="auto", row_key=None):
     records = versions(doc, ids, text=True)
-    diff, truncated = text_diff(records[0]["extracted"], records[-1]["extracted"], limit=450)
+    before, selected = records[0], records[-1]
+    left, right = before["extracted"], selected["extracted"]
+    result = {"versions": [row["version_label"] for row in records], "filename": selected["filename"],
+              "save_as": export_formats(selected["extension"]),
+              "workbook": selected["extension"] in WORKBOOK_EXTENSIONS}
+    if mode == "auto" and selected["extension"] in DELIMITED_EXTENSIONS:
+        try:
+            tables = [table_rows(row["extension"], content(doc, row["id"])) for row in records]
+        except ValueError as error:
+            return dict(result, pages=0, faults=[str(error)])
+        columns = key_columns(*tables) if len(tables) == 2 else {}
+        if row_key in columns:
+            tables = aligned_rows(*tables, columns[row_key])
+            left, right = ("\n".join(table_lines(table)) for table in tables)
+        result.update(books=[[table_sheet(table)] for table in tables], pages=0, delimited=True,
+                      row_keys=list(columns), row_key=row_key if row_key in columns else None)
+    diff, truncated = text_diff(left, right, limit=450)
     if truncated:
         diff.append("… 일부 변경만 표시합니다.")
-    selected = records[-1]
-    result = {"versions": [row["version_label"] for row in records], "diff": "\n".join(diff),
-              "filename": selected["filename"], "save_as": export_formats(selected["extension"])}
+    result["diff"] = "\n".join(diff)
+    if result.get("delimited"):
+        return result
     if mode == "auto" and all(row["extension"] in WORKBOOK_EXTENSIONS for row in records):
         try:
             books = [read_workbook(row["extension"], content(doc, row["id"])) for row in records]

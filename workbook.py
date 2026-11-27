@@ -5,7 +5,9 @@ from zipfile import ZipFile
 
 import xlrd
 
+from delimited import sheet as delimited_sheet, table_rows
 from extract import ZIP_MARKERS, ordered_parts, read_xml
+from formats import DELIMITED_EXTENSIONS
 
 MAX_CELLS = 25000
 
@@ -123,6 +125,8 @@ def xls_sheets(data):
 
 
 def read_workbook(extension, data):
+    if extension in DELIMITED_EXTENSIONS:
+        return [delimited_sheet(table_rows(extension, data))]
     source = xls_sheets(data) if extension == "xls" else xlsx_sheets(data)
     sheets = []
     budget = MAX_CELLS

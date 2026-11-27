@@ -10,7 +10,8 @@ from threading import BoundedSemaphore
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from formats import WORKBOOK_EXTENSIONS
+from delimited import SEPARATORS, normalized_table
+from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from store import DATABASE, ROOT
 
 CACHE = DATABASE.parent / "previews-v1"
@@ -91,10 +92,13 @@ def convert(source, destination, extension):
         command = executable("soffice", "DOCVERS_SOFFICE", BUNDLED_BIN / "soffice")
         profile = office_profile(folder)
         options = OFFICE_FILTERS[extension]
-        if extension in WORKBOOK_EXTENSIONS or extension == "ods":
+        if extension == "ods" or (extension in WORKBOOK_EXTENSIONS and extension not in DELIMITED_EXTENSIONS):
             options += ':{"SinglePageSheets":{"type":"boolean","value":"true"}}'
-        args = [command, f"-env:UserInstallation={profile.as_uri()}", "--headless",
-                "--convert-to", f"pdf:{options}", "--outdir", str(folder), str(source)]
+        args = [command, f"-env:UserInstallation={profile.as_uri()}", "--headless"]
+        if extension in DELIMITED_EXTENSIONS:
+            separator = ord(SEPARATORS[extension])
+            args.append(f"--infilter=Text - txt - csv (StarCalc):{separator},34,76,1,,0,true,false,false,false,false,0,false")
+        args.extend(["--convert-to", f"pdf:{options}", "--outdir", str(folder), str(source)])
         if sys.platform == "darwin" and not env.get("FONTCONFIG_FILE"):
             env["FONTCONFIG_FILE"] = str(ROOT / "preview-fonts.conf")
     run_converter(args, folder, env)
@@ -142,6 +146,8 @@ def preview_path(extension, digest, load_content):
                 output.write_bytes(data)
             else:
                 source = folder / f"document.{extension}"
+                if extension in DELIMITED_EXTENSIONS:
+                    data = normalized_table(extension, data)
                 source.write_bytes(data)
                 convert(source, output, extension)
             if not output.is_file() or not 0 < output.stat().st_size <= MAX_PREVIEW:

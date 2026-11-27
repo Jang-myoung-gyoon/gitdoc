@@ -43,10 +43,11 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 | HWP, HWPX | Convert to PDF with rhwp |
 | DOC, DOCX, DOCM, ODT, PPT, PPTX, PPTM, ODP, ODS | Convert to PDF with LibreOffice |
 | XLS, XLSX, XLSM | Compare cell values, merges, and some formatting by sheet and address. Print-layout preview is also available. |
+| CSV, TSV | View and compare literal cell values. Compare by row number or by a shared unique header in the desktop app. |
 
 The native app renders pages with PDFium and computes visual changes in its Rust worker. The Python bridge supplies cached PDF paths and document metadata. The browser preview uses Poppler's `pdftoppm`. LibreOffice's `soffice` can be found on PATH or in standard installation locations. For Hangul files, install the [rhwp](https://github.com/edwardkim/rhwp) executable on PATH or at `data/tools/rhwp/rhwp` (`rhwp.exe` on Windows). Use `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, and `DOCVERS_RHWP` to supply explicit tool paths.
 
-GitDoc compares pages by page number, so inserting a page can flag later pages as changed. Hangul and Office layout depends on the converter and installed fonts. The spreadsheet view shows values and XLSX formulas, with differences in cell values, merged ranges, and some formatting. Use print-layout preview to review charts and printed pages. Original downloads are available for encrypted files or files that fail to render. GitDoc keeps DOCM, XLSM, and PPTM bytes intact and disables macro execution in the conversion profile. ODS uses page comparison.
+GitDoc compares pages by page number, so inserting a page can flag later pages as changed. Hangul and Office layout depends on the converter and installed fonts. The spreadsheet view shows values and XLSX formulas, with differences in cell values, merged ranges, and some formatting. Use print-layout preview to review charts and printed pages. Original downloads are available for encrypted files or files that fail to render. GitDoc keeps DOCM, XLSM, and PPTM bytes intact and disables macro execution in the conversion profile. ODS uses page comparison. CSV uses commas and TSV uses tabs. Both accept UTF-8, BOM-marked UTF-16, and CP949. To compare reordered rows, choose a common header in the same column position with unique, nonblank values on both sides. The table view supports up to 25,000 fields per version. The original and PDF export remain available for larger tables.
 
 ## Automatic version labels
 
@@ -70,7 +71,7 @@ Open **Edit document** from an approved version and enter changes beside the pre
 | DOCX, PPTX | Replace existing text in Word body, tables, headers, footers, and footnotes, or in PowerPoint slides |
 | XLSX | Enter text, a number, or a formula in a cell, or clear the value. Excel recalculates formulas based on workbook settings. |
 | PDF | Rotate a page or add a note annotation |
-| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM | Submit a revised file from an external editor |
+| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
 
 [office_oxide](https://github.com/yfedoseev/office_oxide) edits DOCX and PPTX text. GitDoc imports its edited XML when the result matches the expected change and formatting. GitDoc's XML editor handles other cases and XLSX cell edits. A replacement spanning multiple Word or PowerPoint runs takes the formatting of the first character. Review the preview for layout and styling.
 
@@ -113,6 +114,8 @@ codex mcp add gitdoc -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"
 ```
 
 On Windows, use the absolute paths to `.venv\Scripts\python.exe` and `mcp_server.py`. In a new Codex session, use `search_documents`, `list_branches`, `list_versions`, `read_version`, `compare_versions`, and `compare_branches` to inspect the repository. Use `register_document`, `create_document_branch`, `submit_revision`, `edit_revision`, `review_draft`, `merge_document_branches`, and `restore_document_version` to work with it. Upload tools accept an absolute local path to a user-selected file. For approving, merging, or restoring, use the applicable branch head IDs from the latest lookup.
+
+For CSV and TSV, pass the header name as `row_key` to `compare_versions` to align reordered rows. The generated desktop links open the same alignment.
 
 The [desktop skill](.agents/skills/document-versions-desktop/SKILL.md) describes how to open comparisons. These commands use example document and version IDs. The window shows the version labels, such as `v1.0.1`.
 

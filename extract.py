@@ -13,7 +13,8 @@ import xlrd
 from defusedxml import DefusedXmlException, ElementTree as xml
 from pypdf import PdfReader
 
-from formats import MACRO_CONTENT_TYPES, ODF_MIMETYPES
+from delimited import lines as table_lines, records
+from formats import DELIMITED_EXTENSIONS, MACRO_CONTENT_TYPES, ODF_MIMETYPES
 
 OLE = bytes.fromhex("D0CF11E0A1B11AE1")
 ZIP_MARKERS = {
@@ -28,6 +29,11 @@ ZIP_MARKERS = {
 
 
 def matches_format(extension, data):
+    if extension in DELIMITED_EXTENSIONS:
+        has_records = False
+        for record in records(extension, data):
+            has_records |= bool(record)
+        return has_records
     if extension == "pdf":
         return b"%PDF-" in data[:1024]
     if data.startswith(OLE):
@@ -137,6 +143,8 @@ def odf_lines(data):
 def extract(extension, data):
     if extension in ZIP_MARKERS:
         yield from office_lines(extension, data)
+    elif extension in DELIMITED_EXTENSIONS:
+        yield from table_lines(records(extension, data))
     elif extension in ODF_MIMETYPES:
         yield from odf_lines(data)
     elif extension == "pdf":

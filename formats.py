@@ -10,6 +10,7 @@ MACRO_CONTENT_TYPES = {
     "xlsm": "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
     "pptm": "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml",
 }
-WORKBOOK_EXTENSIONS = ("xls", "xlsx", "xlsm")
+DELIMITED_EXTENSIONS = ("csv", "tsv")
+WORKBOOK_EXTENSIONS = ("xls", "xlsx", "xlsm", *DELIMITED_EXTENSIONS)
 EXTENSIONS = ("hwp", "hwpx", "doc", "docx", "pdf", "ppt", "pptx", *WORKBOOK_EXTENSIONS,
               *ODF_MIMETYPES, "docm", "pptm")

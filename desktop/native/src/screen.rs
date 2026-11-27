@@ -6,7 +6,7 @@ use crate::{
 use eframe::egui::*;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -108,6 +108,8 @@ struct Pane {
     jump_cell: String,
     sheets: Vec<String>,
     sheet_changes: Vec<(String, String)>,
+    changed_cells: HashMap<String, HashSet<String>>,
+    table_start: usize,
 }
 
 pub struct GitDoc {
@@ -221,7 +223,7 @@ impl GitDoc {
             "view",
             self.epoch,
             json!({"doc":self.doc,"ids":self.ids,
-            "mode": if self.selection.pages {"pages"} else {"auto"}}),
+            "mode": if self.selection.pages {"pages"} else {"auto"}, "row_key":self.selection.row_key}),
         );
     }
     fn previous_version(&self, version: i64) -> i64 {
@@ -239,6 +241,7 @@ impl GitDoc {
             Destination {
                 pages: self.selection.pages,
                 page: self.pane.page,
+                row_key: self.selection.row_key.clone(),
                 ..Default::default()
             },
         );
@@ -336,8 +339,8 @@ impl GitDoc {
                 .add_filter(
                     "문서",
                     &[
-                        "hwp", "hwpx", "doc", "docx", "docm", "pdf", "ppt", "pptx", "pptm", "xls",
-                        "xlsx", "xlsm", "odt", "ods", "odp",
+                        "hwp", "hwpx", "doc", "docx", "docm", "pdf", "csv", "tsv", "ppt", "pptx",
+                        "pptm", "xls", "xlsx", "xlsm", "odt", "ods", "odp",
                     ],
                 )
                 .pick_file()
@@ -447,7 +450,16 @@ impl GitDoc {
                     }
                     self.pane.cell = self.selection.cell.clone().unwrap_or_default();
                     self.pane.jump_cell = self.pane.cell.clone();
+                    self.pane.table_start =
+                        cell_position(&self.pane.cell).map_or(0, |(row, _)| row.saturating_sub(3));
                     self.pane.sheet_changes = sheet_changes(books, &self.pane.sheets);
+                    for (sheet, address) in &self.pane.sheet_changes {
+                        self.pane
+                            .changed_cells
+                            .entry(sheet.clone())
+                            .or_default()
+                            .insert(address.clone());
+                    }
                 } else if count(&self.pane.data["pages"]) > 0 {
                     self.pane.ratios = serde_json::from_value(self.pane.data["ratios"].clone())
                         .unwrap_or_default();
@@ -1158,21 +1170,52 @@ impl GitDoc {
         }
     }
     fn sheets(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
-            for (i, name) in self.pane.sheets.iter().enumerate() {
-                if ui.selectable_label(i == self.pane.sheet, name).clicked() {
-                    self.pane.sheet = i;
-                    self.pane.cell.clear();
-                    self.pane.jump_cell.clear();
+        let is_table = self.pane.data["delimited"] == true;
+        if !is_table {
+            ui.horizontal_wrapped(|ui| {
+                for (i, name) in self.pane.sheets.iter().enumerate() {
+                    if ui.selectable_label(i == self.pane.sheet, name).clicked() {
+                        self.pane.sheet = i;
+                        self.pane.cell.clear();
+                        self.pane.jump_cell.clear();
+                    }
                 }
-            }
-        });
+            });
+        }
         let name = self
             .pane
             .sheets
             .get(self.pane.sheet)
             .cloned()
             .unwrap_or_default();
+        if is_table && self.ids.len() == 2 {
+            let selected = self.pane.data["row_key"].as_str();
+            let mut key = selected.map(str::to_owned);
+            ui.horizontal(|ui| {
+                ui.label("행 맞추기");
+                ComboBox::from_id_salt("row-key")
+                    .selected_text(selected.unwrap_or("행 번호"))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut key, None, "행 번호");
+                        for name in rows(&self.pane.data["row_keys"])
+                            .iter()
+                            .filter_map(Value::as_str)
+                        {
+                            ui.selectable_value(&mut key, Some(name.into()), name);
+                        }
+                    });
+            });
+            if key.as_deref() != selected {
+                self.open_view(
+                    self.ids.clone(),
+                    Destination {
+                        row_key: key,
+                        ..Default::default()
+                    },
+                );
+                return;
+            }
+        }
         ui.horizontal(|ui| {
             let input = ui.add(
                 TextEdit::singleline(&mut self.pane.jump_cell)
@@ -1183,8 +1226,9 @@ impl GitDoc {
                 || input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))
             {
                 let test = self.pane.jump_cell.trim().to_uppercase();
-                if cell_position(&test).is_some() {
+                if let Some((row, _)) = cell_position(&test) {
                     self.pane.cell = test;
+                    self.pane.table_start = row.saturating_sub(3);
                     self.pane.scroll_to = true;
                 }
             }
@@ -1229,8 +1273,46 @@ impl GitDoc {
         } else {
             cell_position(&self.pane.jump_cell).unwrap_or_default()
         };
-        let row_start = start.0.saturating_sub(3);
+        const ROWS_PER_WINDOW: usize = 32;
+        let mut row_start = start.0.saturating_sub(3);
         let col_start = start.1.saturating_sub(2);
+        let mut row_end = (row_start + ROWS_PER_WINDOW).min(1048576);
+        let mut col_end = (col_start + 10).min(16384);
+        if is_table {
+            let tables = rows(&self.pane.data["books"])
+                .iter()
+                .filter_map(|book| rows(book).first());
+            let row_count = tables
+                .clone()
+                .map(|table| count(&table["row_count"]))
+                .max()
+                .unwrap_or(0);
+            let col_count = tables
+                .map(|table| count(&table["column_count"]))
+                .max()
+                .unwrap_or(0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(self.pane.table_start > 0, Button::new("이전 행"))
+                    .clicked()
+                {
+                    self.pane.table_start = self.pane.table_start.saturating_sub(ROWS_PER_WINDOW);
+                }
+                if ui
+                    .add_enabled(
+                        self.pane.table_start + ROWS_PER_WINDOW < row_count,
+                        Button::new("다음 행"),
+                    )
+                    .clicked()
+                {
+                    self.pane.table_start += ROWS_PER_WINDOW;
+                }
+            });
+            row_start = self.pane.table_start.min(row_count.saturating_sub(1));
+            row_end = (row_start + ROWS_PER_WINDOW).min(row_count);
+            col_end = col_end.min(col_count);
+        }
+        let changes = self.pane.changed_cells.get(name);
         ScrollArea::both()
             .id_salt("worksheet")
             .auto_shrink([false, false])
@@ -1247,13 +1329,13 @@ impl GitDoc {
                                     .min_col_width(76.0)
                                     .show(ui, |ui| {
                                         ui.weak("");
-                                        for column in col_start..(col_start + 10).min(16384) {
+                                        for column in col_start..col_end {
                                             ui.strong(column_name(column));
                                         }
                                         ui.end_row();
-                                        for row in row_start..(row_start + 32).min(1048576) {
+                                        for row in row_start..row_end {
                                             ui.weak(format!("{}", row + 1));
-                                            for col in col_start..(col_start + 10).min(16384) {
+                                            for col in col_start..col_end {
                                                 let addr =
                                                     format!("{}{}", column_name(col), row + 1);
                                                 let cell_value = &sheet["cells"][&addr];
@@ -1265,10 +1347,9 @@ impl GitDoc {
                                                 } else {
                                                     val.to_owned()
                                                 };
-                                                let changed =
-                                                    self.pane.sheet_changes.iter().any(
-                                                        |(tab, loc)| tab == name && loc == &addr,
-                                                    );
+                                                let changed = changes.is_some_and(|locations| {
+                                                    locations.contains(&addr)
+                                                });
                                                 let mut label =
                                                     RichText::new(if value.is_empty() {
                                                         " ".into()
@@ -1318,6 +1399,8 @@ impl GitDoc {
             self.pane.sheet = sheet;
             self.pane.cell = address.into();
             self.pane.jump_cell = address.into();
+            self.pane.table_start =
+                cell_position(address).map_or(0, |(row, _)| row.saturating_sub(3));
             self.pane.scroll_to = true;
         }
     }
@@ -1353,12 +1436,8 @@ impl GitDoc {
             }
             self.right_header(ui);
             ui.horizontal(|ui| {
-                if let Some(extension) = self
-                    .record(self.ids.last().copied().unwrap_or(0))
-                    .map(|row| text(&row["extension"]))
-                    && matches!(extension, "xls" | "xlsx" | "xlsm")
-                {
-                    let sheets = self.pane.data["books"].is_array();
+                if self.pane.data["workbook"] == true {
+                    let sheets = !self.selection.pages;
                     if ui
                         .button(if sheets {
                             "인쇄 레이아웃"
@@ -1371,6 +1450,7 @@ impl GitDoc {
                             self.ids.clone(),
                             Destination {
                                 pages: sheets,
+                                row_key: self.selection.row_key.clone(),
                                 ..Default::default()
                             },
                         );

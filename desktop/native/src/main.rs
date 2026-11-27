@@ -25,6 +25,7 @@ pub struct Destination {
     pub change: Option<usize>,
     pub sheet: Option<String>,
     pub cell: Option<String>,
+    pub row_key: Option<String>,
     pub pages: bool,
 }
 
@@ -67,6 +68,7 @@ fn destination(link: &str) -> Result<Destination, String> {
             }
             "sheet" => result.sheet = Some(value.into_owned()),
             "cell" => result.cell = Some(value.into_owned()),
+            "row_key" => result.row_key = Some(value.into_owned()),
             "view" => result.pages = value == "pages",
             "version" => ids[0] = value.parse::<i64>().ok().filter(|n| *n > 0),
             "base" => ids[1] = value.parse::<i64>().ok().filter(|n| *n > 0),

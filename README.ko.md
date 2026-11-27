@@ -43,10 +43,11 @@ py -3.12 -m venv .venv
 | HWP, HWPX | rhwp에서 PDF로 변환 |
 | DOC, DOCX, DOCM, ODT, PPT, PPTX, PPTM, ODP, ODS | LibreOffice에서 PDF로 변환 |
 | XLS, XLSX, XLSM | 시트 이름과 셀 주소로 값·병합·일부 서식 대조. PDF 페이지 보기 제공 |
+| CSV, TSV | 셀 내용을 텍스트로 표시하고 비교. 데스크톱에서 행 번호 또는 공통 고유 열로 행을 맞출 수 있습니다. |
 
 네이티브 앱은 Rust 작업 스레드에서 PDFium으로 페이지를 렌더링하고 시각적 변경 영역을 계산합니다. Python 브리지는 캐시된 PDF의 경로와 문서 정보를 전달합니다. 브라우저 UI의 페이지 미리보기에는 Poppler의 `pdftoppm`가 필요합니다. LibreOffice의 `soffice`는 PATH와 일반 설치 경로에서 찾습니다. HWP/HWPX는 [rhwp](https://github.com/edwardkim/rhwp)의 `rhwp` 실행 파일을 PATH나 `data/tools/rhwp/rhwp`에 둡니다. 도구 경로는 `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, `DOCVERS_RHWP`로 직접 지정할 수 있습니다.
 
-문서 페이지는 같은 페이지 번호끼리 대조합니다. 페이지가 중간에 삽입되면 이후 페이지 차이도 함께 잡힐 수 있습니다. HWP와 Office의 글꼴 및 배치는 변환기와 설치된 글꼴에 따라 달라집니다. 스프레드시트 화면에서는 값과 XLSX 수식을 확인하고, 셀 값·병합·일부 서식의 변경을 찾을 수 있습니다. 인쇄 배치와 차트는 PDF 미리보기에서 확인할 수 있습니다. 암호화됐거나 변환할 수 없는 파일도 원본을 내려받을 수 있습니다. DOCM·XLSM·PPTM은 원본 그대로 보관하고 변환 환경에서 매크로 실행을 비활성화합니다. ODS는 페이지 단위로 비교합니다.
+문서 페이지는 같은 페이지 번호끼리 대조합니다. 페이지가 중간에 삽입되면 이후 페이지 차이도 함께 잡힐 수 있습니다. HWP와 Office의 글꼴 및 배치는 변환기와 설치된 글꼴에 따라 달라집니다. 스프레드시트 화면에서는 값과 XLSX 수식을 확인하고, 셀 값·병합·일부 서식의 변경을 찾을 수 있습니다. 인쇄 배치와 차트는 PDF 미리보기에서 확인할 수 있습니다. 암호화됐거나 변환할 수 없는 파일도 원본을 내려받을 수 있습니다. DOCM·XLSM·PPTM은 원본 그대로 보관하고 변환 환경에서 매크로 실행을 비활성화합니다. ODS는 페이지 단위로 비교합니다. CSV는 쉼표, TSV는 탭으로 구분합니다. UTF-8, BOM이 있는 UTF-16, CP949를 지원합니다. 순서가 바뀐 행을 비교하려면 두 버전에서 같은 위치에 있으며 중복이나 빈 값이 없는 열 제목을 선택합니다. 표 보기는 버전당 최대 25,000개 필드를 지원하며, 더 큰 표는 원본과 PDF로 내보낼 수 있습니다.
 
 ## 자동 버전 번호
 
@@ -70,7 +71,7 @@ py -3.12 -m venv .venv
 | DOCX, PPTX | Word 본문·표·머리말·꼬리말·각주, PowerPoint 슬라이드의 기존 문구 변경 |
 | XLSX | 셀을 선택해 텍스트·숫자·수식 입력 또는 값 삭제. 수정본을 Excel에서 열면 계산 설정에 따라 수식이 갱신됩니다 |
 | PDF | 페이지 회전 및 메모 주석 추가 |
-| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM | 기존 편집기에서 수정한 파일을 GitDoc에 제출 |
+| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | 기존 편집기에서 수정한 파일을 GitDoc에 제출 |
 
 [office_oxide](https://github.com/yfedoseev/office_oxide)는 DOCX/PPTX 텍스트 편집에 사용합니다. 검증 기준과 일치하는 편집 XML만 원본 문서 패키지에 넣고, 다른 경우에는 GitDoc의 XML 편집 경로를 사용합니다. XLSX는 기존 셀 편집 경로로 처리합니다. Word와 PowerPoint에서 하나의 문구가 여러 서식에 걸쳐 있으면 교체 문구에는 시작 지점의 서식이 적용됩니다. 앱의 페이지 미리보기는 서식과 배치 검토에 사용할 수 있습니다.
 
@@ -113,6 +114,8 @@ codex mcp add gitdoc -- "$PWD/.venv/bin/python" "$PWD/mcp_server.py"
 ```
 
 Windows에서는 위 설정 명령의 Python 경로를 `.venv\Scripts\python.exe`의 절대 경로로 바꿉니다. 새 Codex 세션에서 `search_documents`, `list_branches`, `list_versions`, `read_version`, `compare_versions`, `compare_branches`로 조회할 수 있습니다. `register_document`, `create_document_branch`, `submit_revision`, `edit_revision`, `review_draft`, `merge_document_branches`, `restore_document_version`으로 로컬 저장소를 조작합니다. 파일을 올리는 도구는 사용자가 선택한 파일의 로컬 절대 경로를 받습니다. 승인·병합·복원에는 조회한 브랜치의 최신 버전 ID를 사용합니다. 앱과 MCP가 같은 `DOCVERS_DB`를 가리키도록 설정하세요.
+
+CSV·TSV의 행 순서가 바뀐 경우 `compare_versions`의 `row_key`에 열 제목을 지정합니다. 생성된 데스크톱 링크에도 같은 행 맞추기 기준이 적용됩니다.
 
 [데스크톱 스킬](.agents/skills/document-versions-desktop/SKILL.md)은 이 프로젝트의 비교 화면을 열고 확인하는 절차를 담습니다. 아래 숫자는 문서·버전 ID 예시입니다. 화면에서는 같은 버전의 `v1.0.1` 같은 라벨을 표시합니다.
 

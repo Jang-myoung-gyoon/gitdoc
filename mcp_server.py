@@ -5,8 +5,9 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+from delimited import aligned_rows, key_columns, lines as table_lines, table_rows
 from desktop_link import desktop_url, document_path
-from formats import WORKBOOK_EXTENSIONS
+from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch, find_document, initialize, new_branch,
     find_version, merge_state, search_documents as find_documents, text_diff,
@@ -35,25 +36,34 @@ def require(row, kind):
 
 
 def metadata(row):
-    return {key: row[key] for key in row.keys() if key != "extracted"}
+    return {key: row[key] for key in row.keys() if key not in ("extracted", "content")}
 
 
-def difference(before, after):
-    changes, truncated = text_diff(before["extracted"], after["extracted"], limit=300, max_chars=20000)
-    path = document_path(before["document_id"], base=before["id"], target=after["id"])
-    locations = sheet_locations(changes, before, after)
+def difference(before, after, row_key=None):
+    left, right = before["extracted"], after["extracted"]
+    if row_key is not None:
+        if before["extension"] not in DELIMITED_EXTENSIONS or after["extension"] not in DELIMITED_EXTENSIONS:
+            raise ValueError("행 기준 열은 CSV/TSV에서만 사용할 수 있습니다.")
+        tables = [table_rows(row["extension"], row["content"]) for row in (before, after)]
+        column = key_columns(*tables).get(row_key)
+        if column is None:
+            raise ValueError("두 파일에서 중복과 빈 값이 없는 공통 열 제목을 선택하세요.")
+        left, right = ("\n".join(table_lines(table)) for table in aligned_rows(*tables, column))
+    changes, truncated = text_diff(left, right, limit=300, max_chars=20000)
+    path = document_path(before["document_id"], base=before["id"], target=after["id"], row_key=row_key)
+    locations = sheet_locations(changes, before, after, row_key)
     return {
         "desktop_url": desktop_url(path),
         "path": path,
         "locations": locations,
         "base": metadata(before), "target": metadata(after),
         "identical_bytes": before["sha256"] == after["sha256"],
-        "text_available": bool(before["extracted"] and after["extracted"]),
+        "text_available": bool(left and right),
         "lines": changes, "truncated": truncated,
     }
 
 
-def sheet_locations(lines, before, after):
+def sheet_locations(lines, before, after, row_key=None):
     if before["extension"] not in WORKBOOK_EXTENSIONS:
         return []
     locations = {}
@@ -65,7 +75,7 @@ def sheet_locations(lines, before, after):
             continue
         sheet, cell = match.groups()
         path = document_path(before["document_id"], base=before["id"], target=after["id"],
-                             sheet=sheet, cell=cell)
+                             sheet=sheet, cell=cell, row_key=row_key)
         locations[(sheet, cell)] = {"sheet": sheet, "cell": cell, "desktop_url": desktop_url(path)}
     return list(locations.values())
 
@@ -112,12 +122,14 @@ def read_version(document_id: int, version_id: int, offset: Offset = 0,
 
 
 @server.tool(annotations=read_only, structured_output=True)
-def compare_versions(document_id: int, base_version_id: int, target_version_id: int) -> dict[str, object]:
-    """Compare extracted text between two versions; returns additions and removals."""
+def compare_versions(document_id: int, base_version_id: int, target_version_id: int,
+                     row_key: Annotated[str, Field(min_length=1, max_length=255)] | None = None) -> dict[str, object]:
+    """Compare versions. For CSV/TSV, row_key optionally aligns rows by a common unique header."""
+    fields = VIEW + ", content" if row_key is not None else VIEW
     with database(readonly=True) as db:
-        before = require(find_version(db, document_id, base_version_id, VIEW), "기준 버전")
-        after = require(find_version(db, document_id, target_version_id, VIEW), "비교 버전")
-    return difference(before, after)
+        before = require(find_version(db, document_id, base_version_id, fields), "기준 버전")
+        after = require(find_version(db, document_id, target_version_id, fields), "비교 버전")
+    return difference(before, after, row_key)
 
 
 @server.tool(annotations=read_only, structured_output=True)
