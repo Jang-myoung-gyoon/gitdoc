@@ -6,7 +6,7 @@
   --accent: #1852a3;
   --paper: #fff;
   --ground: #f4f7fb;
-  font-family: Inter, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  font-family: system-ui, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", sans-serif;
   color: var(--ink);
   background: var(--ground);
 }

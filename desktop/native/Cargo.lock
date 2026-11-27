@@ -1234,6 +1234,7 @@ name = "gitdoc-desktop"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -1242,6 +1243,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "serde_json",
+ "ttf-parser",
  "url",
  "windows",
  "windows-sys 0.61.2",

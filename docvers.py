@@ -10,6 +10,7 @@ from pathlib import Path
 
 from browser_viewer import viewer_url
 from desktop_link import checked_document_path, desktop_url
+from font_policy import family_key, installed_fonts, resolve_missing, substitutions, substitutions_path
 from uploads import MAX_FILE, prepare_upload
 from store import (
     DATABASE, ROOT, VERSION_FIELDS, append_version, branch_list, create_document, database, find_branch,
@@ -60,6 +61,31 @@ def atomic_write(path, data):
 
 def save_tracking(info):
     atomic_write(Path(TRACKING), (json.dumps(info, ensure_ascii=False, indent=2) + "\n").encode())
+
+
+def fonts(args):
+    installed, families, _ = installed_fonts()
+    rules = substitutions()
+    source = args.set_rule[0] if args.set_rule else args.remove
+    if source is not None:
+        key = family_key(source)
+        if not key or len(source) > 160 or any(ord(char) < 32 for char in source):
+            raise ValueError("대체할 원래 글꼴 이름을 확인하세요.")
+        rules = {name: font for name, font in rules.items() if family_key(name) != key}
+        if args.set_rule:
+            target = installed.get(family_key(args.set_rule[1]))
+            if not target:
+                raise ValueError("대체 글꼴은 설치된 글꼴 목록에서 선택하세요.")
+            rules[source] = target
+        atomic_write(substitutions_path(), (json.dumps(rules, ensure_ascii=False, indent=2) + "\n").encode())
+    elif args.resolve:
+        original = installed.get(family_key(args.resolve))
+        print(original or resolve_missing(args.resolve, installed, rules) or "사용 가능한 대체 글꼴 없음")
+        return
+    else:
+        print("\n".join(families))
+    for source, target in rules.items():
+        print(f"{source} → {target}")
 
 
 def current_branch(db, info):
@@ -259,6 +285,12 @@ def main():
     desktop.add_argument("--browser", action="store_true", help="로컬 브라우저 뷰어 사용")
     desktop.add_argument("--url", action="store_true", help="창을 열지 않고 링크 출력")
     desktop.set_defaults(run=open_document)
+    font_cli = commands.add_parser("fonts", help="시스템 글꼴 조회 및 대체 규칙 관리")
+    font_options = font_cli.add_mutually_exclusive_group()
+    font_options.add_argument("--set", dest="set_rule", nargs=2, metavar=("MISSING", "INSTALLED"))
+    font_options.add_argument("--remove", metavar="MISSING")
+    font_options.add_argument("--resolve", metavar="FONT")
+    font_cli.set_defaults(run=fonts)
     args = parser.parse_args()
     try:
         os.chdir(args.directory)

@@ -147,10 +147,23 @@ fn render(
     }
     let mut rendered = Vec::new();
     for (path, page) in paths.iter().zip(physical_pages) {
-        rendered.push(
-            page.as_u64()
-                .and_then(|page| renderer.image(path.as_str(), page as usize)),
-        );
+        rendered.push(path.as_str().zip(page.as_u64()).and_then(|(path, number)| {
+            renderer.image(
+                path,
+                number as usize,
+                params["substitute_fonts"] == true,
+                || {
+                    let result =
+                        call("font_raster", &json!({"path":path, "number":number})).ok()?;
+                    let rgba = image::open(result.as_str()?).ok()?.into_rgba8();
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    Some(egui::ColorImage::from_rgba_unmultiplied(
+                        size,
+                        rgba.as_raw(),
+                    ))
+                },
+            )
+        }));
     }
     let failed = rendered
         .iter()

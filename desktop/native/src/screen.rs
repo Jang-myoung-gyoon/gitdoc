@@ -324,6 +324,7 @@ impl GitDoc {
             self.epoch,
             json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable,
                 "pages":self.pane.page_pairs.get(page - 1),
+                "substitute_fonts":self.pane.data["substitute_fonts"],
                 "paths":self.pane.data["paths"],"pdfium_directory":self.pane.data["pdfium_directory"],
                 "pdf_notes":self.pane.data["pdf_notes"]}),
         );
@@ -1259,6 +1260,7 @@ impl GitDoc {
             "changes",
             self.epoch,
             json!({"number":number, "pages":self.pane.page_pairs.get(number - 1), "paths":self.pane.data["paths"],
+                "substitute_fonts":self.pane.data["substitute_fonts"],
                 "pdfium_directory":self.pane.data["pdfium_directory"]}),
         );
     }

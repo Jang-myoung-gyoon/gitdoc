@@ -68,6 +68,20 @@ The native app renders pages with PDFium and computes visual changes in its Rust
 
 Inserted and deleted pages appear separately. Pages with identical rendered content remain paired after a shift. Changes to printed page numbers are visible changes. Hangul and Office layout depends on the converter and installed fonts. The spreadsheet view shows values and XLSX formulas, with differences in cell values, merged ranges, and some formatting. Use print-layout preview to review charts and printed pages. Original downloads are available for encrypted files or files that fail to render. GitDoc keeps DOCM, XLSM, and PPTM bytes intact and disables macro execution in the conversion profile. ODS uses page comparison. CSV uses commas and TSV uses tabs. Both accept UTF-8, BOM-marked UTF-16, and CP949. To compare reordered rows, choose a common header in the same column position with unique, nonblank values on both sides. The table view supports up to 25,000 fields per version. The original and PDF export remain available for larger tables.
 
+## Fonts in document previews
+
+GitDoc scans system and user font folders. Office previews use installed or embedded fonts when available and substitute missing families with installed alternatives. Hangul previews use system fonts and choose Korean fallbacks for missing serif and sans-serif families. Browser and desktop previews use Poppler for PDFs with unembedded fonts when it is available. The native PDFium renderer can also use system font folders. The stored file remains intact.
+
+Use `python docvers.py fonts` to list installed families. To check a family or choose a replacement for a missing font, run:
+
+```sh
+python docvers.py fonts --resolve "Calibri"
+python docvers.py fonts --set "Calibri" "Arial"
+python docvers.py fonts --remove "Calibri"
+```
+
+Substitution rules are stored in `font-substitutions.json` beside the local database and apply to LibreOffice and Poppler previews. Reopen a preview to apply a changed rule. Set `DOCVERS_FONT_DIRS` to a platform-separated list of additional directories for discovery, rhwp, Fontconfig, and native PDFium. Set `DOCVERS_UI_FONT` to a local font file to prefer it for desktop UI text. Substitutions can affect glyph widths or line breaks.
+
 ## Automatic version labels
 
 Each document starts at `v1.0.0`. GitDoc measures edits against the selected branch's base version and assigns document-wide labels in issuance order. Labels stay fixed after approval or rejection. Existing history receives display labels while keeping version IDs and original files.

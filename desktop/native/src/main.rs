@@ -114,37 +114,88 @@ fn python(root: &Path) -> OsString {
     OsString::from(if cfg!(windows) { "python" } else { "python3" })
 }
 
-fn configure(ctx: &egui::Context) {
-    let fonts = if cfg!(target_os = "macos") {
-        vec![PathBuf::from("/System/Library/Fonts/AppleSDGothicNeo.ttc")]
-    } else if cfg!(windows) {
-        vec![
-            PathBuf::from(env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()))
-                .join("Fonts/malgun.ttf"),
-        ]
-    } else {
-        vec![PathBuf::from(
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        )]
-    };
-    let selected = env::var_os("DOCVERS_UI_FONT")
-        .map(PathBuf::from)
-        .or_else(|| fonts.into_iter().find(|p| p.is_file()));
-    if let Some(bytes) = selected.and_then(|p| fs::read(p).ok()) {
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "gitdoc-cjk".into(),
-            egui::FontData::from_owned(bytes).into(),
+fn font_directories() -> Vec<PathBuf> {
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let mut dirs: Vec<_> = env::var_os("DOCVERS_FONT_DIRS")
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        dirs.extend(home.map(|path| path.join("Library/Fonts")));
+        dirs.extend(
+            [
+                "/Library/Fonts",
+                "/System/Library/Fonts",
+                "/System/Library/Fonts/Supplemental",
+            ]
+            .map(PathBuf::from),
         );
-        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            fonts
-                .families
-                .entry(family)
-                .or_default()
-                .push("gitdoc-cjk".into());
-        }
-        ctx.set_fonts(fonts);
+    } else if cfg!(windows) {
+        dirs.extend(
+            env::var_os("LOCALAPPDATA")
+                .map(|path| PathBuf::from(path).join("Microsoft/Windows/Fonts")),
+        );
+        dirs.push(
+            PathBuf::from(env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()))
+                .join("Fonts"),
+        );
+    } else {
+        dirs.extend(home.map(|path| path.join(".local/share/fonts")));
+        dirs.extend(
+            [
+                "/usr/share/fonts",
+                "/usr/local/share/fonts",
+                "/usr/share/fonts/opentype/noto",
+                "/usr/share/fonts/truetype/dejavu",
+            ]
+            .map(PathBuf::from),
+        );
     }
+    dirs.retain(|path| path.is_dir());
+    dirs
+}
+
+fn configure(ctx: &egui::Context) {
+    let preferred = if cfg!(target_os = "macos") {
+        &["AppleSDGothicNeo.ttc", "AppleGothic.ttf"][..]
+    } else if cfg!(windows) {
+        &["segoeui.ttf", "malgun.ttf"][..]
+    } else {
+        &["NotoSansCJK-Regular.ttc", "DejaVuSans.ttf"][..]
+    };
+    let directories = font_directories();
+    let custom = env::var_os("DOCVERS_UI_FONT").map(PathBuf::from);
+    let candidates = custom
+        .into_iter()
+        .chain(preferred.iter().filter_map(|name| {
+            directories
+                .iter()
+                .map(|dir| dir.join(name))
+                .find(|path| path.is_file())
+        }));
+    let mut fonts = egui::FontDefinitions::default();
+    let mut system_fonts = Vec::new();
+    for path in candidates {
+        if let Ok(bytes) = fs::read(path)
+            && ttf_parser::Face::parse(&bytes, 0).is_ok()
+        {
+            let key = format!("gitdoc-system-{}", system_fonts.len());
+            fonts
+                .font_data
+                .insert(key.clone(), egui::FontData::from_owned(bytes).into());
+            system_fonts.push(key);
+        }
+    }
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .splice(0..0, system_fonts.clone());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .extend(system_fonts);
+    ctx.set_fonts(fonts);
     ctx.set_visuals(egui::Visuals::light());
     ctx.style_mut(|style| {
         style.spacing.item_spacing = egui::vec2(9.0, 8.0);

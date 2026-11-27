@@ -2,7 +2,9 @@
 
 import json
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 
 import pypdfium2_raw
@@ -15,7 +17,7 @@ from editing import read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from page_alignment import comparison_pages
-from preview import page_dimensions, page_sizes, preview_path
+from preview import CACHE, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
     find_document, find_version, initialize, merge_state, new_branch, search_documents, text_diff,
@@ -110,6 +112,7 @@ def view(doc, ids, mode="auto", row_key=None):
     counts, faults, paths, ratios = map(list, zip(*previews))
     pairs, sources = comparison_pages(doc, ids, paths, counts)
     return dict(result, pages=len(pairs), pairs=pairs, sources=sources, counts=counts, faults=faults, paths=paths, ratios=ratios,
+                substitute_fonts=poppler_available() and any(path and unembedded_fonts(Path(path)) for path in paths),
                 pdfium_directory=str(Path(pypdfium2_raw.__file__).resolve().parent),
                 pdf_notes=len(records) == 1 and records[0]["extension"] == "pdf")
 
@@ -130,6 +133,20 @@ def page_notes(doc, version, number):
         return read_pdf_notes(content(doc, version), number)
     except Exception:
         return []
+
+
+@lru_cache(maxsize=1)
+def font_raster_folder():
+    return tempfile.TemporaryDirectory(prefix="gitdoc-font-raster-")
+
+
+def font_raster(path, number):
+    source = Path(path).resolve()
+    if source.parent != CACHE.resolve() or source.suffix != ".pdf":
+        raise ValueError("미리보기 파일 경로를 확인하세요.")
+    output = Path(font_raster_folder().name) / "page.png"
+    output.write_bytes(preview_png(source, number))
+    return str(output)
 
 
 def register(file, title):
@@ -200,7 +217,7 @@ OPERATIONS = {
     "view": view, "page_notes": page_notes, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "review": review,
     "restore": restore, "save": save_file, "print": print_preview, "merge": merge,
-    "browser": open_browser_view,
+    "browser": open_browser_view, "font_raster": font_raster,
 }
 
 

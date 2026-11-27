@@ -1,6 +1,7 @@
 use eframe::egui::{Color32, ColorImage};
 use pdfium_render::prelude::{
     PdfBitmap, PdfBitmapFormat, Pdfium, PdfiumError, PdfiumLibraryBindingsAccessor,
+    PdfiumLibraryConfig,
 };
 use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
@@ -10,13 +11,23 @@ type Bounds = [usize; 4];
 
 pub struct Pages {
     pdfium: Pdfium,
-    cache: VecDeque<((PathBuf, usize), PageImage)>,
+    cache: VecDeque<((PathBuf, usize, bool), PageImage)>,
 }
 
 pub fn load_pdfium(directory: &str) -> Result<Pdfium, String> {
     let library = Pdfium::pdfium_platform_library_name_at_path(&directory);
     match Pdfium::bind_to_library(library) {
-        Ok(bindings) => Ok(Pdfium::new(bindings)),
+        Ok(bindings) => {
+            let directories = crate::font_directories();
+            let paths: Vec<_> = directories
+                .iter()
+                .filter_map(|path| path.to_str())
+                .collect();
+            let config = PdfiumLibraryConfig::new()
+                .set_user_font_paths(&paths)
+                .map_err(|error| error.to_string())?;
+            Ok(Pdfium::new_with_config(bindings, config))
+        }
         Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => Ok(Pdfium::default()),
         Err(error) => Err(format!("PDFium을 불러올 수 없습니다. {error}")),
     }
@@ -30,15 +41,35 @@ impl Pages {
         })
     }
 
-    pub fn image(&mut self, path: Option<&str>, number: usize) -> Option<PageImage> {
-        let key = (PathBuf::from(path?), number);
+    pub fn image(
+        &mut self,
+        path: &str,
+        number: usize,
+        font_raster: bool,
+        load_font_raster: impl FnOnce() -> Option<ColorImage>,
+    ) -> Option<PageImage> {
+        let key = (PathBuf::from(path), number, font_raster);
         if let Some(position) = self.cache.iter().position(|(cached, _)| *cached == key) {
             let item = self.cache.remove(position)?;
             let image = Arc::clone(&item.1);
             self.cache.push_front(item);
             return Some(image);
         }
-        let document = self.pdfium.load_pdf_from_file(&key.0, None).ok()?;
+        let image = Arc::new(
+            if font_raster {
+                load_font_raster()
+            } else {
+                None
+            }
+            .or_else(|| self.render(&key.0, number))?,
+        );
+        self.cache.push_front((key, Arc::clone(&image)));
+        self.cache.truncate(16);
+        Some(image)
+    }
+
+    fn render(&self, path: &std::path::Path, number: usize) -> Option<ColorImage> {
+        let document = self.pdfium.load_pdf_from_file(path, None).ok()?;
         let page = document
             .pages()
             .get(i32::try_from(number.checked_sub(1)?).ok()?)
@@ -84,10 +115,7 @@ impl Pages {
             .chunks_exact(4)
             .map(|pixel| Color32::from_rgb(pixel[0], pixel[1], pixel[2]))
             .collect();
-        let image = Arc::new(ColorImage::new(size, pixels));
-        self.cache.push_front((key, Arc::clone(&image)));
-        self.cache.truncate(16);
-        Some(image)
+        Some(ColorImage::new(size, pixels))
     }
 }
 
