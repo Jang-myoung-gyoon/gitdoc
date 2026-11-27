@@ -57,13 +57,16 @@ def convert_format(extension, target, data):
         raise PreviewError("변환한 문서의 형식이 올바르지 않습니다.")
 
 
-def write_export(path, data):
+def write_export(path, data, *, overwrite=True):
     path = Path(path)
     temporary = tempfile.NamedTemporaryFile(dir=path.parent, delete=False)
     staged = Path(temporary.name)
     try:
         with temporary:
             temporary.write(data)
-        staged.replace(path)
+        if overwrite:
+            staged.replace(path)
+        else:
+            os.link(staged, path)
     finally:
         staged.unlink(missing_ok=True)

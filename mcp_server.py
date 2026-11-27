@@ -1,21 +1,29 @@
+import json
 import re
+from pathlib import Path
 from typing import Annotated, Literal
 
-from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.server.fastmcp import FastMCP, Image
+from mcp.types import TextContent, ToolAnnotations
 from pydantic import BaseModel, Field
 
 from browser_viewer import viewer_url, workspace_info
-from delimited import aligned_rows, key_columns, lines as table_lines, table_rows
+from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
+from desktop.bridge import content, page_path, save_file, versions
+from desktop.exporting import export_formats
 from desktop_link import checked_document_path, desktop_url, document_path
+from document_render import describe_page, preview_layout, render_page, use_pdfium, visual_difference
+from editing import MODES, cell_position, read_pdf_notes
 from extract import comparison_text
-from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
+from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
+from preview import PreviewError, page_dimensions
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch, find_document, initialize, new_branch,
     find_version, merge_state, search_documents as find_documents, text_diff,
 )
 
 from uploads import load_local_file
+from workbook import read_workbook
 from workflow import merge_revision, restore_revision, review_revision, save_document_edit, save_proposal
 
 server = FastMCP("document-versions", instructions=(
@@ -28,6 +36,7 @@ write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHin
 update_head = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 Limit = Annotated[int, Field(ge=1, le=100)]
 Offset = Annotated[int, Field(ge=0)]
+Page = Annotated[int, Field(ge=1)]
 VIEW = VERSION_FIELDS + ", extracted"
 
 
@@ -123,20 +132,169 @@ def read_version(document_id: int, version_id: int, offset: Offset = 0,
             "next_offset": offset + length if offset + length < len(text) else None}
 
 
+@server.tool(annotations=read_only, structured_output=True)
+def get_document_capabilities() -> dict[str, object]:
+    """Identify the workspace and list GitDoc's registration, direct-edit and export formats."""
+    edits = {"replace": ["replace_text"], "cell": ["edit_cell"],
+             "page": ["right", "left", "note", "insert"]}
+    return {**workspace_info(), "formats": {
+        extension: {"direct_edits": edits.get(MODES.get(extension), []),
+                    "export_formats": export_formats(extension)}
+        for extension in EXTENSIONS}}
+
+
+def preview_ids(version_id, base_version_id):
+    return [version_id] if base_version_id is None else [base_version_id, version_id]
+
+
+@server.tool(annotations=read_only, structured_output=True)
+def get_preview_info(document_id: int, version_id: int, base_version_id: int | None = None,
+                     offset: Offset = 0, limit: Limit = 50) -> dict[str, object]:
+    """Read page counts and alignment. Provide base_version_id to compare it with version_id."""
+    ids = preview_ids(version_id, base_version_id)
+    records, _, dimensions, pairs, sources, _ = preview_layout(document_id, ids)
+    return {"versions": [metadata(record) for record in records], "page_counts": list(map(len, dimensions)),
+            "total_positions": len(pairs), "pages": [
+                {**describe_page(i + 1, pairs[i], sources[i]), "dimensions_pt": [
+                    sizes[page - 1] if page is not None else None for page, sizes in zip(pairs[i], dimensions)]}
+                for i in range(offset, min(len(pairs), offset + limit))],
+            "next_offset": offset + limit if offset + limit < len(pairs) else None}
+
+
+@server.tool(annotations=read_only, structured_output=False)
+def render_document_page(document_id: int, version_id: int, page: Page = 1,
+                         base_version_id: int | None = None, highlight: bool = True,
+                         change: Page | None = None,
+                         max_side: Annotated[int, Field(ge=256, le=1650)] = 1200) -> list[TextContent | Image]:
+    """Return a PNG image and page metadata directly. For comparisons, page is the aligned position.
+
+    Supply base_version_id for side-by-side images, and change to outline a numbered body change.
+    Use get_preview_info and list_visual_changes to find positions and change numbers.
+    """
+    info, png = render_page(document_id, preview_ids(version_id, base_version_id), page, max_side,
+                            highlight, change)
+    return [TextContent(type="text", text=json.dumps(info, ensure_ascii=False)), Image(data=png, format="png")]
+
+
+@server.tool(annotations=read_only, structured_output=True)
+def list_visual_changes(document_id: int, base_version_id: int, target_version_id: int,
+                        offset: Offset = 0,
+                        limit: Annotated[int, Field(ge=1, le=20)] = 10) -> dict[str, object]:
+    """Scan a window of aligned positions for visual changes. Follow next_offset to scan further."""
+    _, paths, _, pairs, sources, footers = preview_layout(document_id, [base_version_id, target_version_id])
+    prefer_pdfium = use_pdfium(paths)
+    changes = []
+    failures = []
+    stop = min(len(pairs), offset + limit)
+    for i in range(offset, stop):
+        try:
+            regions, footer_only = visual_difference(paths, tuple(pairs[i]), footers[i], prefer_pdfium)
+        except (PreviewError, OSError) as error:
+            failures.append({"position": i + 1, "error": str(error)})
+            continue
+        if regions:
+            changes.append({**describe_page(i + 1, pairs[i], sources[i]), "footer_only": footer_only,
+                            "regions": [{"number": None if footer_only else j, "box": box}
+                                        for j, box in enumerate(regions, 1)]})
+    return {"changes": changes, "failures": failures, "total_positions": len(pairs),
+            "next_offset": stop if stop < len(pairs) else None}
+
+
+@server.tool(annotations=read_only, structured_output=True)
+def get_pdf_notes(document_id: int, version_id: int, page: Page) -> dict[str, object]:
+    """Read note annotations from a physical page of a PDF version."""
+    record, = versions(document_id, [version_id])
+    if record["extension"] != "pdf" or page > len(page_dimensions(page_path(record))):
+        raise ValueError("PDF 버전과 페이지 번호를 확인하세요.")
+    return {"page": page, "notes": read_pdf_notes(content(document_id, version_id), page)}
+
+
+@server.tool(annotations=read_only, structured_output=True)
+def inspect_workbook(document_id: int, version_id: int, base_version_id: int | None = None,
+                     sheet: str | None = None, start_cell: str = "A1", end_cell: str = "XFD1048576",
+                     changes_only: bool = False, row_key: str | None = None,
+                     offset: Offset = 0, limit: Limit = 50) -> dict[str, object]:
+    """List sheets or inspect cells, formulas, styling and merges. Supply a base to compare cells.
+
+    Omit sheet to list names. Use a row_key only to align CSV or TSV records by a shared header.
+    Cell addresses use the aligned row order when a row_key is supplied.
+    """
+    ids = preview_ids(version_id, base_version_id)
+    files = [(record["extension"], content(document_id, record["id"])) for record in versions(document_id, ids)]
+    if any(extension not in WORKBOOK_EXTENSIONS for extension, _ in files):
+        raise ValueError("셀 미리보기를 지원하는 스프레드시트를 선택하세요.")
+    if row_key is not None:
+        if len(ids) != 2 or any(extension not in DELIMITED_EXTENSIONS for extension, _ in files):
+            raise ValueError("행 기준 열을 지정하려면 두 CSV 또는 TSV 버전이 필요합니다.")
+        tables = [table_rows(*file) for file in files]
+        column = key_columns(*tables).get(row_key)
+        if column is None:
+            raise ValueError("두 파일에서 중복과 빈 값이 없는 공통 열 제목을 선택하세요.")
+        books = [[table_sheet(table)] for table in aligned_rows(*tables, column)]
+    else:
+        books = [read_workbook(*file) for file in files]
+    by_name = [{entry["name"]: entry for entry in book} for book in books]
+    names = list(dict.fromkeys(name for book in by_name for name in book))
+    result = {"version_ids": ids, "sheets": [{"name": name, "present": [name in book for book in by_name]}
+                                            for name in names]}
+    if sheet is None:
+        return result
+    if sheet not in names or (changes_only and len(ids) != 2):
+        raise ValueError("시트 이름 또는 비교 버전을 확인하세요.")
+    first_row, first_col = cell_position(start_cell.strip().upper())
+    last_row, last_col = cell_position(end_cell.strip().upper())
+    if first_row > last_row or first_col > last_col:
+        raise ValueError("셀 범위의 시작과 끝을 확인하세요.")
+    selected = [book.get(sheet, {"cells": {}, "merges": []}) for book in by_name]
+    addresses = set().union(*(entry["cells"] for entry in selected))
+    address_map = {}
+    for address in addresses:
+        try:
+            address_map[address] = cell_position(address)
+        except ValueError:
+            continue
+    cells = []
+    for address in sorted(address_map, key=address_map.__getitem__):
+        row, column = address_map[address]
+        if first_row <= row <= last_row and first_col <= column <= last_col:
+            values = [entry["cells"].get(address) for entry in selected]
+            changed = len(values) == 2 and values[0] != values[1]
+            if changed or not changes_only:
+                cells.append({"address": address, "values": values, "changed": changed})
+    merges = [set(entry["merges"]) for entry in selected]
+    result.update(sheet=sheet, cells=cells[offset:offset + limit], merges=[sorted(items) for items in merges],
+                  merge_changes=sorted(merges[0] ^ merges[1]) if len(merges) == 2 else [],
+                  cell_fields=["value", "formula", "style", "kind"],
+                  next_offset=offset + limit if offset + limit < len(cells) else None)
+    return result
+
+
+@server.tool(annotations=write, structured_output=True)
+def export_document(document_id: int, version_id: int, output_path: str,
+                    format: str | None = None, overwrite: bool = False) -> dict[str, object]:
+    """Save a version in its original format, PDF, or a compatible format to an absolute local path."""
+    destination = Path(output_path).expanduser()
+    if not destination.is_absolute():
+        raise ValueError("내보낼 파일의 절대 경로를 지정하세요.")
+    target = (format or destination.suffix.lstrip(".")).lower()
+    saved = save_file(document_id, version_id, str(destination), target, overwrite=overwrite)
+    return {"path": str(destination), "format": saved, "version_id": version_id}
+
+
 @server.tool(structured_output=True)
 def open_browser_view(document_id: int | None = None, version_id: int | None = None,
                       base_version_id: int | None = None, target_version_id: int | None = None,
                       branch: str | None = None, page: int | None = None, change: int | None = None,
                       sheet: str | None = None, cell: str | None = None,
-                      row_key: str | None = None) -> dict[str, str]:
+                      row_key: str | None = None, pages: bool = False) -> dict[str, str]:
     """Start or reuse GitDoc's loopback viewer and return a URL for a browser on this computer.
 
     Omit document_id for the library. Use version_id for one version or base_version_id
-    and target_version_id for comparison. The tool does not open a browser or edit a document.
+    and target_version_id for comparison. Use pages for spreadsheet print-layout preview.
     """
     path = checked_document_path(document_id, version=version_id, base=base_version_id,
                                  target=target_version_id, branch=branch, page=page, change=change,
-                                 sheet=sheet, cell=cell, row_key=row_key)
+                                 sheet=sheet, cell=cell, row_key=row_key, view="pages" if pages else None)
     return {"browser_url": viewer_url(path), **workspace_info()}
 
 

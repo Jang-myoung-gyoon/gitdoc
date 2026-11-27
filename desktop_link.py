@@ -23,9 +23,9 @@ def desktop_url(path):
 
 
 def checked_document_path(document_id=None, *, base=None, target=None, version=None, branch=None,
-                          page=None, change=None, sheet=None, cell=None, row_key=None):
+                          page=None, change=None, sheet=None, cell=None, row_key=None, view=None):
     if document_id is None and any(value is not None for value in
-                                   (branch, base, target, version, page, change, sheet, cell, row_key)):
+                                   (branch, base, target, version, page, change, sheet, cell, row_key, view)):
         raise ValueError("위치를 열려면 문서 ID를 지정하세요.")
     if target is not None and version is not None:
         raise ValueError("특정 버전 보기와 비교 대상은 함께 지정할 수 없습니다.")
@@ -45,4 +45,4 @@ def checked_document_path(document_id=None, *, base=None, target=None, version=N
             if branch and not find_branch(db, document_id, branch):
                 raise ValueError("브랜치를 찾을 수 없습니다.")
     return document_path(document_id, branch=branch, base=base, target=target, version=version,
-                         page=page, change=change, sheet=sheet, cell=cell, row_key=row_key)
+                         page=page, change=change, sheet=sheet, cell=cell, row_key=row_key, view=view)

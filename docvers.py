@@ -1,4 +1,6 @@
 import argparse
+import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -230,7 +232,7 @@ def native_executable():
 def open_document(args):
     path = checked_document_path(args.document_id, branch=args.branch, base=args.base, target=args.target,
                                  version=args.version, page=args.page, change=args.change, sheet=args.sheet,
-                                 cell=args.cell, row_key=args.row_key)
+                                 cell=args.cell, row_key=args.row_key, view="pages" if args.pages else None)
     if args.browser:
         print(viewer_url(path, open_tab=not args.url))
         return
@@ -246,6 +248,60 @@ def open_document(args):
         subprocess.Popen([str(executable), link], cwd=ROOT, env=environment, stdin=subprocess.DEVNULL,
                          stdout=log, stderr=log, start_new_session=True)
     print(link)
+
+
+def run_tool(args):
+    from mcp.server.fastmcp.exceptions import ToolError
+    from desktop.exporting import write_export
+    from mcp_server import server
+
+    if args.name is None:
+        print(json.dumps([tool.model_dump(mode="json", exclude_none=True)
+                          for tool in asyncio.run(server.list_tools())], ensure_ascii=False, indent=2))
+        return
+    try:
+        payload = json.loads(sys.stdin.read() if args.json == "-" else args.json)
+        if not isinstance(payload, dict):
+            raise ValueError("도구 인수는 JSON 객체로 입력하세요.")
+        result = asyncio.run(server.call_tool(args.name, payload))
+    except ToolError as error:
+        raise ValueError(str(error)) from error
+    if isinstance(result, tuple):
+        print(json.dumps(result[1], ensure_ascii=False, indent=2))
+        return
+    for block in result:
+        if block.type == "text":
+            print(block.text, file=sys.stderr if args.output == "-" else sys.stdout)
+        elif block.type == "image":
+            if args.output == "-":
+                sys.stdout.buffer.write(base64.b64decode(block.data))
+            elif args.output:
+                if Path(args.output).suffix.lower() != ".png":
+                    raise ValueError("이미지 출력 경로의 확장자를 .png로 지정하세요.")
+                write_export(args.output, base64.b64decode(block.data), overwrite=False)
+            else:
+                print(json.dumps(block.model_dump(mode="json"), ensure_ascii=False))
+
+
+def print_document(args):
+    from desktop.bridge import print_preview
+    from preview import PreviewError
+
+    try:
+        preview = print_preview(args.document_id, args.version_id)
+    except PreviewError as error:
+        raise ValueError(str(error)) from error
+    path = preview["path"]
+    if os.name == "nt":
+        if args.printer is not None:
+            raise ValueError("Windows CLI 인쇄는 기본 프린터를 사용합니다.")
+        os.startfile(path, "print")
+    else:
+        command = shutil.which("lp")
+        if command is None:
+            raise ValueError("인쇄 명령 lp를 찾을 수 없습니다. PDF로 내보내거나 GitDoc 앱에서 인쇄하세요.")
+        printer = ["-d", args.printer] if args.printer else []
+        subprocess.run([command, *printer, "-t", preview["title"], path], check=True)
 
 
 def main():
@@ -282,9 +338,20 @@ def main():
     desktop.add_argument("--sheet")
     desktop.add_argument("--cell")
     desktop.add_argument("--row-key", help="CSV/TSV 비교에 사용할 열 제목")
+    desktop.add_argument("--pages", action="store_true", help="스프레드시트의 인쇄 레이아웃 보기")
     desktop.add_argument("--browser", action="store_true", help="로컬 브라우저 뷰어 사용")
     desktop.add_argument("--url", action="store_true", help="창을 열지 않고 링크 출력")
     desktop.set_defaults(run=open_document)
+    tool = commands.add_parser("tool", help="MCP 도구 목록 조회 또는 같은 도구를 로컬에서 실행")
+    tool.add_argument("name", nargs="?", help="생략하면 도구 이름과 입력 스키마를 출력")
+    tool.add_argument("--json", default="{}", help="JSON 객체, 또는 표준 입력에서 읽으려면 -")
+    tool.add_argument("--output", help="PNG 출력 경로, 또는 표준 출력에 PNG를 쓰려면 -")
+    tool.set_defaults(run=run_tool)
+    printer = commands.add_parser("print", help="저장된 버전을 시스템 프린터로 보내기")
+    printer.add_argument("document_id", type=int)
+    printer.add_argument("version_id", type=int)
+    printer.add_argument("--printer", help="CUPS 프린터 이름, 생략하면 기본 프린터")
+    printer.set_defaults(run=print_document)
     font_cli = commands.add_parser("fonts", help="시스템 글꼴 조회 및 대체 규칙 관리")
     font_options = font_cli.add_mutually_exclusive_group()
     font_options.add_argument("--set", dest="set_rule", nargs=2, metavar=("MISSING", "INSTALLED"))

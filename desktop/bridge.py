@@ -184,7 +184,7 @@ def open_browser_view(doc=None, ids=(), branch=None, page=None, change=None, she
     return {"browser_url": viewer_url(path, open_tab=open_tab), "opened": open_tab}
 
 
-def save_file(doc, version, path, format):
+def save_file(doc, version, path, format, overwrite=True):
     record = versions(doc, [version])[0]
     source = record["extension"]
     if format not in export_formats(source) or Path(path).suffix.lower() != f".{format}":
@@ -195,7 +195,7 @@ def save_file(doc, version, path, format):
         data = page_path(record).read_bytes()
     else:
         data = convert_format(source, format, content(doc, version))
-    write_export(path, data)
+    write_export(path, data, overwrite=overwrite)
     return format
 
 

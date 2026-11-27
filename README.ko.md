@@ -152,6 +152,27 @@ Windows에서는 위 설정 명령의 Python 경로를 `.venv\Scripts\python.exe
 
 CSV·TSV의 행 순서가 바뀐 경우 `compare_versions`의 `row_key`에 열 제목을 지정합니다. 생성된 데스크톱 링크에도 같은 행 맞추기 기준이 적용됩니다.
 
+| 작업 | MCP 도구 |
+| --- | --- |
+| 직접 편집 및 내보내기 형식 조회 | `get_document_capabilities` |
+| 페이지 수와 두 버전의 대응 위치 조회 | `get_preview_info` |
+| 단일 페이지 또는 두 버전 비교를 PNG로 받기 | `render_document_page` |
+| 시각적 변경 영역 번호 및 하단 표시 변경 찾기 | `list_visual_changes` |
+| PDF 메모와 시트의 셀·수식·서식·병합 조회 및 비교 | `get_pdf_notes`, `inspect_workbook` |
+| 원본·PDF·호환 형식으로 저장 | `export_document` |
+
+MCP는 렌더링 결과를 `image/png` 이미지로 직접 반환합니다. 비교 이미지는 대상 버전을 `version_id`, 기준 버전을 `base_version_id`, 정렬된 비교 위치를 `page`에 전달합니다. `change`를 지정하면 해당 변경 영역을 강조합니다. 위치나 변경 목록은 `next_offset`으로 이어서 조회할 수 있습니다. 내보내려면 로컬 절대 경로를 지정하고, 기존 파일을 교체하려면 `overwrite`를 명시하세요.
+
+모든 MCP 도구는 CLI에서도 실행할 수 있습니다. `docvers tool`은 도구 목록과 입력 스키마를 출력합니다. `--json -`는 표준 입력으로 JSON을 받고, `--output -`는 표준 출력으로 PNG를 보냅니다.
+
+```sh
+docvers tool render_document_page --json '{"document_id":1,"version_id":2,"page":1}' --output preview.png
+docvers tool export_document --json '{"document_id":1,"version_id":2,"output_path":"/absolute/path/export.pdf"}'
+docvers print 1 2
+```
+
+CLI 인쇄는 macOS와 Linux에서 CUPS의 `lp`를 사용하고, Windows에서 기본 프린터와 등록된 PDF 인쇄 프로그램을 사용합니다. 인쇄 작업을 보내지 않고 인쇄 레이아웃을 준비하려면 `export_document`로 PDF를 저장하세요.
+
 [데스크톱 스킬](.agents/skills/document-versions-desktop/SKILL.md)은 이 프로젝트의 비교 화면을 열고 확인하는 절차를 담습니다. 아래 숫자는 문서·버전 ID 예시입니다. 화면에서는 같은 버전의 `v1.0.1` 같은 라벨을 표시합니다.
 
 ```sh

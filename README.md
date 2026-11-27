@@ -152,6 +152,27 @@ On Windows, use the absolute paths to `.venv\Scripts\python.exe` and `mcp_server
 
 For CSV and TSV, pass the header name as `row_key` to `compare_versions` to align reordered rows. The generated desktop links open the same alignment.
 
+| Task | MCP tool |
+| --- | --- |
+| List supported edits and export formats | `get_document_capabilities` |
+| Find physical pages and aligned comparison positions | `get_preview_info` |
+| View a page or a side-by-side diff as a PNG attachment | `render_document_page` |
+| Find numbered visual changes and footer-only changes | `list_visual_changes` |
+| Read PDF notes or inspect and compare cells, formulas, styles, and merges | `get_pdf_notes`, `inspect_workbook` |
+| Save the original, PDF, or a compatible format | `export_document` |
+
+The MCP image is returned as `image/png`. For side-by-side images, pass the target as `version_id`, the baseline as `base_version_id`, and the aligned position as `page`. Use `change` to outline a numbered change. Follow `next_offset` to continue listing positions or changes. For exports, supply an absolute local path. Set `overwrite` explicitly to replace an existing file.
+
+Every MCP tool can also run directly through the CLI. Run `docvers tool` to list tools and argument schemas. Use `--json -` to read a JSON object from standard input or `--output -` to stream an image as PNG.
+
+```sh
+docvers tool render_document_page --json '{"document_id":1,"version_id":2,"page":1}' --output preview.png
+docvers tool export_document --json '{"document_id":1,"version_id":2,"output_path":"/absolute/path/export.pdf"}'
+docvers print 1 2
+```
+
+CLI printing uses CUPS `lp` on macOS and Linux or the registered PDF print handler and default printer on Windows. Use `export_document` to prepare a print-layout PDF without sending a print job.
+
 The [desktop skill](.agents/skills/document-versions-desktop/SKILL.md) describes how to open comparisons. These commands use example document and version IDs. The window shows the version labels, such as `v1.0.1`.
 
 ```sh
