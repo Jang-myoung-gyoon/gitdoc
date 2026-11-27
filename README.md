@@ -173,6 +173,8 @@ To insert pages, enter the page number they should go before. Enter the current 
 
 [office_oxide](https://github.com/yfedoseev/office_oxide) handles compatible Word and PowerPoint find-and-replace edits. GitDoc edits the document XML directly for individual text blocks, formatting, and spreadsheet cells. Save several text block changes together as one draft, then review the rendered comparison. The equivalent MCP workflow is `list_editable_blocks` followed by `edit_revision` with `operation: edit_blocks`.
 
+For PDFs, **본문 수정** opens an editor for supported existing text objects on the current page. Select the highlighted text or choose it from the list, enter one replacement line that fits, and save it as a new PDF version. The editor verifies the saved text and the unchanged area around the edit. Scanned pages, interactive forms, signed or encrypted files, and unsupported font encodings have limited or unavailable text editing.
+
 ## Exporting versions
 
 Open **Save** to export the selected version. Every supported format can be saved as PDF. Extra choices depend on the source format.

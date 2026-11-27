@@ -4,6 +4,7 @@ use crate::{
     office_editor::Editor,
     paper::{self, PaperRow},
     paper_text::{self, Lines},
+    pdf_text_tools::PdfTextEditor,
     presentation,
 };
 use eframe::egui::*;
@@ -71,6 +72,7 @@ struct Form {
     submitting: bool,
     error: Option<String>,
     office: Option<Editor>,
+    pdf_text: Option<PdfTextEditor>,
     find_mode: bool,
 }
 
@@ -93,6 +95,7 @@ impl Form {
             submitting: false,
             error: None,
             office: None,
+            pdf_text: None,
             find_mode: false,
         }
     }
@@ -386,9 +389,31 @@ impl GitDoc {
         self.open_editor_form(find_only);
     }
 
+    fn open_pdf_text(&mut self) {
+        let page = self.target_page();
+        self.open_form(
+            Action::Edit,
+            "PDF 본문 수정",
+            json!({"doc":self.doc,"branch":self.branch,"base":self.head()}),
+        );
+        if let Some(form) = &mut self.form {
+            form.mode = "pdf_text".into();
+            form.page = page;
+            form.pdf_text = Some(PdfTextEditor::default());
+        }
+        self.request(
+            "pdf_text_targets",
+            self.epoch,
+            json!({"doc":self.doc,"version":self.head(),"page":page}),
+        );
+    }
+
     fn open_editor_form(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
+        let extension = self
+            .record(self.head())
+            .map(|row| text(&row["extension"]))
+            .unwrap_or("");
         let mode = match extension {
             "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
@@ -482,7 +507,7 @@ impl GitDoc {
         }
         let wanted = match reply.op {
             "page" | "detail" | "view" | "changes" | "page_text" | "branch_compare"
-            | "edit_contents" | "deck_open" | "deck_page" | "deck_save" => {
+            | "edit_contents" | "pdf_text_targets" | "deck_open" | "deck_page" | "deck_save" => {
                 reply.scope == self.epoch
             }
             _ => true,
@@ -555,11 +580,13 @@ impl GitDoc {
                     self.pane.index_failures += pages.saturating_sub(self.pane.indexed_through);
                     self.pane.indexed_through = pages;
                 }
-                if matches!(reply.op, "edit" | "rewind" | "edit_contents")
-                    && let Some(form) = self
-                        .form
-                        .as_mut()
-                        .filter(|form| form.submitting || form.mode == "blocks")
+                if matches!(
+                    reply.op,
+                    "edit" | "rewind" | "edit_contents" | "pdf_text_targets"
+                ) && let Some(form) = self
+                    .form
+                    .as_mut()
+                    .filter(|form| form.submitting || form.mode == "blocks")
                 {
                     form.submitting = false;
                     form.error = Some(error);
@@ -570,6 +597,11 @@ impl GitDoc {
             }
         };
         match reply.op {
+            "pdf_text_targets" => {
+                if let Some(editor) = self.form.as_mut().and_then(|form| form.pdf_text.as_mut()) {
+                    editor.load(result);
+                }
+            }
             "edit_contents" => {
                 if let Some(form) = self.form.as_mut().filter(|form| form.mode == "blocks") {
                     form.office = Some(Editor::new(&result));
@@ -1118,6 +1150,11 @@ impl GitDoc {
                 && ui.add_enabled(selected > 0 && selected == self.head(), Button::new(label)).clicked()
             {
                 self.edit_form();
+            }
+            if extension == "pdf"
+                && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("본문 수정")).clicked()
+            {
+                self.open_pdf_text();
             }
             if extension == "docx"
                 && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("텍스트 수정")).clicked()
@@ -2064,6 +2101,11 @@ impl GitDoc {
                                 ui.label("편집할 본문을 불러오는 중…");
                             }
                         }
+                        "pdf_text" => {
+                            if let Some(editor) = &mut form.pdf_text {
+                                editor.show(ui, preview, form.error.is_some());
+                            }
+                        }
                         "replace" => {
                             let label = ui.label("찾을 문구");
                             ui.text_edit_singleline(&mut form.find)
@@ -2176,6 +2218,7 @@ impl GitDoc {
                 let valid = (!form.needs_file() || form.file.is_some())
                     && (!required_reason || !form.reason.trim().is_empty())
                     && (!required_name || !form.name.trim().is_empty())
+                    && (form.mode != "pdf_text" || form.pdf_text.as_ref().and_then(|editor| editor.fields(form.page)).is_some())
                     && (form.mode != "blocks" || if form.find_mode {
                         !form.find.is_empty() && form.find != form.replacement
                     } else { form.office.as_ref().is_some_and(Editor::has_changes) });
@@ -2220,6 +2263,11 @@ impl GitDoc {
                         "blocks" | "replace" => {
                             json!({"find":form.find,"replacement":form.replacement})
                         }
+                        "pdf_text" => form
+                            .pdf_text
+                            .as_ref()
+                            .and_then(|editor| editor.fields(form.page))
+                            .unwrap_or_default(),
                         "cell" => {
                             json!({"sheet":form.sheet,"cell":form.cell,"value_kind":form.kind,"value":form.replacement})
                         }

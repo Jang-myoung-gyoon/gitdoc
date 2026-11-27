@@ -6,6 +6,7 @@ mod office_editor;
 mod pages;
 mod paper;
 mod paper_text;
+mod pdf_text_tools;
 mod presentation;
 mod printing;
 mod screen;
