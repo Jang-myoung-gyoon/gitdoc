@@ -4,7 +4,7 @@ use crate::{
 };
 use eframe::egui::*;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn rows(value: &Value) -> &[Value] {
     value.as_array().map_or(&[], Vec::as_slice)
@@ -455,7 +455,10 @@ impl GitDoc {
                 );
                 self.notify("버전 이력을 갱신했습니다.", false);
             }
-            "save" => self.notify("원본을 저장했습니다.", false),
+            "save" => self.notify(
+                format!("{} 파일을 저장했습니다.", text(&result).to_uppercase()),
+                false,
+            ),
             _ => {}
         }
     }
@@ -596,20 +599,56 @@ impl GitDoc {
             self.display(version, compare);
         }
     }
+    fn save_as(&mut self, selected: i64, filename: &str, format: &str) {
+        let suggested = Path::new(filename).with_extension(format);
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(suggested.to_string_lossy())
+            .add_filter(format.to_uppercase(), &[format])
+            .save_file()
+        else {
+            return;
+        };
+        if !path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(format))
+        {
+            self.notify(format!(".{format} 확장자로 저장하세요."), true);
+            return;
+        }
+        self.request(
+            "save",
+            0,
+            json!({"doc": self.doc, "version": selected, "path": path, "format": format}),
+        );
+    }
+
     fn right_header(&mut self, ui: &mut Ui) {
         let selected = self.ids.last().copied().unwrap_or(0);
         let row = self.record(selected);
         let base = row.map_or(0, |v| id(&v["base_id"]));
         let approved = row.is_some_and(|v| v["status"] == "approved");
         let pending = row.is_some_and(|v| v["status"] == "pending");
-        let filename = row.map_or("", |v| text(&v["filename"])).to_owned();
+        let filename = text(&self.pane.data["filename"]).to_owned();
+        let formats = rows(&self.pane.data["save_as"]).to_vec();
         let extension = row.map_or("", |v| text(&v["extension"])).to_owned();
         ui.heading(RichText::new(text(&self.detail["title"])).size(23.0));
         ui.horizontal_wrapped(|ui|{
             ui.label(format!("{}  ·  {}",self.branch,rows(&self.pane.data["versions"]).iter().map(text).collect::<Vec<_>>().join(" → ")));
-            if ui.add_enabled(selected>0,Button::new("원본 저장")).clicked() &&
-                let Some(path)=rfd::FileDialog::new().set_file_name(&filename).save_file() {
-                self.request("save",0,json!({"doc":self.doc,"version":selected,"path":path}));
+            if !formats.is_empty() {
+                ui.menu_button("저장", |ui| {
+                    for (index, format) in formats.iter().map(text).enumerate() {
+                        let label = if index == 0 {
+                            format!("원본 ({})", format.to_uppercase())
+                        } else {
+                            format.to_uppercase()
+                        };
+                        if ui.button(label).clicked() {
+                            ui.close();
+                            self.save_as(selected, &filename, format);
+                        }
+                    }
+                });
             }
             if ui.button("수정안 제출").clicked() { self.file_form(Action::Submit,None); }
             if ui.add_enabled(selected==self.head() && matches!(extension.as_str(),"hwp"|"hwpx"|"docx"|"pptx"|"xlsx"|"pdf"),Button::new("문서 편집")).clicked() {

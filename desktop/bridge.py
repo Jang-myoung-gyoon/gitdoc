@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pypdfium2_raw
 
+from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
 from preview import page_sizes, preview_path
 from store import (
@@ -70,7 +71,9 @@ def view(doc, ids, mode="auto"):
     diff, truncated = text_diff(records[0]["extracted"], records[-1]["extracted"], limit=450)
     if truncated:
         diff.append("… 일부 변경만 표시합니다.")
-    result = {"versions": [row["version_label"] for row in records], "diff": "\n".join(diff)}
+    selected = records[-1]
+    result = {"versions": [row["version_label"] for row in records], "diff": "\n".join(diff),
+              "filename": selected["filename"], "save_as": export_formats(selected["extension"])}
     if mode == "auto" and all(row["extension"] in ("xls", "xlsx") for row in records):
         try:
             books = [read_workbook(row["extension"], content(doc, row["id"])) for row in records]
@@ -120,9 +123,19 @@ def review(doc, version, action, base, note=""):
     return version
 
 
-def save_file(doc, version, path):
-    Path(path).write_bytes(content(doc, version))
-    return path
+def save_file(doc, version, path, format):
+    record = versions(doc, [version])[0]
+    source = record["extension"]
+    if format not in export_formats(source) or Path(path).suffix.lower() != f".{format}":
+        raise ValueError("저장 형식과 파일 확장자를 확인하세요.")
+    if format == source:
+        data = content(doc, version)
+    elif format == "pdf":
+        data = page_path(record).read_bytes()
+    else:
+        data = convert_format(source, format, content(doc, version))
+    write_export(path, data)
+    return format
 
 
 def merge(doc, target, source, base, head, reason, file=None):

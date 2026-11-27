@@ -74,6 +74,19 @@ Open **Edit document** from an approved version and enter changes beside the pre
 
 [office_oxide](https://github.com/yfedoseev/office_oxide) edits DOCX and PPTX text. GitDoc imports its edited XML when the result matches the expected change and formatting. GitDoc's XML editor handles other cases and XLSX cell edits. A replacement spanning multiple Word or PowerPoint runs takes the formatting of the first character. Review the preview for layout and styling.
 
+## Exporting versions
+
+Open **Save** to export the selected version. Every supported format can be saved as PDF. Extra choices depend on the source format.
+
+| Source | Additional editable exports |
+| --- | --- |
+| HWP or HWPX | The other Hangul format |
+| DOCX | ODT |
+| PPT or PPTX | The other PowerPoint format and ODP |
+| XLS or XLSX | The other Excel format and ODS |
+
+PDF export uses the app's print layout. ODT, ODP, and ODS exports can be opened in a compatible editor.
+
 ## Local working copies
 
 Replace `/path/to/gitdoc` with this checkout's absolute path.

@@ -74,6 +74,19 @@ py -3.12 -m venv .venv
 
 [office_oxide](https://github.com/yfedoseev/office_oxide)는 DOCX/PPTX 텍스트 편집에 사용합니다. 검증 기준과 일치하는 편집 XML만 원본 문서 패키지에 넣고, 다른 경우에는 GitDoc의 XML 편집 경로를 사용합니다. XLSX는 기존 셀 편집 경로로 처리합니다. Word와 PowerPoint에서 하나의 문구가 여러 서식에 걸쳐 있으면 교체 문구에는 시작 지점의 서식이 적용됩니다. 앱의 페이지 미리보기는 서식과 배치 검토에 사용할 수 있습니다.
 
+## 버전 내보내기
+
+**저장**에서 선택한 버전을 내보냅니다. 지원하는 모든 문서를 PDF로 저장할 수 있으며, 원본 형식에 따라 편집 가능한 내보내기 형식을 제공합니다.
+
+| 원본 | 추가로 내보낼 수 있는 편집 형식 |
+| --- | --- |
+| HWP, HWPX | 다른 한글 형식 |
+| DOCX | ODT |
+| PPT, PPTX | 다른 PowerPoint 형식 및 ODP |
+| XLS, XLSX | 다른 Excel 형식 및 ODS |
+
+PDF는 앱의 인쇄 레이아웃을 사용합니다. ODT, ODP, ODS는 해당 형식과 호환되는 편집기에서 열 수 있습니다.
+
 ## 로컬 작업 폴더
 
 `/path/to/gitdoc`은 이 프로젝트의 실제 절대 경로로 바꿉니다.
