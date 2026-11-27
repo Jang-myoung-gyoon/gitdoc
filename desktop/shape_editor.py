@@ -17,6 +17,7 @@ A = f"{{{DRAWING}}}"
 WPS = f"{{{WORD_SHAPE}}}"
 V = f"{{{VML}}}"
 MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+VML_WRAP = "{urn:schemas-microsoft-com:office:word}wrap"
 WORD_KINDS = {"rect": "rectangle", "ellipse": "ellipse", "triangle": "triangle", "rightArrow": "arrow"}
 VML_KINDS = {"rect": "rectangle", "oval": "ellipse", "5": "triangle", "13": "arrow"}
 HWP_UNITS_PER_MM = 7200 / 25.4
@@ -38,7 +39,7 @@ class Shape:
     hangul: object = None
 
 
-def standalone_word_shape(paragraph):
+def standalone_word_shape(paragraph, binary_word=False):
     runs = [child for child in paragraph if child.tag != WORD_TAG + "pPr"]
     props = paragraph.find(WORD_TAG + "pPr")
     if (len(runs) != 1 or runs[0].tag != WORD_TAG + "r"
@@ -58,7 +59,7 @@ def standalone_word_shape(paragraph):
         drawing = item if item.tag == WORD_TAG + "drawing" else None
         picture = item if item.tag == WORD_TAG + "pict" else None
     modern = read_drawing(drawing) if drawing is not None else None
-    legacy = read_vml(picture) if picture is not None else None
+    legacy = read_vml(picture, binary_word and modern is not None) if picture is not None else None
     if (modern is None and legacy is None or drawing is not None and modern is None
             or picture is not None and legacy is None or modern and legacy and modern[0] != legacy[0]):
         return None
@@ -95,7 +96,7 @@ def read_drawing(drawing):
     return (kind, *sizes, (outer, inner)) if kind and all(s > 0 for s in sizes) else None
 
 
-def read_vml(picture):
+def read_vml(picture, inline_choice=False):
     if picture.tag != WORD_TAG + "pict":
         return None
     nodes = [node for node in picture if node.tag != V + "shapetype"]
@@ -113,7 +114,9 @@ def read_vml(picture):
         elif not types:
             kind = VML_KINDS.get(reference.removeprefix("_x0000_t"))
     style = node.get("style", "")
-    if re.search(r"(?:^|;)\s*(?:position\s*:\s*absolute|rotation\s*:)", style):
+    if re.search(r"(?:^|;)\s*rotation\s*:", style):
+        return None
+    if absolute_vml(style) and not inline_choice:
         return None
     lengths = [re.findall(rf"(?:^|;)\s*{key}\s*:\s*([0-9.]+)pt(?=;|$)", style) for key in ("width", "height")]
     if not kind or any(len(length) != 1 for length in lengths):
@@ -123,6 +126,10 @@ def read_vml(picture):
     except ValueError:
         return None
     return (kind, *sizes, node) if all(size > 0 for size in sizes) else None
+
+
+def absolute_vml(style):
+    return re.search(r"(?:^|;)\s*position\s*:\s*absolute(?:;|$)", style)
 
 
 def standalone_hangul_shape(paragraph):
@@ -183,7 +190,7 @@ def can_resize(shape):
         return False
 
 
-def movable_neighbor(paragraph, neighbor, hangul):
+def movable_neighbor(paragraph, neighbor, hangul, binary_word=False):
     if neighbor is None or neighbor.tag != paragraph.tag:
         return False
     if hangul:
@@ -193,7 +200,7 @@ def movable_neighbor(paragraph, neighbor, hangul):
                 and all(node.tag in (HANGUL + "run", HANGUL + "linesegarray") for node in neighbor)
                 and all(node.tag == HANGUL + "t" and not len(node)
                         for run in neighbor.findall(HANGUL + "run") for node in run))
-    if standalone_word_shape(neighbor) is not None:
+    if standalone_word_shape(neighbor, binary_word) is not None:
         return True
     return (all(node.tag in (WORD_TAG + "pPr", WORD_TAG + "r") for node in neighbor)
             and not any(neighbor.find(f".//{WORD_TAG}{tag}") is not None
@@ -202,18 +209,17 @@ def movable_neighbor(paragraph, neighbor, hangul):
                     for run in neighbor.findall(WORD_TAG + "r") for node in run))
 
 
-def shapes_in(root, hangul):
+def shapes_in(root, hangul, binary_word=False):
     parent = root if hangul else root.find(WORD_TAG + "body")
     if parent is None:
         return
-    parser = standalone_hangul_shape if hangul else standalone_word_shape
     for index, paragraph in enumerate(parent.findall((HANGUL if hangul else WORD_TAG) + "p")):
-        shape = parser(paragraph)
+        shape = standalone_hangul_shape(paragraph) if hangul else standalone_word_shape(paragraph, binary_word)
         if shape is not None:
             yield index, shape
 
 
-def shape_catalog(data, *, hangul):
+def shape_catalog(data, *, hangul, binary_word=False):
     with open_package(data) as archive:
         if hangul and any("signature" in name.lower() for name in archive.namelist()
                           if name.lower().startswith("meta-inf/")):
@@ -224,22 +230,22 @@ def shape_catalog(data, *, hangul):
                            if (match := re.fullmatch(r"Contents/section(\d+)\.xml", name)))
         return [
             {"address": [section, index], "kind": shape.kind, "size": [round(shape.width), round(shape.height)],
-             "move_up": movable_neighbor(shape.paragraph, shape.paragraph.getprevious(), hangul),
-             "move_down": movable_neighbor(shape.paragraph, shape.paragraph.getnext(), hangul),
+             "move_up": movable_neighbor(shape.paragraph, shape.paragraph.getprevious(), hangul, binary_word),
+             "move_down": movable_neighbor(shape.paragraph, shape.paragraph.getnext(), hangul, binary_word),
              "resize": can_resize(shape)}
             for section, part in parts
-            for index, shape in shapes_in(parse_part(archive, part), hangul)
+            for index, shape in shapes_in(parse_part(archive, part), hangul, binary_word)
         ]
 
 
-def apply_shape(data, address, operation, size, *, hangul):
+def apply_shape(data, address, operation, size, *, hangul, binary_word=False):
     section, index = address
     part = f"Contents/section{section}.xml" if hangul else WORD_PART
     with open_package(data) as archive:
         if not hangul:
             office_parts(archive, "docx")
         root = parse_part(archive, part)
-        shape = next((shape for position, shape in shapes_in(root, hangul) if position == index), None)
+        shape = next((shape for position, shape in shapes_in(root, hangul, binary_word) if position == index), None)
         if shape is None:
             raise ValueError("편집할 인라인 도형을 다시 선택하세요.")
         paragraph = shape.paragraph
@@ -247,7 +253,7 @@ def apply_shape(data, address, operation, size, *, hangul):
             paragraph.getparent().remove(paragraph)
         elif operation in ("shape_up", "shape_down"):
             neighbor = paragraph.getprevious() if operation == "shape_up" else paragraph.getnext()
-            if not movable_neighbor(paragraph, neighbor, hangul):
+            if not movable_neighbor(paragraph, neighbor, hangul, binary_word):
                 raise ValueError("문단 경계를 넘어 도형을 이동할 수 없습니다.")
             if operation == "shape_up":
                 neighbor.addprevious(paragraph)
@@ -268,15 +274,25 @@ def prepare_legacy_shapes(data):
     with open_package(data) as archive:
         root = parse_part(archive, WORD_PART)
         changed = False
-        for _, shape in shapes_in(root, False):
+        for _, shape in shapes_in(root, False, binary_word=True):
             parent = shape.vml.getparent() if shape.vml is not None else None
             fallback = parent.getparent() if parent is not None else None
             if fallback is None or fallback.tag != MC + "Fallback":
                 continue
             alternate = fallback.getparent()
             picture = deepcopy(parent)
+            legacy = next(node for node in picture if node.tag != V + "shapetype")
+            style = legacy.get("style")
+            if absolute_vml(style):
+                # Older LibreOffice uses a floating VML fallback even when DrawingML is inline.
+                positioning = ("position", "margin-", "mso-position-")
+                legacy.set("style", ";".join(part for part in style.split(";")
+                                             if not part.lstrip().startswith(positioning)))
+                if (wrap := legacy.find(VML_WRAP)) is not None:
+                    legacy.remove(wrap)
+                if legacy.tag in (V + "rect", V + "oval") and re.search(r"-21474836[0-9]{2}", legacy.get("path", "")):
+                    legacy.attrib.pop("path")
             if shape.kind in LEGACY_PATHS:
-                legacy = picture.find(V + "shape")
                 reference = legacy.get("type", "").lstrip("#")
                 if not any(node.get("id") == reference for node in picture.findall(V + "shapetype")):
                     kind, path = LEGACY_PATHS[shape.kind]

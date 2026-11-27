@@ -301,7 +301,7 @@ class PagedEditor:
                 if changed:
                     locations = word_locations(data, pdf, count)
                     tables = word_tables(data)
-                    shapes = shape_catalog(data, hangul=False)
+                    shapes = shape_catalog(data, hangul=False, binary_word=extension == "doc")
                 else:
                     tables = self.tables
                 objects = locations[number-1]
@@ -353,7 +353,8 @@ class PagedEditor:
                     or not all(type(number) is int and 2 <= number <= limit for number, limit in zip(size, (180, 250))))):
                 raise ValueError("도형 너비는 2~180 mm, 높이는 2~250 mm로 입력하세요.")
             changed = apply_shape(self.shape_xml if self.extension == "hwp" else source,
-                                  address, operation, size, hangul=self.extension in HANGUL_EXTENSIONS)
+                                  address, operation, size, hangul=self.extension in HANGUL_EXTENSIONS,
+                                  binary_word=self.extension == "doc")
             if self.extension == "hwp":
                 return convert_format("hwpx", "hwp", changed)
             return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
