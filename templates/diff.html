@@ -1,7 +1,7 @@
 {% macro diff(original, updated, changes, truncated) %}
   {% if original.extraction_note or updated.extraction_note %}
     {% for item in (original, updated) %}
-      {% if item.extraction_note %}<p>v{{ item.number }} · {{ item.extraction_note }}</p>{% endif %}
+      {% if item.extraction_note %}<p>{{ item.version_label }} · {{ item.extraction_note }}</p>{% endif %}
     {% endfor %}
   {% elif changes %}
     <p class="subtle small">+ 추가 · − 삭제</p>

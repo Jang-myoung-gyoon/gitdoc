@@ -1,6 +1,6 @@
 {% macro links(document_id, version, branch=none, show_reader=true) %}
   {% if show_reader %}
-  <a href="{{ url_for('detail', document_id=document_id, branch=branch, version=version.id) }}">문서 보기<span class="sr-only"> v{{ version.number }}</span></a>
+  <a href="{{ url_for('detail', document_id=document_id, branch=branch, version=version.id) }}">문서 보기<span class="sr-only"> {{ version.version_label }}</span></a>
   {% endif %}
-  <a href="{{ url_for('download', document_id=document_id, version_id=version.id) }}">원본 다운로드<span class="sr-only"> v{{ version.number }}</span></a>
+  <a href="{{ url_for('download', document_id=document_id, version_id=version.id) }}">원본 다운로드<span class="sr-only"> {{ version.version_label }}</span></a>
 {% endmacro %}

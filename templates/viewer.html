@@ -35,11 +35,11 @@
     {% for item in ((before, after) if comparing else (before,)) %}
     <article class="viewer-side" data-preview="{{ url_for('visual_preview', document_id=document_id, version_id=item.id) }}">
       <div class="viewer-side-title">
-        <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · v{{ item.number }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
+        <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · {{ item.version_label }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
         {% if comparing %}
-        <a data-view-link href="{{ url_for('detail', document_id=document_id, version=item.id, view='pages' if item.extension in ('xls', 'xlsx') else none) }}">문서 보기<span class="sr-only"> v{{ item.number }}</span></a>
+        <a data-view-link href="{{ url_for('detail', document_id=document_id, version=item.id, view='pages' if item.extension in ('xls', 'xlsx') else none) }}">문서 보기<span class="sr-only"> {{ item.version_label }}</span></a>
         {% else %}
-        <a href="{{ url_for('download', document_id=document_id, version_id=item.id) }}">원본 다운로드<span class="sr-only"> v{{ item.number }}</span></a>
+        <a href="{{ url_for('download', document_id=document_id, version_id=item.id) }}">원본 다운로드<span class="sr-only"> {{ item.version_label }}</span></a>
         {% endif %}
       </div>
       <div class="viewer-scroll" tabindex="0" aria-label="{{ '기준' if loop.first else '비교' }} 버전 문서 페이지">
@@ -99,11 +99,11 @@
     {% for item in ((before, after) if comparing else (before,)) %}
     <article class="viewer-side" data-workbook="{{ url_for('workbook', document_id=document_id, version_id=item.id) }}">
       <div class="viewer-side-title">
-        <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · v{{ item.number }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
+        <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · {{ item.version_label }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
         {% if comparing %}
-        <a data-view-link href="{{ url_for('detail', document_id=document_id, version=item.id) }}">문서 보기<span class="sr-only"> v{{ item.number }}</span></a>
+        <a data-view-link href="{{ url_for('detail', document_id=document_id, version=item.id) }}">문서 보기<span class="sr-only"> {{ item.version_label }}</span></a>
         {% else %}
-        <a href="{{ url_for('download', document_id=document_id, version_id=item.id) }}">원본 다운로드<span class="sr-only"> v{{ item.number }}</span></a>
+        <a href="{{ url_for('download', document_id=document_id, version_id=item.id) }}">원본 다운로드<span class="sr-only"> {{ item.version_label }}</span></a>
         {% endif %}
       </div>
       <div class="viewer-scroll sheet-scroll" tabindex="0" aria-label="{{ '기준본' if loop.first else '수정본' }} 시트"></div>

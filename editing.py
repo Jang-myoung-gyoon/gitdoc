@@ -323,7 +323,10 @@ def modify_document(extension, data, fields, max_file):
                                fields.get("value_kind"), valid_text(fields.get("value", ""), 10000,
                                                                   multiline=True))
         if kind == "page":
-            number = fields.get("page", type=int) or 0
+            try:
+                number = int(fields.get("page", ""))
+            except (ValueError, TypeError):
+                number = 0
             return update_pdf(data, number, fields.get("operation"),
                               valid_text(fields.get("note", ""), 1000, multiline=True))
     except (BadZipFile, KeyError, etree.XMLSyntaxError, PyPdfError, OSError, RecursionError) as error:

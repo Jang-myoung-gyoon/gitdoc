@@ -3,25 +3,23 @@ import io
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zipfile import BadZipFile
 
 from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
 from pypdf.errors import PyPdfError
 from werkzeug.exceptions import SecurityError
 
-from editing import MODES, modify_document, read_pdf_notes
-from extract import extract_for_version, matches_format
+from editing import MODES, read_pdf_notes
 from preview import PreviewError, page_sizes, preview_path, preview_png
 from workbook import read_workbook
+from uploads import EXTENSIONS, MAX_FILE, prepare_upload
+from workflow import MissingEntity, merge_revision, restore_revision, review_revision, save_document_edit, save_proposal
 from store import (
-    DATABASE, UPLOAD_FIELDS, VERSION_FIELDS, append_version, branch_history, branch_list, create_document, database,
-    find_branch, find_document, find_version, initialize, merge_state, move_head, new_branch,
+    DATABASE, VERSION_FIELDS, branch_history, branch_list, create_document, database,
+    find_branch, find_document, find_version, initialize, merge_state, new_branch,
     search_documents, text_diff,
 )
 
-MAX_FILE = 30 * 1024 * 1024
 STORE_ID = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
-EXTENSIONS = ("hwp", "hwpx", "docx", "pdf", "ppt", "pptx", "xls", "xlsx")
 app = Flask(__name__)
 app.config.update(SECRET_KEY=os.urandom(32), MAX_CONTENT_LENGTH=MAX_FILE + 256 * 1024,
                   TRUSTED_HOSTS=["localhost", "127.0.0.1"], SESSION_COOKIE_SAMESITE="Strict")
@@ -70,25 +68,6 @@ def read_upload():
     if not uploaded or not uploaded.filename:
         raise ValueError("파일을 선택하세요.")
     return prepare_upload(uploaded.filename, uploaded.stream.read(MAX_FILE + 1))
-
-
-def prepare_upload(name, data):
-    filename = name.replace("\\", "/").split("/")[-1]
-    extension = Path(filename).suffix.lower().lstrip(".")
-    if len(filename) > 255 or any(ord(char) < 32 for char in filename):
-        raise ValueError("파일 이름을 확인하세요.")
-    if extension not in EXTENSIONS:
-        raise ValueError("지원 파일 형식을 확인하세요.")
-    if not data or len(data) > MAX_FILE:
-        raise ValueError("파일은 1바이트 이상, 30MB 이하여야 합니다.")
-    try:
-        valid = matches_format(extension, data)
-    except (BadZipFile, OSError, ValueError):
-        valid = False
-    if not valid:
-        raise ValueError("파일 내용이 확장자와 일치하지 않거나 파일이 손상되었습니다.")
-    extracted, note = extract_for_version(extension, data)
-    return (filename, extension, len(data), hashlib.sha256(data).hexdigest(), note, extracted, data)
 
 
 @app.template_filter("without_view")
@@ -207,43 +186,13 @@ def merge_branches(document_id):
             raise ValueError("병합 사유를 1~500자로 입력하세요.")
         uploaded = request.files.get("file")
         resolution = read_upload() if uploaded and uploaded.filename else None
-        with database(write=True) as db:
-            target = branch(db, document_id, target_name)
-            source = branch(db, document_id, source_name)
-            if (str(target["head_id"]) != request.form.get("target_head")
-                or str(source["head_id"]) != request.form.get("source_head")):
-                raise ValueError("브랜치가 변경되었습니다. 최신 버전을 다시 대조하세요.")
-            _, state = merge_state(db, target, source)
-            if state == "merged":
-                raise ValueError("이 버전은 이미 대상 브랜치 이력에 포함되어 있습니다.")
-            if state == "conflict":
-                if not resolution:
-                    raise ValueError("양쪽 변경을 반영한 병합 파일을 올려주세요.")
-                if resolution[1] != version(db, document_id, target["head_id"])["extension"]:
-                    raise ValueError("대상 브랜치와 같은 파일 형식을 사용하세요.")
-                data = resolution
-            else:
-                origin = source if state == "source" else target
-                data = version(db, document_id, origin["head_id"], UPLOAD_FIELDS)
-            append_version(db, target, data, reason, merge_parent_id=source["head_id"])
+        merge_revision(document_id, target_name, source_name, request.form.get("target_head", type=int),
+                       request.form.get("source_head", type=int), reason, resolution)
     except ValueError as error:
         flash(str(error), "error")
         return redirect(destination, 303)
     flash(f"{source_name} 브랜치를 {target_name}에 병합했습니다.")
     return redirect(url_for("detail", document_id=document_id, branch=target_name), 303)
-
-
-def save_proposal(document_id, name, base, upload, reason):
-    with database(write=True) as db:
-        active = branch(db, document_id, name)
-        if active["head_id"] != base:
-            raise ValueError("확정본이 변경되었습니다. 새 확정본을 기준으로 다시 제출하세요.")
-        current = version(db, document_id, active["head_id"])
-        if current["extension"] != upload[1]:
-            raise ValueError("확정본과 같은 확장자의 파일을 선택하세요.")
-        if current["sha256"] == upload[3]:
-            raise ValueError("확정본과 같은 파일입니다.")
-        return append_version(db, active, upload, reason, "pending")
 
 
 def review_draft(document_id, name, version_id):
@@ -259,7 +208,7 @@ def edit_document(document_id):
         doc = document(db, document_id)
         active = branch(db, document_id, name)
         base = request.form.get("base", type=int) if submitted else active["head_id"]
-        item = version(db, document_id, base, VERSION_FIELDS + (", content" if submitted else ""))
+        item = version(db, document_id, base)
     mode = MODES.get(item["extension"])
     if not mode:
         abort(400, description="이 형식의 내장 편집을 지원하지 않습니다.")
@@ -274,9 +223,7 @@ def edit_document(document_id):
         reason = request.form.get("reason", "").strip()
         if not 1 <= len(reason) <= 500:
             raise ValueError("변경 사유를 1~500자로 입력하세요.")
-        updated = modify_document(item["extension"], item["content"], request.form, MAX_FILE)
-        upload = prepare_upload(item["filename"], updated)
-        version_id = save_proposal(document_id, name, base, upload, reason)
+        version_id = save_document_edit(document_id, name, base, request.form, reason)
     except ValueError as error:
         return render_template("edit.html", **context, error=str(error)), 422
     return review_draft(document_id, name, version_id)
@@ -323,25 +270,14 @@ def review(document_id, version_id):
     note = request.form.get("note", "").strip()
     if action not in ("approve", "reject") or len(note) > 500:
         abort(400, description="승인 또는 반려와 함께 500자 이하의 의견을 입력하세요.")
-    with database(write=True) as db:
+    with database() as db:
         draft = version(db, document_id, version_id)
-        active = branch(db, document_id, draft["branch_name"])
-        error = None
-        if draft["status"] != "pending":
-            error = "이미 검토가 끝난 버전입니다."
-        elif action == "approve" and (draft["base_id"] != active["head_id"] or
-                                        str(draft["base_id"]) != request.form.get("base")):
-            error = "확정본이 변경되었습니다. 새 확정본을 기준으로 다시 제출하세요."
-        if error:
-            flash(error, "error")
-        else:
-            approved = action == "approve"
-            db.execute("UPDATE versions SET status = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?",
-                       ("approved" if approved else "rejected", note, version_id))
-            if approved:
-                move_head(db, active, version_id)
-            flash("수정안을 승인했습니다." if approved else "수정안을 반려했습니다.")
-    return redirect(url_for("detail", document_id=document_id, branch=active["name"]), 303)
+    try:
+        review_revision(document_id, version_id, action, request.form.get("base", type=int), note)
+        flash("수정안을 승인했습니다." if action == "approve" else "수정안을 반려했습니다.")
+    except ValueError as error:
+        flash(str(error), "error")
+    return redirect(url_for("detail", document_id=document_id, branch=draft["branch_name"]), 303)
 
 
 @app.post("/documents/<int:document_id>/versions/<int:version_id>/restore")
@@ -349,20 +285,13 @@ def restore(document_id, version_id):
     reason = request.form.get("reason", "").strip()
     name = request.form.get("branch", "main")
     destination = url_for("detail", document_id=document_id, branch=name)
-    if not 1 <= len(reason) <= 500:
-        flash("복원 사유를 1~500자로 입력하세요.", "error")
-        return redirect(destination, 303)
-    with database(write=True) as db:
-        active = branch(db, document_id, name)
-        source = version(db, document_id, version_id)
-        if source["status"] != "approved" or version_id == active["head_id"] or (
-            str(active["head_id"]) != request.form.get("base")
-        ):
-            flash("지금은 이 버전을 복원할 수 없습니다. 현재 확정본을 확인하세요.", "error")
-            return redirect(destination, 303)
-        upload = version(db, document_id, version_id, UPLOAD_FIELDS)
-        append_version(db, active, upload, reason, restored_from=version_id)
-    flash(f"v{source['number']} 파일을 새 확정본으로 복원했습니다.")
+    try:
+        restore_revision(document_id, name, version_id, request.form.get("base", type=int), reason)
+        with database() as db:
+            source = version(db, document_id, version_id)
+        flash(f"{source['version_label']} 파일을 새 확정본으로 복원했습니다.")
+    except ValueError as error:
+        flash(str(error), "error")
     return redirect(destination, 303)
 
 
@@ -434,6 +363,11 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
         sheet_widths=sizes if item["extension"] in ("xls", "xlsx") else [],
         pdf=url_for("preview_pdf", document_id=document_id, version_id=version_id),
     )
+
+
+@app.errorhandler(MissingEntity)
+def missing_entity(error):
+    return render_template("error.html", message=str(error)), 404
 
 
 @app.errorhandler(SecurityError)

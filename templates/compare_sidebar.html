@@ -5,9 +5,9 @@
     <nav class="comparison-branches" aria-label="브랜치">
     {% for branch in sidebar.branches %}
       {% if branch.id == active.id %}
-      <a aria-current="true" href="{{ url_for('detail', document_id=doc.id, branch=branch.name) }}">⑂ {{ branch.name }} <small>v{{ branch.number }}</small></a>
+      <a aria-current="true" href="{{ url_for('detail', document_id=doc.id, branch=branch.name) }}">⑂ {{ branch.name }} <small>{{ branch.version_label }}</small></a>
       {% else %}
-      <a href="{{ url_for('compare_branches', document_id=doc.id, target=branch.name, source=active.name) }}">⑂ {{ branch.name }} <small>v{{ branch.number }}</small></a>
+      <a href="{{ url_for('compare_branches', document_id=doc.id, target=branch.name, source=active.name) }}">⑂ {{ branch.name }} <small>{{ branch.version_label }}</small></a>
       {% endif %}
     {% endfor %}
     </nav>
@@ -17,7 +17,7 @@
     <nav class="comparison-history" aria-label="버전 이력">
     {% for item in sidebar.history %}
       <a class="{{ 'merge-item' if item.merge_parent_id else '' }}" {% if item.id == after.id %}aria-current="true"{% endif %} href="{{ url_for('compare', document_id=doc.id, branch=active.name, base=before.id if item.id != before.id else after.id, target=item.id) }}">
-        <strong>v{{ item.number }} · {{ item.reason }}</strong>
+        <strong>{{ item.version_label }} · {{ item.reason }}</strong>
         <small>{{ item.branch_name }}{% if item.id == before.id %} · 기준본{% endif %}{% if item.merge_parent_id %} · 병합{% endif %}</small>
       </a>
     {% endfor %}

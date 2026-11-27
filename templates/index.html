@@ -16,14 +16,14 @@
         {% for item in documents %}
         <a class="doc-row" href="{{ url_for('detail', document_id=item.id) }}">
           <span class="type">{{ item.extension|upper }}</span>
-          <span class="doc-name"><strong>{{ item.title }}</strong><small>확정본 v{{ item.number }} · {{ item.created_at[:10] }}</small></span>
+          <span class="doc-name"><strong>{{ item.title }}</strong><small>확정본 {{ item.version_label }} · {{ item.created_at[:10] }}</small></span>
           {% if item.pending %}<span class="status pending">검토 대기 {{ item.pending }}</span>{% endif %}
           <span class="arrow" aria-hidden="true">→</span>
         </a>
         {% endfor %}
       </div>
       {% else %}
-      <p class="empty">{{ '검색 결과가 없습니다.' if query else '등록된 문서가 없습니다. 새 문서를 등록하면 v1이 확정본으로 저장됩니다.' }}</p>
+      <p class="empty">{{ '검색 결과가 없습니다.' if query else '등록된 문서가 없습니다. 새 문서를 등록하면 v1.0.0이 확정본으로 저장됩니다.' }}</p>
       {% if query %}<a href="{{ url_for('index') }}">전체 문서 보기</a>{% endif %}
       {% endif %}
     </section>

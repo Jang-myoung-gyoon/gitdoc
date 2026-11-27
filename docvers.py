@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from desktop_link import desktop_url, document_path
-from app import MAX_FILE, prepare_upload
+from uploads import MAX_FILE, prepare_upload
 from store import (
     DATABASE, ROOT, VERSION_FIELDS, append_version, branch_list, create_document, database, find_branch,
     find_document, find_version, initialize, new_branch, search_documents, text_diff,
@@ -70,13 +70,13 @@ def add(args):
     upload = working_upload(args.file)
     with database(write=True) as db:
         document_id = create_document(db, (args.title or args.file.stem).strip(), upload)
-    print(f"{document_id} · main v1 · {args.file.name}")
+    print(f"{document_id} · main v1.0.0 · {args.file.name}")
 
 
 def documents(args):
     with database() as db:
         for row in search_documents(db, args.query.strip()[:150]):
-            print(f"{row['id']} · {row['title']} · main v{row['number']}")
+            print(f"{row['id']} · {row['title']} · main {row['version_label']}")
 
 
 def checkout(args):
@@ -99,7 +99,7 @@ def checkout(args):
     save_tracking({"database": str(DATABASE.resolve()), "document_id": args.document_id,
                    "branch": branch["name"], "version_id": current["id"],
                    "sha256": current["sha256"], "filename": path.name})
-    print(f"{branch['name']} v{current['number']} · {path}")
+    print(f"{branch['name']} {current['version_label']} · {path}")
 
 
 def branches(args):
@@ -112,7 +112,7 @@ def branches(args):
             new_branch(db, info["document_id"], args.name.strip().lower(), info["version_id"])
         for item in branch_list(db, info["document_id"]):
             mark = "*" if item["id"] == branch["id"] else " "
-            print(f"{mark} {item['name']} v{item['number']}")
+            print(f"{mark} {item['name']} {item['version_label']}")
 
 
 def status(_args):
@@ -121,7 +121,7 @@ def status(_args):
     with database() as db:
         branch = current_branch(db, info)
         base = find_version(db, info["document_id"], info["version_id"])
-    print(f"{branch['name']} v{base['number']} · {path}")
+    print(f"{branch['name']} {base['version_label']} · {path}")
     if not path.exists():
         print("작업 파일이 없습니다.")
     else:
@@ -169,10 +169,10 @@ def commit(args):
         if info["sha256"] == upload[3]:
             raise ValueError("커밋할 변경이 없습니다.")
         version_id = append_version(db, branch, upload, reason)
-        number = find_version(db, info["document_id"], version_id)["number"]
+        label = find_version(db, info["document_id"], version_id)["version_label"]
     info.update(version_id=version_id, sha256=upload[3])
     save_tracking(info)
-    print(f"{branch['name']} v{number} · {reason}")
+    print(f"{branch['name']} {label} · {reason}")
 
 
 

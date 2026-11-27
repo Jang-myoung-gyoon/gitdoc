@@ -4,14 +4,17 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from versioning import classify_change, next_label
+
 ROOT = Path(__file__).resolve().parent
 DATABASE = Path(os.environ.get("DOCVERS_DB", str(ROOT / "data" / "documents.sqlite3"))).resolve()
 VERSION_FIELDS = """
-    id, document_id, number, filename, extension, size, sha256, reason, status,
+    id, document_id, number, version_label, change_scale, change_basis, filename, extension, size, sha256, reason, status,
     base_id, restored_from, created_at, review_note, reviewed_at, extraction_note,
     branch_id, merge_parent_id,
     (SELECT name FROM branches WHERE branches.id = versions.branch_id) AS branch_name,
-    (SELECT number FROM versions AS source WHERE source.id = versions.restored_from) AS restored_number
+    (SELECT number FROM versions AS source WHERE source.id = versions.restored_from) AS restored_number,
+    (SELECT version_label FROM versions AS source WHERE source.id = versions.restored_from) AS restored_version_label
 """
 UPLOAD_FIELDS = "filename, extension, size, sha256, extraction_note, extracted, content"
 
@@ -68,7 +71,30 @@ def initialize():
             db.execute("ALTER TABLE versions ADD COLUMN merge_parent_id INTEGER REFERENCES versions(id)")
             db.execute("INSERT INTO branches (document_id, name, head_id) SELECT id, 'main', current_id FROM documents")
             db.execute("UPDATE versions SET branch_id = (SELECT id FROM branches WHERE document_id = versions.document_id)")
+        if "version_label" not in columns:
+            for field in ("version_label", "change_scale", "change_basis"):
+                db.execute(f"ALTER TABLE versions ADD COLUMN {field} TEXT")
+            label_existing_versions(db)
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS version_label_unique ON versions(document_id, version_label)")
         db.execute("CREATE INDEX IF NOT EXISTS version_branch ON versions(branch_id, status)")
+
+
+def label_existing_versions(db):
+    rows = db.execute("""
+        SELECT v.id, v.document_id, v.extension, v.extracted, v.sha256,
+               parent.extracted AS parent_text, parent.sha256 AS parent_hash
+        FROM versions v LEFT JOIN versions parent ON v.base_id = parent.id
+        ORDER BY v.document_id, v.number
+    """)
+    document_id, previous = None, None
+    for row in rows:
+        if row["document_id"] != document_id:
+            document_id, previous = row["document_id"], None
+        scale, basis = ("initial", "initial") if previous is None else classify_change(
+            row["extension"], row["parent_text"], row["extracted"], identical=row["parent_hash"] == row["sha256"])
+        previous = next_label(previous, scale)
+        db.execute("UPDATE versions SET version_label = ?, change_scale = ?, change_basis = ? WHERE id = ?",
+                   (previous, scale, basis, row["id"]))
 
 
 def create_document(db, title, upload):
@@ -82,7 +108,7 @@ def create_document(db, title, upload):
 
 def search_documents(db, query, limit=-1, offset=0):
     return db.execute("""
-        SELECT d.*, v.filename, v.number, v.extension, v.created_at,
+        SELECT d.*, v.filename, v.number, v.version_label, v.extension, v.created_at,
             (SELECT COUNT(*) FROM versions p WHERE p.document_id = d.id AND p.status = 'pending') pending
         FROM documents d JOIN versions v ON v.id = d.current_id
         WHERE instr(lower(d.title), lower(?)) OR instr(lower(v.filename), lower(?))
@@ -100,13 +126,16 @@ def find_version(db, document_id, version_id, fields=VERSION_FIELDS):
 
 
 def find_branch(db, document_id, name):
-    return db.execute("SELECT * FROM branches WHERE document_id = ? AND name = ?",
+    return db.execute("""
+        SELECT b.*, v.version_label FROM branches b LEFT JOIN versions v ON v.id = b.head_id
+        WHERE b.document_id = ? AND b.name = ?
+    """,
                       (document_id, name)).fetchone()
 
 
 def branch_list(db, document_id):
     return db.execute("""
-        SELECT b.*, v.number, (SELECT COUNT(*) FROM versions p
+        SELECT b.*, v.number, v.version_label, (SELECT COUNT(*) FROM versions p
                                WHERE p.branch_id = b.id AND p.status = 'pending') AS pending
         FROM branches b JOIN versions v ON v.id = b.head_id WHERE b.document_id = ?
         ORDER BY b.name != 'main', b.name
@@ -151,14 +180,22 @@ def move_head(db, branch, version_id):
 
 def append_version(db, branch, upload, reason, status="approved", restored_from=None, merge_parent_id=None):
     document_id = branch["document_id"]
-    number = db.execute("SELECT COALESCE(MAX(number), 0) + 1 FROM versions WHERE document_id = ?",
-                        (document_id,)).fetchone()[0]
+    last = db.execute("SELECT number, version_label FROM versions WHERE document_id = ? ORDER BY number DESC LIMIT 1",
+                      (document_id,)).fetchone()
+    number = last["number"] + 1 if last else 1
+    parent = find_version(db, document_id, branch["head_id"], "sha256, extracted")
+    if last:
+        scale, basis = classify_change(upload[1], parent["extracted"] if parent else None, upload[5],
+                                      identical=bool(parent and parent["sha256"] == upload[3]))
+    else:
+        scale, basis = "initial", "initial"
+    label = next_label(last["version_label"] if last else None, scale)
     cursor = db.execute("""
-        INSERT INTO versions (document_id, number, reason, status, base_id, restored_from,
-            branch_id, merge_parent_id, filename, extension, size, sha256, extraction_note,
-            extracted, content)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (document_id, number, reason, status, branch["head_id"], restored_from,
+        INSERT INTO versions (document_id, number, version_label, change_scale, change_basis,
+            reason, status, base_id, restored_from, branch_id, merge_parent_id, filename, extension,
+            size, sha256, extraction_note, extracted, content)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (document_id, number, label, scale, basis, reason, status, branch["head_id"], restored_from,
           branch["id"], merge_parent_id, *upload))
     if status == "approved":
         move_head(db, branch, cursor.lastrowid)
