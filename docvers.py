@@ -1,10 +1,12 @@
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import sys
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from desktop_link import desktop_url, document_path
@@ -173,6 +175,56 @@ def commit(args):
     print(f"{branch['name']} v{number} · {reason}")
 
 
+
+def desktop_service_store(port):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+    try:
+        connection.request("GET", "/healthz")
+        response = connection.getresponse()
+        if response.status == 200:
+            value = json.loads(response.read(1024))
+            if isinstance(value, dict) and isinstance(value.get("store"), str):
+                return value["store"]
+        return ""
+    except ConnectionRefusedError:
+        return None
+    except (OSError, http.client.HTTPException, ValueError):
+        return ""
+    finally:
+        connection.close()
+
+
+def start_desktop_service():
+    try:
+        port = int(os.environ.get("DOCVERS_PORT", "8796"))
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except ValueError:
+        raise ValueError("DOCVERS_PORT는 1~65535 사이의 숫자여야 합니다.") from None
+    expected = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
+    connected = desktop_service_store(port)
+    if connected == expected:
+        return
+    if connected is not None:
+        raise ValueError("이 포트를 사용하는 앱이나 다른 GitDoc 저장소를 먼저 종료하세요.")
+    log_path = DATABASE.parent / "desktop-server.log"
+    with log_path.open("ab") as log:
+        process = subprocess.Popen([sys.executable, str(ROOT / "app.py")], cwd=ROOT,
+                                   env=dict(os.environ, DOCVERS_DB=str(DATABASE)),
+                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                   start_new_session=True)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if desktop_service_store(port) == expected:
+            return
+        if process.poll() is not None:
+            break
+        time.sleep(0.15)
+    if process.poll() is None:
+        process.terminate()
+    raise ValueError(f"로컬 서버를 시작하지 못했습니다. {log_path}에서 오류를 확인하세요.")
+
+
 def open_desktop(args):
     if args.document_id is None and any(value is not None for value in
                                         (args.branch, args.base, args.target, args.version, args.page,
@@ -206,7 +258,8 @@ def open_desktop(args):
     bundle = ROOT / ".build" / "GitDoc.app"
     if not (bundle / "Contents/MacOS/GitDoc").is_file():
         subprocess.run([str(ROOT / "desktop/build.sh")], check=True)
-    environment = ["--env", f"DOCVERS_DB={DATABASE}"]
+    start_desktop_service()
+    environment = ["--env", f"DOCVERS_DB={DATABASE}"] if "DOCVERS_DB" in os.environ else []
     for key in ("DOCVERS_PORT", "DOCVERS_RHWP", "DOCVERS_SOFFICE", "DOCVERS_PDFTOPPM"):
         if key in os.environ:
             environment.extend(["--env", f"{key}={os.environ[key]}"])

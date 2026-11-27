@@ -12,7 +12,7 @@ python3.12 -m venv .venv
 .venv/bin/python docvers.py open
 ```
 
-첫 실행에서 `.build/GitDoc.app`을 빌드하고 엽니다. 이후 이 앱을 Finder에서 열거나 같은 명령을 사용할 수 있습니다. 앱은 필요할 때 자체 로컬 서버를 실행합니다. 브라우저에서 작업하려면 `.venv/bin/python app.py`를 실행한 뒤 [로컬 문서함](http://127.0.0.1:8796/)을 여세요.
+첫 실행에서 `.build/GitDoc.app`을 빌드하고 로컬 서버와 앱 창을 엽니다. 터미널 명령으로 시작한 서버는 창을 닫은 뒤에도 브라우저에서 쓸 수 있습니다. Finder에서 앱을 처음 열 때 프로젝트가 macOS 문서 폴더에 있으면 폴더 접근을 요청할 수 있습니다. 브라우저에서 작업하려면 `.venv/bin/python app.py`를 실행한 뒤 [로컬 문서함](http://127.0.0.1:8796/)을 여세요.
 
 저장소는 `data/documents.sqlite3`입니다. `DOCVERS_DB`와 `DOCVERS_PORT`로 저장소와 포트를 바꿀 수 있습니다. 다른 저장소나 포트로 전환할 때는 GitDoc을 종료하고 새 설정으로 엽니다. 이 프로젝트는 기존 시제품 코드와 화면 시안을 사용하며 저장소는 별도로 시작합니다.
 
