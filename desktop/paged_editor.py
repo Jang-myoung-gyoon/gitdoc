@@ -301,7 +301,7 @@ class PagedEditor:
                 if changed:
                     locations = word_locations(data, pdf, count)
                     tables = word_tables(data)
-                    shapes = shape_catalog(data, hangul=False, binary_word=extension == "doc")
+                    shapes = shape_catalog(data, hangul=False, binary_word=self.extension == "doc")
                 else:
                     tables = self.tables
                 objects = locations[number-1]
