@@ -13,3 +13,15 @@ url = "2.5"
 
 [profile.dev.package.gitdoc-desktop]
 opt-level = 2
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSPrintInfo", "NSPrintOperation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSURL"] }
+objc2-pdf-kit = { version = "0.3", default-features = false, features = ["PDFDocument", "objc2-app-kit"] }
+
+[target.'cfg(windows)'.dependencies]
+pdfium-render = { version = "0.9.6", default-features = false, features = ["pdfium_use_win32", "thread_safe"] }
+raw-window-handle = "0.6"
+windows = { version = "=0.61.3", features = ["Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_Controls_Dialogs"] }

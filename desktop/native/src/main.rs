@@ -2,6 +2,7 @@
 
 mod bridge;
 mod pages;
+mod printing;
 mod screen;
 
 use eframe::egui;

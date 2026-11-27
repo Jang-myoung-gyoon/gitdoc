@@ -1,5 +1,7 @@
 use eframe::egui::{Color32, ColorImage};
-use pdfium_render::prelude::{PdfBitmap, PdfBitmapFormat, Pdfium, PdfiumLibraryBindingsAccessor};
+use pdfium_render::prelude::{
+    PdfBitmap, PdfBitmapFormat, Pdfium, PdfiumError, PdfiumLibraryBindingsAccessor,
+};
 use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 pub type PageImage = Arc<ColorImage>;
@@ -10,13 +12,19 @@ pub struct Pages {
     cache: VecDeque<((PathBuf, usize), PageImage)>,
 }
 
+pub fn load_pdfium(directory: &str) -> Result<Pdfium, String> {
+    let library = Pdfium::pdfium_platform_library_name_at_path(&directory);
+    match Pdfium::bind_to_library(library) {
+        Ok(bindings) => Ok(Pdfium::new(bindings)),
+        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => Ok(Pdfium::default()),
+        Err(error) => Err(format!("PDFium을 불러올 수 없습니다. {error}")),
+    }
+}
+
 impl Pages {
     pub fn new(directory: &str) -> Result<Self, String> {
-        let library = Pdfium::pdfium_platform_library_name_at_path(&directory);
-        let bindings = Pdfium::bind_to_library(library)
-            .map_err(|error| format!("PDFium을 불러올 수 없습니다. {error}"))?;
         Ok(Self {
-            pdfium: Pdfium::new(bindings),
+            pdfium: load_pdfium(directory)?,
             cache: VecDeque::new(),
         })
     }

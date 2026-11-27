@@ -123,6 +123,14 @@ def review(doc, version, action, base, note=""):
     return version
 
 
+def print_preview(doc, version):
+    record = versions(doc, [version])[0]
+    path = page_path(record)
+    page_sizes(path)
+    return {"path": str(path), "title": record["filename"],
+            "pdfium_directory": str(Path(pypdfium2_raw.__file__).resolve().parent)}
+
+
 def save_file(doc, version, path, format):
     record = versions(doc, [version])[0]
     source = record["extension"]
@@ -158,7 +166,7 @@ OPERATIONS = {
     "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "review": review,
-    "restore": restore, "save": save_file, "merge": merge,
+    "restore": restore, "save": save_file, "print": print_preview, "merge": merge,
 }
 
 

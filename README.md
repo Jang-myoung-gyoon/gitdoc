@@ -85,7 +85,7 @@ Open **Save** to export the selected version. Every supported format can be save
 | PPT or PPTX | The other PowerPoint format and ODP |
 | XLS or XLSX | The other Excel format and ODS |
 
-PDF export uses the app's print layout. ODT, ODP, and ODS exports can be opened in a compatible editor.
+PDF export uses the app's print layout. ODT, ODP, and ODS exports can be opened in a compatible editor. On macOS and Windows, **Print** opens the system dialog for the selected version so you can choose a printer and page range. In a comparison, **Save** and **Print** act on the target version.
 
 ## Local working copies
 
