@@ -122,6 +122,7 @@ function changesFor(name, left, right) {
 async function mountWorkbook(root) {
   const sides = Array.from(root.querySelectorAll('[data-workbook]'), node => ({
     url: node.dataset.workbook, scroll: node.querySelector('.viewer-scroll'),
+    viewLink: node.querySelector('[data-view-link]'),
   }));
   const status = root.querySelector('[data-status]');
   const position = root.querySelector('[data-change-position]');
@@ -137,9 +138,12 @@ async function mountWorkbook(root) {
     if (!response.ok) throw new Error(info.error);
     return new Map(info.sheets.map(sheet => [sheet.name, sheet]));
   }));
+  const comparing = sides.length === 2;
   const names = Array.from(new Set(books.flatMap(book => Array.from(book.keys()))));
   if (!names.length) throw new Error('표시할 시트가 없습니다.');
-  const sheetChanges = new Map(names.map(name => [name, changesFor(name, ...books.map(book => book.get(name)))]));
+  const sheetChanges = new Map(names.map(name => [
+    name, comparing ? changesFor(name, ...books.map(book => book.get(name))) : [],
+  ]));
   const changes = names.flatMap(name => sheetChanges.get(name));
   const buttons = new Map();
   let activeSheet;
@@ -156,15 +160,27 @@ async function mountWorkbook(root) {
       scroll.replaceChildren(grid(books[side].get(name), row, col, changed, cell));
       scroll.scrollTo(0, 0);
       scroll.querySelector('.selected-cell')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const link = sides[side].viewLink;
+      if (link) {
+        const url = new URL(link.href);
+        url.searchParams.set('sheet', name);
+        if (address) url.searchParams.set('cell', address);
+        else url.searchParams.delete('cell');
+        link.href = url;
+      }
     });
     for (const [sheet, button] of buttons) button.setAttribute('aria-pressed', String(sheet === name));
     form.elements.cell.value = address;
-    prev.disabled = !changes.length || current === 0;
-    next.disabled = !changes.length || current === changes.length - 1;
-    listItems.querySelector('[aria-current]')?.removeAttribute('aria-current');
-    listItems.querySelector(`[data-index="${current}"]`)?.setAttribute('aria-current', 'true');
-    status.textContent = `${name}${address ? ' · ' + address : ''} · ${sheetChanges.get(name).length}곳 변경`;
-    position.textContent = current >= 0 ? `변경 ${current + 1} / ${changes.length}` : '';
+    const label = address ? `${name} · ${address}` : name;
+    status.textContent = label;
+    if (comparing) {
+      prev.disabled = !changes.length || current === 0;
+      next.disabled = !changes.length || current === changes.length - 1;
+      listItems.querySelector('[aria-current]')?.removeAttribute('aria-current');
+      listItems.querySelector(`[data-index="${current}"]`)?.setAttribute('aria-current', 'true');
+      status.textContent = `${label} · ${sheetChanges.get(name).length}곳 변경`;
+      position.textContent = current >= 0 ? `변경 ${current + 1} / ${changes.length}` : '';
+    }
   }
 
   function jump(index) {
@@ -182,34 +198,36 @@ async function mountWorkbook(root) {
     buttons.set(name, button);
     tabs.append(button);
   }
-  let shown = 0;
-  const more = document.createElement('button');
-  more.type = 'button';
-  more.className = 'secondary';
-  more.textContent = '변경 더 보기';
-  function showMore() {
-    const until = Math.min(shown + 150, changes.length);
-    for (; shown < until; shown += 1) {
-      const { name, address, label } = changes[shown];
-      const item = document.createElement('li');
-      const button = document.createElement('button');
-      const index = shown;
-      button.type = 'button';
-      button.className = 'secondary';
-      button.dataset.index = index;
-      button.textContent = name + (address ? ' · ' + address : '') + ' · ' + label;
-      if (index === current) button.setAttribute('aria-current', 'true');
-      button.addEventListener('click', () => jump(index));
-      item.append(button);
-      listItems.append(item);
+  if (comparing) {
+    let shown = 0;
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'secondary';
+    more.textContent = '변경 더 보기';
+    function showMore() {
+      const until = Math.min(shown + 150, changes.length);
+      for (; shown < until; shown += 1) {
+        const { name, address, label } = changes[shown];
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        const index = shown;
+        button.type = 'button';
+        button.className = 'secondary';
+        button.dataset.index = index;
+        button.textContent = name + (address ? ' · ' + address : '') + ' · ' + label;
+        if (index === current) button.setAttribute('aria-current', 'true');
+        button.addEventListener('click', () => jump(index));
+        item.append(button);
+        listItems.append(item);
+      }
+      more.hidden = shown >= changes.length;
     }
-    more.hidden = shown >= changes.length;
+    more.addEventListener('click', showMore);
+    list.append(more);
+    list.querySelector('[data-list-status]').textContent = `전체 변경 ${changes.length}곳`;
+    showMore();
+    list.hidden = false;
   }
-  more.addEventListener('click', showMore);
-  list.append(more);
-  list.querySelector('[data-list-status]').textContent = `전체 변경 ${changes.length}곳`;
-  showMore();
-  list.hidden = false;
   form.querySelector('button').disabled = false;
   form.addEventListener('submit', event => {
     event.preventDefault();
@@ -220,15 +238,17 @@ async function mountWorkbook(root) {
     }
     show(activeSheet, address, changes.findIndex(change => change.name === activeSheet && change.address === address));
   });
-  prev.addEventListener('click', () => jump(current < 0 ? changes.length - 1 : current - 1));
-  next.addEventListener('click', () => jump(current + 1));
-  let synchronizing = false;
-  sides.forEach(({ scroll }, index) => scroll.addEventListener('scroll', () => {
-    if (synchronizing) return;
-    synchronizing = true;
-    sides[1 - index].scroll.scrollTo(scroll.scrollLeft, scroll.scrollTop);
-    requestAnimationFrame(() => { synchronizing = false; });
-  }, { passive: true }));
+  if (comparing) {
+    prev.addEventListener('click', () => jump(current < 0 ? changes.length - 1 : current - 1));
+    next.addEventListener('click', () => jump(current + 1));
+    let synchronizing = false;
+    sides.forEach(({ scroll }, index) => scroll.addEventListener('scroll', () => {
+      if (synchronizing) return;
+      synchronizing = true;
+      sides[1 - index].scroll.scrollTo(scroll.scrollLeft, scroll.scrollTop);
+      requestAnimationFrame(() => { synchronizing = false; });
+    }, { passive: true }));
+  }
   const params = new URLSearchParams(location.search);
   const sheet = names.includes(params.get('sheet')) ? params.get('sheet') : names[0];
   const address = params.get('cell')?.toUpperCase() || '';

@@ -48,6 +48,11 @@ final class GitDoc: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         edit.submenu?.addItem(withTitle: "잘라내기", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.submenu?.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.submenu?.addItem(withTitle: "전체 선택", action: #selector(NSResponder.selectAll(_:)), keyEquivalent: "a")
+        let navigation = NSMenuItem()
+        menu.addItem(navigation)
+        navigation.submenu = NSMenu(title: "이동")
+        navigation.submenu?.addItem(withTitle: "뒤로", action: #selector(goBack), keyEquivalent: "[").target = self
+        navigation.submenu?.addItem(withTitle: "앞으로", action: #selector(goForward), keyEquivalent: "]").target = self
         NSApp.mainMenu = menu
 
         guard let port = Int(environment["DOCVERS_PORT"] ?? "8796"), (1...65535).contains(port) else {
@@ -66,7 +71,7 @@ final class GitDoc: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         else { return }
         location.path = link.path
         location.percentEncodedQueryItems = link.percentEncodedQueryItems?.filter {
-            ["base", "target", "branch", "page", "change", "sheet", "cell", "view"].contains($0.name)
+            ["base", "target", "version", "branch", "page", "change", "sheet", "cell", "view"].contains($0.name)
         }
         if ready { loadLocation() }
         window?.makeKeyAndOrderFront(nil)
@@ -163,7 +168,7 @@ final class GitDoc: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = action.request.url, isLocal(url) { NSWorkspace.shared.open(url) }
+        if isLocal(action.request.url) { webView.load(action.request) }
         return nil
     }
 
@@ -191,6 +196,9 @@ final class GitDoc: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUID
         panel.nameFieldStringValue = suggestedFilename
         panel.beginSheetModal(for: window) { result in completionHandler(result == .OK ? panel.url : nil) }
     }
+
+    @objc private func goBack() { webView.goBack() }
+    @objc private func goForward() { webView.goForward() }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         window.title = webView.title.map { "GitDoc · " + $0 } ?? "GitDoc"

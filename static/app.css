@@ -160,3 +160,13 @@ summary { margin-top: 12px; color: var(--accent); cursor: pointer; }
 .viewer-side:first-child .changed-cell { box-shadow: inset 0 0 0 100vmax #e8506729; }
 .viewer-side:last-child .changed-cell { box-shadow: inset 0 0 0 100vmax #2aad682e; }
 .sheet-table .selected-cell { outline: 2px solid var(--accent); outline-offset: -2px; scroll-margin: 28px 0 3px 48px; }
+
+.reader-wrap .visual-viewer { margin-bottom: 18px; }
+.viewer-single { grid-template-columns: minmax(0, 1fr); }
+.viewer-single .viewer-scroll { height: clamp(360px, 70vh, 940px); }
+.viewer-single .viewer-sheet { width: min(100%, var(--sheet-width, 820px)); }
+.viewer-single .viewer-side-title strong { overflow-wrap: anywhere; }
+.reader-wrap .viewer-message:empty { display: none; }
+.visual-viewer[data-magnification="125"] .viewer-single .viewer-sheet { width: min(125%, var(--sheet-width, 1025px)); }
+.visual-viewer[data-magnification="150"] .viewer-single .viewer-sheet { width: min(150%, var(--sheet-width, 1230px)); }
+.visual-viewer[data-magnification="200"] .viewer-single .viewer-sheet { width: min(200%, var(--sheet-width, 1640px)); }

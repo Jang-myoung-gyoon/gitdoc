@@ -1,13 +1,20 @@
 {% extends "base.html" %}
 {% from "file.html" import links %}
+{% from "viewer.html" import viewer %}
+{% block main_class %}comparison-wrap reader-wrap{% endblock %}
 {% block title %}{{ doc.title }} · 문서 버전 관리{% endblock %}
 {% block main %}
   <nav class="breadcrumb" aria-label="현재 위치"><a href="{{ url_for('index') }}">문서함</a></nav>
   <div class="page-heading">
     <h1>{{ doc.title }}</h1>
     <p><span class="status approved">확정본 v{{ current.number }}</span> <strong>{{ active.name }}</strong> {{ current.filename }}</p>
-    <div class="file-links">{{ links(doc.id, current) }}</div>
+    <nav class="file-links" aria-label="문서 작업">
+      <a href="#history-title">버전 이력</a>
+      <a href="#propose-title">수정안 제출</a>
+      {% if opened.id != current.id %}<a href="{{ url_for('detail', document_id=doc.id, branch=active.name) }}">최신 확정본 보기</a>{% endif %}
+    </nav>
   </div>
+  {{ viewer(doc.id, opened) }}
   <section class="panel branch-tools" aria-labelledby="branches-title">
     <h2 id="branches-title">브랜치</h2>
     <nav class="branch-list" aria-label="문서 브랜치">
@@ -56,7 +63,7 @@
           {% if v.restored_from %}<p class="subtle small">v{{ v.restored_number }}에서 복원</p>{% endif %}
           {% if v.merge_parent_id %}<p class="subtle small">병합 버전 · <a href="{{ url_for('compare', document_id=doc.id, branch=active.name, base=v.merge_parent_id, target=v.id) }}">가져온 버전과 대조</a></p>{% endif %}
           <div class="file-links">
-            {{ links(doc.id, v) }}
+            {{ links(doc.id, v, active.name, v.id != opened.id) }}
             {% if v.base_id %}<a href="{{ url_for('compare', document_id=doc.id, branch=active.name, target=v.id) }}">{{ '수정안 검토' if v.status == 'pending' else '기준본과 비교' }}<span class="sr-only"> v{{ v.number }}</span></a>{% endif %}
           </div>
           {% if v.status == 'approved' and current.id != v.id %}

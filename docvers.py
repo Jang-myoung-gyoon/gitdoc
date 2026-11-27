@@ -175,11 +175,12 @@ def commit(args):
 
 def open_desktop(args):
     if args.document_id is None and any(value is not None for value in
-                                        (args.branch, args.base, args.target, args.page,
+                                        (args.branch, args.base, args.target, args.version, args.page,
                                          args.change, args.sheet, args.cell)):
         raise ValueError("위치를 열려면 문서 ID를 지정하세요.")
-    if args.target is None and any(value is not None for value in
-                                  (args.base, args.page, args.change, args.sheet, args.cell)):
+    if args.target is not None and args.version is not None:
+        raise ValueError("--version은 문서 보기에서 사용합니다. 비교할 때는 --target을 사용하세요.")
+    if args.target is None and (args.base is not None or args.change is not None):
         raise ValueError("비교 위치를 열려면 --target 버전 ID를 지정하세요.")
     if any(value is not None and value < 1 for value in (args.page, args.change)):
         raise ValueError("페이지와 변경 번호는 1 이상이어야 합니다.")
@@ -188,13 +189,14 @@ def open_desktop(args):
     if args.document_id is not None:
         with database(readonly=True) as db:
             require(find_document(db, args.document_id), "문서를 찾을 수 없습니다.")
-            for version_id in (args.base, args.target):
+            for version_id in (args.base, args.target, args.version):
                 if version_id is not None:
                     require(find_version(db, args.document_id, version_id), "이 문서의 버전을 찾을 수 없습니다.")
             if args.branch:
                 require(find_branch(db, args.document_id, args.branch), "브랜치를 찾을 수 없습니다.")
     path = document_path(args.document_id, branch=args.branch, base=args.base, target=args.target,
-                         page=args.page, change=args.change, sheet=args.sheet, cell=args.cell)
+                         version=args.version, page=args.page, change=args.change,
+                         sheet=args.sheet, cell=args.cell)
     link = desktop_url(path)
     if args.url:
         print(link)
@@ -240,6 +242,7 @@ def main():
     desktop.add_argument("-b", "--branch")
     desktop.add_argument("--base", type=int)
     desktop.add_argument("--target", type=int)
+    desktop.add_argument("--version", type=int, help="특정 버전을 문서 뷰어에서 열기")
     desktop.add_argument("--page", type=int)
     desktop.add_argument("--change", type=int)
     desktop.add_argument("--sheet")

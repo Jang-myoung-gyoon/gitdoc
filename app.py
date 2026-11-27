@@ -140,12 +140,17 @@ def create():
 def detail(document_id):
     with database() as db:
         doc = document(db, document_id)
-        active = branch(db, document_id, request.args.get("branch", "main"))
+        open_id = request.args.get("version", type=int)
+        if open_id is None and "version" in request.args:
+            abort(400, description="문서 버전 ID를 확인하세요.")
+        opened = version(db, document_id, open_id) if open_id is not None else None
+        default_branch = opened["branch_name"] if opened else "main"
+        active = branch(db, document_id, request.args.get("branch", default_branch))
         branches = branch_list(db, document_id)
         versions = branch_history(db, active)
         current = version(db, document_id, active["head_id"])
     return render_template("detail.html", doc=doc, versions=versions, current=current,
-                           active=active, branches=branches)
+                           opened=opened or current, active=active, branches=branches)
 
 
 @app.post("/documents/<int:document_id>/branches")

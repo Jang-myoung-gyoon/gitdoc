@@ -116,7 +116,8 @@ async function mountViewer(root) {
     scroll: node.querySelector('.viewer-scroll'),
     sheet: node.querySelector('.viewer-sheet'),
     image: node.querySelector('img'),
-    placeholder: node.querySelector('.viewer-placeholder')
+    placeholder: node.querySelector('.viewer-placeholder'),
+    viewLink: node.querySelector('[data-view-link]')
   }));
   const page = root.querySelector('[data-page]');
   const previous = root.querySelector('[data-previous]');
@@ -153,18 +154,21 @@ async function mountViewer(root) {
   const total = Math.max(...infos.map(info => info.pages || 0));
   if (!total) {
     sides.forEach((side, index) => { side.placeholder.textContent = infos[index].error; });
-    status.textContent = '원본 다운로드 또는 추출된 내용 차이를 확인하세요.';
+    status.textContent = '미리보기를 열 수 없습니다. 원본을 다운로드해 확인할 수 있습니다.';
     return;
   }
 
-  const comparable = infos.every(info => info.pages);
+  const comparing = sides.length === 2;
+  const comparable = comparing && infos.every(info => info.pages);
   function updateControls() {
     const busy = loading || navigating;
     page.disabled = busy;
     previous.disabled = busy || pageNumber === 1;
     next.disabled = busy || pageNumber === total;
-    previousChange.disabled = busy || !comparable;
-    nextChange.disabled = busy || !comparable;
+    if (comparing) {
+      previousChange.disabled = busy || !comparable;
+      nextChange.disabled = busy || !comparable;
+    }
   }
 
   function updateHighlight() {
@@ -215,21 +219,29 @@ async function mountViewer(root) {
     pixels = null;
     regions = [];
     activeRegion = -1;
-    highlight.disabled = true;
-    updateHighlight();
-    changePosition.textContent = '';
-    items.querySelector('[aria-current]')?.removeAttribute('aria-current');
+    if (comparing) {
+      highlight.disabled = true;
+      updateHighlight();
+      changePosition.textContent = '';
+      items.querySelector('[aria-current]')?.removeAttribute('aria-current');
+    }
     status.textContent = navigating ? `${pageNumber}쪽에서 변경을 찾는 중입니다.` : '페이지를 불러오는 중입니다.';
     const loaded = await Promise.all(sides.map(async (side, index) => {
       side.sheet.hidden = true;
       side.placeholder.hidden = false;
       const info = infos[index];
+      if (side.viewLink) {
+        const url = new URL(side.viewLink.href);
+        if (info.pages) url.searchParams.set('page', String(Math.min(info.pages, pageNumber)));
+        side.viewLink.href = url;
+      }
       if (!info.pages || pageNumber > info.pages) {
         side.placeholder.textContent = info.error || '이 버전에는 해당 페이지가 없습니다.';
         return false;
       }
       side.placeholder.textContent = '페이지 준비 중';
-      side.image.alt = `${index === 0 ? '기준' : '비교'} 버전 ${pageNumber}쪽`;
+      const label = comparing ? (index === 0 ? '기준 버전' : '비교 버전') : '문서';
+      side.image.alt = `${label} ${pageNumber}쪽`;
       side.image.src = `${side.url}/${pageNumber}.png`;
       try {
         await side.image.decode();
@@ -245,6 +257,11 @@ async function mountViewer(root) {
     }));
     if (current !== generation) return;
     loading = false;
+    if (!comparing) {
+      status.textContent = loaded[0] ? '' : '원본을 다운로드해 확인할 수 있습니다.';
+      updateControls();
+      return;
+    }
     if (!loaded.every(Boolean)) {
       if (comparable && infos.some(info => pageNumber > info.pages) && loaded.some(Boolean)) {
         regions = [null];
@@ -323,7 +340,7 @@ async function mountViewer(root) {
   let listedThrough = 0;
   let listing = false;
   let failures = 0;
-  list.addEventListener('toggle', async () => {
+  list?.addEventListener('toggle', async () => {
     if (!list.open || listing || listedThrough === total) return;
     listing = true;
     while (list.open && listedThrough < total) {
@@ -362,16 +379,18 @@ async function mountViewer(root) {
   previous.addEventListener('click', () => render(pageNumber - 1));
   next.addEventListener('click', () => render(pageNumber + 1));
   page.addEventListener('change', () => render(page.valueAsNumber));
-  previousChange.addEventListener('click', () => seek(-1));
-  nextChange.addEventListener('click', () => seek(1));
-  highlight.addEventListener('change', updateHighlight);
+  previousChange?.addEventListener('click', () => seek(-1));
+  nextChange?.addEventListener('click', () => seek(1));
+  highlight?.addEventListener('change', updateHighlight);
   zoom.addEventListener('change', () => {
     root.dataset.magnification = zoom.value;
     setSheetWidths();
     if (activeRegion >= 0) focusRegion(activeRegion);
   });
-  lockScrolling(sides, sync);
-  list.hidden = !comparable;
+  if (comparing) {
+    lockScrolling(sides, sync);
+    list.hidden = !comparable;
+  }
   const params = new URLSearchParams(location.search);
   await render(Number(params.get('page') || 1));
   const initialChange = Number(params.get('change'));
