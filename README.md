@@ -25,7 +25,7 @@ Experimental packages are attached to each release on the [Releases page](../../
 
 The macOS package is for Apple Silicon.
 
-- **macOS**: open the disk image, drag GitDoc to Applications, and launch it from there. Starting with v0.1.1, the public app and disk image use Developer ID signing, and the disk image carries Apple's notarization ticket.
+- **macOS**: open the disk image, drag GitDoc to Applications, and launch it from there. Starting with v0.1.2, the public app and disk image use Developer ID signing, and the disk image carries Apple's notarization ticket.
 - **Windows**: run the setup file. The installer is unsigned. If SmartScreen prompts, choose **More info ▸ Run anyway**. It installs for the current user without administrator rights and registers `gitdoc://` links. Uninstalling removes the app and the link handler.
 
 Packaged apps keep the repository, preview cache, and logs in `~/Library/Application Support/GitDoc` on macOS and `%APPDATA%\GitDoc` on Windows. Uninstalling or replacing the app leaves this folder in place. `DOCVERS_DB` still selects a different repository file.

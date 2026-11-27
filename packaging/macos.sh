@@ -67,18 +67,24 @@ assemble() {
 }
 
 sign() {
+    target=$1
+    shift
     if [ -n "${CODESIGN_KEYCHAIN:-}" ]; then
-        codesign --force --sign "$CODESIGN_IDENTITY" --keychain "$CODESIGN_KEYCHAIN" --timestamp "$@"
+        if ! codesign --force --sign "$CODESIGN_IDENTITY" --keychain "$CODESIGN_KEYCHAIN" --timestamp "$@" "$target"; then
+            printf 'Developer ID signing failed for %s\n' "$target" >&2
+            exit 1
+        fi
     else
-        codesign --force --sign - "$@"
+        codesign --force --sign - "$@" "$target"
     fi
 }
 
 sign_runtime_code() {
     if [ -n "${CODESIGN_KEYCHAIN:-}" ]; then
-        set -- --options runtime "$@"
+        sign "$1" --options runtime
+    else
+        sign "$1"
     fi
-    sign "$@"
 }
 
 sign_bundle() {
@@ -99,7 +105,7 @@ sign_bundle() {
                     if [ -d "$code/Versions" ]; then
                         for framework_version in "$code"/Versions/*; do
                             [ -d "$framework_version" ] && [ ! -L "$framework_version" ] || continue
-                            sign --bundle-version "${framework_version##*/}" "$code"
+                            sign "$code" --bundle-version "${framework_version##*/}"
                         done
                     else
                         sign "$code"
@@ -135,7 +141,7 @@ package() {
         sleep 5
     done
     if [ -n "${CODESIGN_KEYCHAIN:-}" ]; then
-        sign --identifier local.gitdoc.desktop.dmg "$image"
+        sign "$image" --identifier local.gitdoc.desktop.dmg
         codesign --verify --strict "$image"
     fi
     echo "$image"
