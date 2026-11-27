@@ -147,5 +147,12 @@ class DocumentObjectTests(unittest.TestCase):
             self.assertEqual((table.get("rowCnt"), table.get("colCnt")), ("2", "3"))
             self.assertEqual(len(root.findall(f".//{HANGUL}rect")), 1)
             self.assertEqual(len(root.findall(f".//{HANGUL}ellipse")), 1)
-            self.assertCountEqual([len(node.findall("{*}pt")) for node in root.iter(HANGUL + "polygon")], [3, 7])
+            polygons = [node.findall("{*}pt") for node in root.iter(HANGUL + "polygon")]
+            self.assertCountEqual([len(points) for points in polygons], [4, 8])
+            for points in polygons:
+                self.assertEqual(points[0].attrib, points[-1].attrib)
+            for kind in ("rect", "ellipse", "polygon"):
+                for shape in root.iter(HANGUL + kind):
+                    paragraph = next(shape.iterancestors(HANGUL + "p"))
+                    self.assertEqual("".join(node.text or "" for node in paragraph.iter(HANGUL + "t")), "")
             self.assertIsNone(root.find(f".//{HANGUL}pic"))

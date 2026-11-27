@@ -128,7 +128,7 @@ def hangul_polygons(root, paragraph):
     return paragraphs[paragraph].findall(f"{HANGUL}run/{HANGUL}polygon")
 
 
-def arrow_polygon(before, after, section, paragraph):
+def close_hangul_polygon(before, after, section, paragraph, kind):
     """Change only the native polygon introduced by the rhwp edit."""
     path = f"Contents/section{section}.xml"
     with open_package(before) as archive:
@@ -137,18 +137,23 @@ def arrow_polygon(before, after, section, paragraph):
         root = parse_part(archive, path)
         created = [node for node in hangul_polygons(root, paragraph) if node.get("instid") not in existing]
         if len(created) != 1:
-            raise ValueError("한글 문서에서 새 화살표 도형을 식별할 수 없습니다.")
+            raise ValueError("한글 문서에서 새 다각형 도형을 식별할 수 없습니다.")
         polygon = created[0]
         points = polygon.findall(f"{{*}}pt")
         if len(points) != 3:
             raise ValueError("한글 도형의 꼭짓점을 확인할 수 없습니다.")
-        index = polygon.index(points[0])
-        tag = points[0].tag
-        for point in points:
-            polygon.remove(point)
-        width, height = SHAPE_SIZE
-        for x, y in ((0, height//4), (width*3//5, height//4), (width*3//5, 0),
-                     (width, height//2), (width*3//5, height), (width*3//5, height*3//4), (0, height*3//4)):
-            polygon.insert(index, etree.Element(tag, x=str(x), y=str(y)))
-            index += 1
+        if kind == "triangle":
+            polygon.insert(polygon.index(points[-1]) + 1, etree.Element(points[0].tag, **points[0].attrib))
+        else:
+            index = polygon.index(points[0])
+            tag = points[0].tag
+            for point in points:
+                polygon.remove(point)
+            width, height = SHAPE_SIZE
+            tail = width * 3 // 5
+            vertices = ((0, height//4), (tail, height//4), (tail, 0), (width, height//2),
+                        (tail, height), (tail, height*3//4), (0, height*3//4))
+            for x, y in (*vertices, vertices[0]):
+                polygon.insert(index, etree.Element(tag, x=str(x), y=str(y)))
+                index += 1
         return rewrite_package(archive, {path: root})

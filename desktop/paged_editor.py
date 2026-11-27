@@ -12,7 +12,7 @@ from pathlib import Path
 
 import olefile
 
-from desktop.document_objects import HANGUL_SHAPES, SHAPE_SIZE, arrow_polygon, insert_word_object, insertion_value
+from desktop.document_objects import HANGUL_SHAPES, SHAPE_SIZE, close_hangul_polygon, insert_word_object, insertion_value
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
@@ -182,7 +182,11 @@ def hangul_xml(source):
 def insert_hangul_object(folder, extension, data, operation, value, section, paragraph):
     source = folder/f"document.{extension}"
     source.write_bytes(data)
-    flags = ["--section", str(section), "--para", str(paragraph), "--offset", "0"]
+    # Insert after the anchor so rhwp keeps any section start on its existing paragraph.
+    if operation == "shape":
+        paragraph += 1
+    coordinates = ["--section", str(section), "--para", str(paragraph)]
+    flags = [*coordinates, "--offset", "0"]
     if operation == "table":
         rows, columns = value
         flags += ["--rows", str(rows), "--cols", str(columns)]
@@ -194,13 +198,17 @@ def insert_hangul_object(folder, extension, data, operation, value, section, par
         with open_package(data):
             pass
     try:
+        if operation == "shape":
+            paragraph_file = folder/f"object-paragraph.{extension}"
+            rhwp(["edit", "insert-paragraph", str(source), *coordinates, "-o", str(paragraph_file)], folder)
+            source = paragraph_file
         rhwp(["edit", f"insert-{operation}", str(source), *flags, "-o", str(destination)], folder)
     except PreviewError as error:
         raise ValueError("한글 개체를 삽입할 수 없습니다. 설치한 rhwp의 삽입 명령과 문서 편집 권한을 확인하세요.") from error
-    if value != "arrow":
+    if value not in ("triangle", "arrow"):
         return destination.read_bytes()
-    # rhwp's CLI writes a triangle polygon; edit the native polygon's vertices in HWPX.
-    updated = arrow_polygon(hangul_xml(source), hangul_xml(destination), section, paragraph)
+    # rhwp inserts an open triangle. Write a closed, native polygon through HWPX.
+    updated = close_hangul_polygon(hangul_xml(source), hangul_xml(destination), section, paragraph, value)
     return convert_format("hwpx", "hwp", updated) if extension == "hwp" else updated
 
 
