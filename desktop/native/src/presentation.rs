@@ -1,8 +1,11 @@
 use eframe::egui::*;
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeSet, HashSet},
+    path::Path,
+};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 struct Target {
     id: u64,
     cell: Option<[usize; 2]>,
@@ -36,6 +39,7 @@ struct Object {
     parent: Option<u64>,
     text: Option<String>,
     name: String,
+    align: Vec<String>,
 }
 
 impl Object {
@@ -50,6 +54,7 @@ impl Object {
             parent: value["parent"].as_u64(),
             text: value["text"].as_str().map(str::to_owned),
             name: value["name"].as_str().unwrap_or("").to_owned(),
+            align: serde_json::from_value(value["align"].clone()).unwrap_or_default(),
         })
     }
 }
@@ -80,6 +85,7 @@ pub struct Editor {
     objects: Vec<Object>,
     selected: Option<Target>,
     multiple: BTreeSet<u64>,
+    patched: HashSet<Target>,
     text: Option<Text>,
     next_text: Option<Target>,
     pending_target: Option<Target>,
@@ -117,6 +123,7 @@ impl Editor {
             objects: Vec::new(),
             selected: None,
             multiple: BTreeSet::new(),
+            patched: HashSet::new(),
             text: None,
             next_text: None,
             pending_target: None,
@@ -142,6 +149,30 @@ impl Editor {
     }
 
     pub fn update(&mut self, ctx: &Context, result: &Value) -> Result<(), String> {
+        self.undo = result["undo"] == true;
+        self.redo = result["redo"] == true;
+        self.dirty = result["dirty"] == true;
+        if let Some(target) = Target::read(&result["patch"]) {
+            let item = self
+                .objects
+                .iter_mut()
+                .find(|item| item.target == target)
+                .ok_or("정렬할 텍스트를 찾을 수 없습니다.")?;
+            item.align =
+                serde_json::from_value(result["patch"]["align"].clone()).unwrap_or_default();
+            item.text = result["patch"]["text"].as_str().map(str::to_owned);
+            if let Some(edit) = self.text.as_mut().filter(|edit| edit.target == target) {
+                edit.original.clone_from(&edit.value);
+                edit.focus = true;
+            }
+            self.next_text = None;
+            self.pending_target = None;
+            self.patched.insert(target);
+            self.waiting = false;
+            self.error = None;
+            return Ok(());
+        }
+        self.patched.clear();
         let path = result["image"]
             .as_str()
             .ok_or("슬라이드 이미지를 찾을 수 없습니다.")?;
@@ -162,9 +193,6 @@ impl Editor {
         self.count = result["count"].as_u64().unwrap_or(1) as usize;
         self.width = result["width"].as_f64().unwrap_or(720.0) as f32;
         self.height = result["height"].as_f64().unwrap_or(405.0) as f32;
-        self.undo = result["undo"] == true;
-        self.redo = result["redo"] == true;
-        self.dirty = result["dirty"] == true;
         self.objects = result["objects"]
             .as_array()
             .into_iter()
@@ -242,7 +270,8 @@ impl Editor {
             self.page as u64
         };
         let mut params = json!({"number": number, "operation": operation, "value": value,
-            "target": target, "ids": self.multiple, "selection": self.selection(ctx)});
+            "target": target, "ids": self.multiple, "selection": self.selection(ctx),
+            "patch_text": operation == "align" && self.image.is_some()});
         // Text belongs to the current slide, including when navigating away.
         if let Some(edit) = self
             .text_edit()
@@ -1029,38 +1058,49 @@ impl Editor {
                 ));
             }
         }
+        for object in self
+            .objects
+            .iter()
+            .filter(|object| self.patched.contains(&object.target))
+        {
+            if self
+                .text
+                .as_ref()
+                .is_some_and(|edit| edit.target == object.target)
+            {
+                continue;
+            }
+            if let (Some(text), Some(pixels)) = (&object.text, &self.pixels) {
+                let (area, ink, size) = editing_rect(canvas, object, self.width, true);
+                let background = backdrop(pixels, canvas, ink);
+                ui.painter().rect_filled(ink, 0.0, background);
+                let galley = aligned_text(
+                    ui,
+                    text,
+                    &object.align,
+                    FontId::proportional(size),
+                    contrast(background),
+                    area.width(),
+                );
+                ui.painter().with_clip_rect(area).galley(
+                    area.left_top(),
+                    galley,
+                    contrast(background),
+                );
+            }
+        }
         let mut finish = false;
         if let Some(edit) = &mut self.text
             && let Some(object) = self.objects.iter().find(|item| item.target == edit.target)
         {
-            let outer = project(canvas, object.bounds).intersect(canvas);
-            let ink = object.ink.map(|ink| project(canvas, ink));
-            let inset = vec2(
-                object.inset[0] * canvas.width(),
-                object.inset[1] * canvas.height(),
-            );
-            let origin = ink.map_or(outer.min + inset, |r| r.min - vec2(0.0, 2.0));
-            let font_size = (object.size * canvas.width() / self.width).clamp(10.0, 100.0);
-            let start = origin.min(outer.max - vec2(8.0, 8.0)).max(canvas.min);
-            let max = outer
-                .max
-                .max(start + vec2(45.0, font_size * 1.45))
-                .min(canvas.max);
-            let edit_box = Rect::from_min_max(start, max);
-            let ink_area = ink
-                .unwrap_or(edit_box)
-                .union(edit_box)
-                .expand(1.5)
-                .intersect(canvas);
+            let localized = self.patched.contains(&object.target);
+            let (edit_box, ink_area, font_size) =
+                editing_rect(canvas, object, self.width, localized);
             let color = self
                 .pixels
                 .as_ref()
                 .map_or(Color32::WHITE, |image| backdrop(image, canvas, ink_area));
-            let foreground = if color.r() as u32 + color.g() as u32 + (color.b() as u32) < 390 {
-                Color32::WHITE
-            } else {
-                Color32::BLACK
-            };
+            let foreground = contrast(color);
             ui.painter().rect_filled(ink_area, 0.0, color);
             ui.painter().rect_stroke(
                 ink_area,
@@ -1084,21 +1124,32 @@ impl Editor {
             if let Some(event) = self.pending_event.take() {
                 ctx.input_mut(|input| input.events.push(event));
             }
+            let mut layout = |ui: &Ui, text: &dyn TextBuffer, wrap: f32| {
+                aligned_text(
+                    ui,
+                    text.as_str(),
+                    &object.align,
+                    FontId::proportional(font_size),
+                    foreground,
+                    wrap,
+                )
+            };
             ui.scope_builder(UiBuilder::new().max_rect(edit_box), |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(ink_area));
-                ui.put(
-                    edit_box,
-                    TextEdit::multiline(&mut edit.value)
-                        .id(id)
-                        .font(FontId::proportional(font_size))
-                        .margin(0)
-                        .frame(false)
-                        .desired_width(edit_box.width())
-                        .desired_rows(1)
-                        .text_color(foreground)
-                        .char_limit(20000)
-                        .interactive(!self.waiting),
-                );
+                ui.set_clip_rect(ui.clip_rect().intersect(edit_box.union(ink_area)));
+                let mut widget = TextEdit::multiline(&mut edit.value)
+                    .id(id)
+                    .font(FontId::proportional(font_size))
+                    .margin(0)
+                    .frame(false)
+                    .desired_width(edit_box.width())
+                    .desired_rows(1)
+                    .text_color(foreground)
+                    .char_limit(20000)
+                    .interactive(!self.waiting);
+                if localized {
+                    widget = widget.layouter(&mut layout);
+                }
+                ui.put(edit_box, widget);
             });
             if !self.waiting
                 && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
@@ -1171,6 +1222,77 @@ fn project(rect: Rect, [left, top, right, bottom]: [f32; 4]) -> Rect {
         rect.min + vec2(left * rect.width(), top * rect.height()),
         rect.min + vec2(right * rect.width(), bottom * rect.height()),
     )
+}
+
+fn editing_rect(canvas: Rect, object: &Object, width: f32, localized: bool) -> (Rect, Rect, f32) {
+    let outer = project(canvas, object.bounds).intersect(canvas);
+    let ink = object.ink.map(|ink| project(canvas, ink));
+    let inset = vec2(
+        object.inset[0] * canvas.width(),
+        object.inset[1] * canvas.height(),
+    );
+    let mut origin = ink.map_or(outer.min + inset, |r| r.min - vec2(0.0, 2.0));
+    if localized {
+        origin.x = outer.left() + inset.x;
+    }
+    let size = (object.size * canvas.width() / width).clamp(10.0, 100.0);
+    let start = origin.min(outer.max - vec2(8.0, 8.0)).max(canvas.min);
+    let end = outer
+        .max
+        .max(start + vec2(45.0, size * 1.45))
+        .min(canvas.max);
+    let editor = Rect::from_min_max(start, end);
+    let erase = if localized {
+        ink.unwrap_or(editor)
+    } else {
+        ink.unwrap_or(editor).union(editor)
+    };
+    (editor, erase.expand(1.5).intersect(canvas), size)
+}
+
+fn contrast(color: Color32) -> Color32 {
+    if color.r() as u32 + color.g() as u32 + (color.b() as u32) < 390 {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
+fn aligned_text(
+    ui: &Ui,
+    text: &str,
+    alignment: &[String],
+    font: FontId,
+    color: Color32,
+    width: f32,
+) -> std::sync::Arc<Galley> {
+    let mut job = text::LayoutJob::simple(text.to_owned(), font, color, width);
+    job.justify = !alignment.is_empty() && alignment.iter().all(|value| value == "justify");
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    if !alignment
+        .iter()
+        .any(|align| matches!(align.as_str(), "center" | "right"))
+    {
+        return galley;
+    }
+    let mut moved = (*galley).clone();
+    let mut paragraph = 0;
+    moved.mesh_bounds = Rect::NOTHING;
+    for row in &mut moved.rows {
+        let free = (width - row.size.x).max(0.0);
+        let offset = match alignment.get(paragraph).map(String::as_str) {
+            Some("center") => free * 0.5,
+            Some("right") => free,
+            _ => 0.0,
+        };
+        row.pos.x += offset;
+        moved.mesh_bounds = moved
+            .mesh_bounds
+            .union(row.visuals.mesh_bounds.translate(row.pos.to_vec2()));
+        paragraph += usize::from(row.ends_with_newline);
+    }
+    moved.rect.max.x = width;
+    std::sync::Arc::new(moved)
 }
 
 fn backdrop(image: &ColorImage, canvas: Rect, target: Rect) -> Color32 {

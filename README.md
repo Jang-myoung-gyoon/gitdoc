@@ -115,7 +115,7 @@ Open **텍스트 수정** from an approved version to change its text beside the
 
 Open **슬라이드 편집** from the current approved PPTX version and click text or a table cell on the canvas. Use the keyboard to type, select, copy, paste, undo, and redo. The toolbar includes font, size, bold, italic, underline, color, alignment, lists, indentation, and spacing. It also adds, duplicates, and deletes slides and inserts text boxes, images, shapes, and tables. Shift-click objects to group them. The editor writes changes with [python-pptx](https://github.com/scanny/python-pptx). Text embedded in an image requires editing or replacing the image.
 
-Save with **수정안 저장**, **Cmd+S** on macOS, or **Ctrl+S** on Windows. The change reason is optional. Press **Enter** in the reason field to save. When slide order stays the same, GitDoc renders the changed slides and reuses the verified unchanged pages for the comparison preview.
+Save with **수정안 저장**, **Cmd+S** on macOS, or **Ctrl+S** on Windows. The change reason is optional. Press **Enter** in the reason field to save. Changing text-box alignment redraws only that box on the editing canvas. When the slide order stays the same at save time, GitDoc renders the changed slides and reuses the verified unchanged pages for the comparison preview.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. PDF edits are saved as drafts for review. Password-protected and signed originals cannot be edited.
 

@@ -43,6 +43,14 @@ class PresentationEditorTests(unittest.TestCase):
         self.deck.page(1, "redo")
         self.assertEqual(self.read().slides[0].shapes[0].text, "First 셋째")
 
+    def test_alignment_updates_one_text_box_without_invoking_slide_render(self):
+        with patch.object(self.deck, "render", side_effect=AssertionError("whole slide render")):
+            result = self.deck.page(1, "align", target=self.target, value="right", patch_text=True)
+        self.assertEqual(result["patch"]["id"], self.target["id"])
+        self.assertEqual(result["patch"]["align"], ["right"])
+        self.assertNotIn("image", result)
+        self.assertEqual(self.read().slides[0].shapes[0].text_frame.paragraphs[0].alignment.name, "RIGHT")
+
     def test_duplicate_retains_shapes_and_relationships_and_navigation_commits_other_slide(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "test.png"

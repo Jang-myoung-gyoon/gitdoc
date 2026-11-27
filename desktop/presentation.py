@@ -189,6 +189,15 @@ def format_text(frame, tool, value, selection):
                 format_block(f"{{{SLIDE}}}", paragraph._p, runs, {tool: value})
 
 
+def text_properties(frame, width, height, scale):
+    sx, sy = scale
+    paragraphs = frame.paragraphs
+    return {"text": frame.text, "inset": [frame.margin_left/width*sx, frame.margin_top/height*sy],
+            "size": next((run.font.size.pt for p in paragraphs for run in p.runs if run.font.size is not None), 18),
+            "align": [next((name for name, value in ALIGN.items() if p.alignment == value), "left")
+                      for p in paragraphs]}
+
+
 def objects(shapes, width, height, offset=(0, 0), scale=(1, 1), parent=None):
     items = []
     for shape in shapes:
@@ -202,11 +211,7 @@ def objects(shapes, width, height, offset=(0, 0), scale=(1, 1), parent=None):
                 "group": shape.shape_type == MSO_SHAPE_TYPE.GROUP}
         items.append(item)
         if shape.has_text_frame:
-            frame = shape.text_frame
-            item["text"] = frame.text
-            item["inset"] = [frame.margin_left/width*sx, frame.margin_top/height*sy]
-            item["size"] = next((run.font.size.pt for p in frame.paragraphs for run in p.runs
-                                 if run.font.size is not None), 18)
+            item.update(text_properties(shape.text_frame, width, height, scale))
         if shape.has_table:
             table = shape.table
             row_y = y
@@ -215,10 +220,12 @@ def objects(shapes, width, height, offset=(0, 0), scale=(1, 1), parent=None):
                 for col, col_data in enumerate(table.columns):
                     cell = table.cell(row, col)
                     if not cell.is_spanned:
-                        items.append(dict(item, cell=[row, col], text=cell.text, size=16,
+                        cell_width = sum(table.columns[i].width for i in range(col, col+cell.span_width))
+                        cell_height = sum(table.rows[i].height for i in range(row, row+cell.span_height))
+                        items.append(dict(item, cell=[row, col],
                                           box=[col_x/width, row_y/height,
-                                               (col_x+cell.span_width*col_data.width*sx)/width,
-                                               (row_y+cell.span_height*row_data.height*sy)/height]))
+                                               (col_x+cell_width*sx)/width, (row_y+cell_height*sy)/height],
+                                          **text_properties(cell.text_frame, width, height, scale)))
                     col_x += col_data.width*sx
                 row_y += row_data.height*sy
         if item["group"]:
@@ -410,7 +417,7 @@ class Deck:
                 if publish_preview("pptx", digest, output):
                     reuse_fingerprints(self.base_preview, preview_cache_path("pptx", digest), sources)
 
-    def page(self, number, operation=None, text_edit=None, text_page=None, **fields):
+    def page(self, number, operation=None, text_edit=None, text_page=None, patch_text=False, **fields):
         deck = Presentation(io.BytesIO(self.data))
         index = number - 1
         if not 0 <= index < len(deck.slides):
@@ -437,7 +444,12 @@ class Deck:
                 index, selected = self.apply(deck, index, operation, **fields)
             changed = text_edit is not None or (operation and operation != "page")
             output = save(deck) if changed else None
-            result = self.render(Presentation(io.BytesIO(output)) if output is not None else deck, index, output)
+            if patch_text and operation == "align" and selected is not None:
+                shape = find_shape(deck.slides[index].shapes, selected["id"])
+                result = {"patch": dict(selected, **text_properties(
+                    frame_at(shape, selected), deck.slide_width, deck.slide_height, (1, 1)))}
+            else:
+                result = self.render(Presentation(io.BytesIO(output)) if output is not None else deck, index, output)
             if selected is not None:
                 result["selected"] = selected
             if output is not None and output != self.data:
