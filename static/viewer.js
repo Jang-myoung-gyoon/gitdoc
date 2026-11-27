@@ -93,129 +93,134 @@ function showMarks(sides, result, highlight, selected) {
   });
 }
 
-function lockScrolling(sides, enabled) {
-  let scrollTarget = null;
-  for (const [index, side] of sides.entries()) {
-    const other = sides[1 - index].scroll;
-    side.scroll.addEventListener('scroll', () => {
-      if (!enabled.checked || scrollTarget === side.scroll) return;
-      const ratio = (current, size) => size > 0 ? current / size : 0;
-      const x = ratio(side.scroll.scrollLeft, side.scroll.scrollWidth - side.scroll.clientWidth);
-      const y = ratio(side.scroll.scrollTop, side.scroll.scrollHeight - side.scroll.clientHeight);
-      scrollTarget = other;
-      other.scrollTo(x * (other.scrollWidth - other.clientWidth), y * (other.scrollHeight - other.clientHeight));
-      requestAnimationFrame(() => { scrollTarget = null; });
-    }, { passive: true });
-  }
-}
-
 async function mountViewer(root) {
   const sides = Array.from(root.querySelectorAll('[data-preview]'), node => ({
     url: node.dataset.preview,
-    canvas: node.querySelector('canvas'),
-    scroll: node.querySelector('.viewer-scroll'),
-    sheet: node.querySelector('.viewer-sheet'),
-    image: node.querySelector('img'),
-    placeholder: node.querySelector('.viewer-placeholder'),
     viewLink: node.querySelector('[data-view-link]')
   }));
+  const scroll = root.querySelector('[data-paper-scroll]');
+  const stack = root.querySelector('[data-paper-stack]');
   const page = root.querySelector('[data-page]');
   const previous = root.querySelector('[data-previous]');
   const next = root.querySelector('[data-next]');
-  const totalLabel = root.querySelector('[data-total]');
   const previousChange = root.querySelector('[data-previous-change]');
   const nextChange = root.querySelector('[data-next-change]');
   const changePosition = root.querySelector('[data-change-position]');
+  const changeTotal = root.querySelector('[data-change-total]');
   const list = root.querySelector('[data-change-list]');
   const items = root.querySelector('[data-change-items]');
-  const listStatus = root.querySelector('[data-list-status]');
-  const scanned = new Map();
   const status = root.querySelector('[data-status]');
   const highlight = root.querySelector('[data-highlight]');
   const zoom = root.querySelector('[data-zoom]');
-  const sync = root.querySelector('[data-sync]');
   const notes = root.querySelector('[data-pdf-notes]');
-  let generation = 0;
-  let pageNumber = 1;
-  let pixels = null;
-  let regions = [];
-  let activeRegion = -1;
-  let navigating = false;
-  let loading = false;
-
+  const comparing = sides.length === 2;
   const infos = await Promise.all(sides.map(async side => {
     try {
       const response = await fetch(side.url);
       const info = await response.json();
-      return response.ok ? info : { error: info.error || '문서 미리보기를 열 수 없습니다.' };
+      return response.ok ? info : { error: info.error };
     } catch {
       return { error: '문서 미리보기를 열 수 없습니다.' };
     }
   }));
   const total = Math.max(...infos.map(info => info.pages || 0));
   if (!total) {
-    sides.forEach((side, index) => { side.placeholder.textContent = infos[index].error; });
-    status.textContent = '미리보기를 열 수 없습니다. 원본을 다운로드해 확인할 수 있습니다.';
+    const errors = [...new Set(infos.map(info => info.error).filter(Boolean))];
+    status.textContent = errors.join(' ') || '미리보기를 열 수 없습니다. 원본을 다운로드해 확인할 수 있습니다.';
+    scroll.hidden = true;
     return;
   }
 
-  const comparing = sides.length === 2;
   const comparable = comparing && infos.every(info => info.pages);
-  function updateControls() {
-    const busy = loading || navigating;
-    page.disabled = busy;
-    previous.disabled = busy || pageNumber === 1;
-    next.disabled = busy || pageNumber === total;
-    if (comparing) {
-      previousChange.disabled = busy || !comparable;
-      nextChange.disabled = busy || !comparable;
-    }
-  }
+  const resident = new Map();
+  const scanned = new Map();
+  let pageNumber = 0;
+  let activeRegion = -1;
+  let positioning = false;
+  let navigating = false;
+  let scrollFrame = 0;
+  let noteRequest = 0;
 
-  function updateHighlight() {
-    const region = activeRegion >= 0 ? regions[activeRegion] : null;
-    showMarks(sides, pixels, highlight.checked && regions.length > 0, region);
-  }
-
-  function setSheetWidths() {
-    sides.forEach(({ sheet }, index) => {
-      const points = infos[index].sheet_widths?.[pageNumber - 1];
-      const scale = Number(zoom.value) / 100;
-      if (points > 0) {
-        sheet.style.setProperty('--sheet-width', `${Math.round(points * 4 / 3 * scale)}px`);
-      } else {
-        sheet.style.removeProperty('--sheet-width');
+  const rows = Array.from({ length: total }, (_, index) => {
+    const number = index + 1;
+    const element = document.createElement('div');
+    element.className = 'viewer-grid paper-row' + (comparing ? '' : ' viewer-single');
+    element.dataset.pageNumber = number;
+    const cells = infos.map((info, side) => {
+      const cell = document.createElement('section');
+      cell.className = 'paper-page';
+      const heading = document.createElement('strong');
+      heading.className = 'paper-page-heading';
+      const label = comparing ? (side === 0 ? '기준 버전' : '비교 버전') : '문서';
+      heading.textContent = `${label} ${number}쪽`;
+      cell.append(heading);
+      if (!info.pages || number > info.pages) {
+        const placeholder = document.createElement('p');
+        placeholder.className = 'viewer-placeholder';
+        placeholder.textContent = info.error || '이 버전에는 해당 페이지가 없습니다.';
+        cell.append(placeholder);
+        element.append(cell);
+        return null;
       }
+      const sheet = document.createElement('div');
+      sheet.className = 'viewer-sheet';
+      const [width, height] = info.dimensions?.[index] || [];
+      if (width > 0 && height > 0 && Number.isFinite(width / height)) {
+        sheet.style.setProperty('--paper-ratio', width / height);
+      }
+      cell.append(sheet);
+      element.append(cell);
+      return { sheet, label: heading.textContent, points: info.sheet_widths?.[index] };
     });
-  }
+    return { element, cells };
+  });
+  stack.append(...rows.map(row => row.element));
+  page.max = total;
+  root.querySelector('[data-total]').textContent = `/ ${total}`;
 
-  function focusRegion(index) {
-    activeRegion = index;
-    const current = items.querySelector('[aria-current]');
-    current?.removeAttribute('aria-current');
-    items.querySelector(`[data-location="${pageNumber}:${index}"]`)?.setAttribute('aria-current', 'true');
-    const region = regions[index];
-    changePosition.textContent = `이 페이지의 변경 ${index + 1} / ${regions.length}`;
-    updateHighlight();
-    if (!pixels || !region) return;
-    for (const { image, scroll } of sides) {
-      const doc = image.getBoundingClientRect();
-      const viewport = scroll.getBoundingClientRect();
-      const left = scroll.scrollLeft + doc.left - viewport.left
-        + (region.x + region.width / 2) * doc.width / pixels.width - scroll.clientWidth / 2;
-      const top = scroll.scrollTop + doc.top - viewport.top
-        + (region.y + region.height / 2) * doc.height / pixels.height - scroll.clientHeight / 2;
-      scroll.scrollTo({ left, top });
+  function updateControls() {
+    page.disabled = false;
+    previous.disabled = pageNumber <= 1;
+    next.disabled = pageNumber >= total;
+    if (comparing) {
+      previousChange.disabled = navigating || !comparable;
+      nextChange.disabled = navigating || !comparable;
     }
   }
 
-  async function showNotes(number, current) {
-    if (!notes) return;
+  function drawMarks(number, state) {
+    if (!comparable || !state?.pixels) return;
+    showMarks(state.rendered, state.pixels, highlight.checked && state.regions.length > 0,
+      number === pageNumber ? state.regions[activeRegion] : null);
+  }
+
+  function updateStatus() {
+    const state = resident.get(pageNumber);
+    if (comparing) {
+      highlight.disabled = !comparable;
+      changePosition.textContent = activeRegion >= 0 && state?.regions?.length
+        ? `이 페이지의 변경 ${activeRegion + 1} / ${state.regions.length}`
+        : state?.regions?.length ? `이 페이지에 변경 ${state.regions.length}곳` : '';
+    }
+    if (navigating) return;
+    if (!state?.done) status.textContent = '페이지를 불러오는 중입니다.';
+    else if (state.error) status.textContent = '페이지 이미지를 열 수 없습니다.';
+    else if (!comparing) status.textContent = '';
+    else if (!comparable) status.textContent = '양쪽에서 문서를 열 수 있을 때 시각적 차이를 표시합니다.';
+    else if (state.rendered.length < 2) status.textContent = '한 버전에만 있는 페이지입니다.';
+    else if (!state.pixels) status.textContent = '페이지 크기가 달라 변경 위치를 겹쳐 표시할 수 없습니다.';
+    else status.textContent = state.regions.length ? '분홍색은 기준본, 초록색은 수정본의 달라진 영역입니다.'
+      : '이 페이지에서 눈에 띄는 시각적 차이가 없습니다.';
+  }
+
+  async function showNotes(number) {
+    const current = ++noteRequest;
+    notes.hidden = true;
     try {
       const response = await fetch(`${notes.dataset.pdfNotes}/${number}`);
-      if (!response.ok || current !== generation) return;
+      if (!response.ok || current !== noteRequest) return;
       const { notes: entries } = await response.json();
-      if (current !== generation) return;
+      if (current !== noteRequest) return;
       notes.querySelector('ul').replaceChildren(...entries.map(entry => {
         const item = document.createElement('li');
         item.textContent = entry;
@@ -223,202 +228,284 @@ async function mountViewer(root) {
       }));
       notes.hidden = !entries.length;
     } catch {
-      // A missing annotation list leaves the page preview available.
+      // Keep the page available if its annotations cannot be read.
     }
   }
 
-  async function render(number) {
-    if (!Number.isInteger(number)) number = pageNumber;
-    pageNumber = Math.max(1, Math.min(total, number));
-    const current = ++generation;
-    if (notes) notes.hidden = true;
-    page.value = pageNumber;
-    root.dispatchEvent(new CustomEvent('gitdoc:page', { detail: { number: pageNumber, total } }));
-    setSheetWidths();
-    loading = true;
-    updateControls();
-    pixels = null;
-    regions = [];
+  function activate(number, force = false) {
+    if (number === pageNumber && !force) return;
+    const old = pageNumber;
+    pageNumber = number;
     activeRegion = -1;
-    if (comparing) {
-      highlight.disabled = true;
-      updateHighlight();
-      changePosition.textContent = '';
-      items.querySelector('[aria-current]')?.removeAttribute('aria-current');
-    }
-    status.textContent = navigating ? `${pageNumber}쪽에서 변경을 찾는 중입니다.` : '페이지를 불러오는 중입니다.';
-    const loaded = await Promise.all(sides.map(async (side, index) => {
-      side.sheet.hidden = true;
-      side.placeholder.hidden = false;
-      const info = infos[index];
-      if (side.viewLink) {
-        const url = new URL(side.viewLink.href);
-        if (info.pages) url.searchParams.set('page', String(Math.min(info.pages, pageNumber)));
-        side.viewLink.href = url;
-      }
-      if (!info.pages || pageNumber > info.pages) {
-        side.placeholder.textContent = info.error || '이 버전에는 해당 페이지가 없습니다.';
-        return false;
-      }
-      side.placeholder.textContent = '페이지 준비 중';
-      const label = comparing ? (index === 0 ? '기준 버전' : '비교 버전') : '문서';
-      side.image.alt = `${label} ${pageNumber}쪽`;
-      side.image.src = `${side.url}/${pageNumber}.png`;
-      try {
-        await side.image.decode();
-      } catch {
-        if (current === generation) side.placeholder.textContent = '페이지 이미지를 열 수 없습니다.';
-        return false;
-      }
-      if (current !== generation) return false;
-      side.placeholder.hidden = true;
-      side.sheet.hidden = false;
-      side.scroll.scrollTo(0, 0);
-      return true;
-    }));
-    if (current !== generation) return;
-    loading = false;
-    if (!comparing) {
-      status.textContent = loaded[0] ? '' : '원본을 다운로드해 확인할 수 있습니다.';
-      updateControls();
-      if (loaded[0]) showNotes(pageNumber, current);
-      return;
-    }
-    if (!loaded.every(Boolean)) {
-      if (comparable && infos.some(info => pageNumber > info.pages) && loaded.some(Boolean)) {
-        regions = [null];
-        status.textContent = '한 버전에만 있는 페이지입니다.';
-      } else {
-        status.textContent = '양쪽에 페이지가 있을 때 시각적 차이를 표시합니다.';
-      }
-    } else {
-      pixels = comparePixels(sides[0].image, sides[1].image);
-      if (pixels) {
-        regions = changeRegions(pixels);
-        highlight.disabled = !regions.length;
-        status.textContent = regions.length ? '분홍색은 기준본, 초록색은 수정본의 달라진 영역입니다.'
-          : '이 페이지에서 눈에 띄는 시각적 차이가 없습니다.';
-      } else {
-        regions = [null];
-        status.textContent = '페이지 크기가 달라 변경 위치를 겹쳐 표시할 수 없습니다.';
-      }
-    }
-    if (comparable && loaded.every((ok, index) => ok || pageNumber > infos[index].pages)) {
-      scanned.set(pageNumber, Promise.resolve(regions));
-    }
-    if (regions.length) changePosition.textContent = `이 페이지에 변경 ${regions.length}곳`;
-    updateHighlight();
+    drawMarks(old, resident.get(old));
+    page.value = number;
+    root.dispatchEvent(new CustomEvent('gitdoc:page', { detail: { number, total } }));
+    sides.forEach(({ viewLink }, index) => {
+      if (!viewLink || !infos[index].pages) return;
+      const url = new URL(viewLink.href);
+      url.searchParams.set('page', String(Math.min(infos[index].pages, number)));
+      viewLink.href = url;
+    });
+    if (comparing) items.querySelector('[aria-current]')?.removeAttribute('aria-current');
+    if (notes) showNotes(number);
+    showRow(number);
     updateControls();
+    updateStatus();
   }
 
-  async function seek(direction) {
-    if (navigating || loading || !comparable) return;
-    const withinPage = activeRegion < 0
-      ? (direction > 0 ? 0 : regions.length - 1)
-      : activeRegion + direction;
-    if (withinPage >= 0 && withinPage < regions.length) {
-      focusRegion(withinPage);
-      return;
-    }
-    const startPage = pageNumber;
-    const startRegion = activeRegion;
-    navigating = true;
-    updateControls();
+  async function imageFor(index, number, signal) {
+    // A cancellable fetch releases queued work when the reader scrolls past it.
+    const response = await fetch(`${sides[index].url}/${number}.png`, { signal });
+    if (!response.ok) throw new Error('페이지 이미지를 열 수 없습니다.');
+    const url = URL.createObjectURL(await response.blob());
+    const image = new Image();
     try {
-      for (let number = startPage + direction; number >= 1 && number <= total; number += direction) {
-        await render(number);
-        if (regions.length) {
-          focusRegion(direction > 0 ? 0 : regions.length - 1);
-          return;
-        }
-      }
-      if (pageNumber !== startPage) await render(startPage);
-      if (startRegion >= 0) focusRegion(startRegion);
-      status.textContent = direction > 0 ? '이후에 발견된 변경이 없습니다.' : '이전에 발견된 변경이 없습니다.';
+      image.src = url;
+      await image.decode();
+      return image;
     } finally {
-      navigating = false;
-      updateControls();
+      URL.revokeObjectURL(url);
     }
   }
 
-  async function scan(number) {
+  function showRow(number) {
+    if (resident.has(number)) return resident.get(number).promise;
+    const state = { done: false, controller: new AbortController(), rendered: [], regions: [] };
+    resident.set(number, state);
+    const cells = rows[number - 1].cells;
+    state.promise = Promise.allSettled(cells.map((cell, side) => cell && imageFor(side, number, state.controller.signal)))
+      .then(results => {
+        if (resident.get(number) !== state) return;
+        state.done = true;
+        state.error = results.some(result => result.status === 'rejected');
+        results.forEach((result, side) => {
+          const cell = cells[side];
+          if (!cell) return;
+          if (result.status === 'rejected') {
+            const message = document.createElement('p');
+            message.className = 'viewer-placeholder';
+            message.textContent = '페이지 이미지를 열 수 없습니다.';
+            cell.sheet.append(message);
+            return;
+          }
+          const image = result.value;
+          image.alt = cell.label;
+          cell.sheet.append(image);
+          const canvas = document.createElement('canvas');
+          canvas.className = 'viewer-overlay';
+          canvas.setAttribute('aria-hidden', 'true');
+          canvas.hidden = true;
+          if (comparing) cell.sheet.append(canvas);
+          state.rendered.push({ image, canvas, side });
+        });
+        if (comparable && !state.error) {
+          state.pixels = state.rendered.length === 2 ? comparePixels(...state.rendered.map(item => item.image)) : null;
+          state.regions = state.pixels ? changeRegions(state.pixels) : [null];
+          if (!scanned.has(number)) scanned.set(number, Promise.resolve(state.regions));
+          drawMarks(number, state);
+        }
+        if (number === pageNumber) updateStatus();
+      });
+    return state.promise;
+  }
+
+  function hideRow(number) {
+    const state = resident.get(number);
+    if (!state) return;
+    state.controller.abort();
+    resident.delete(number);
+    rows[number - 1].cells.forEach(cell => cell?.sheet.replaceChildren());
+  }
+
+  const observer = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const number = Number(entry.target.dataset.pageNumber);
+      if (entry.isIntersecting) showRow(number);
+      else if (number !== pageNumber) hideRow(number);
+    }
+  }, { root: scroll, rootMargin: '65% 0px' });
+  rows.forEach(row => observer.observe(row.element));
+
+  function topOf(element) {
+    return scroll.scrollTop + element.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop;
+  }
+
+  function visiblePage() {
+    const bounds = scroll.getBoundingClientRect();
+    if (scroll.scrollTop > 0 && scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 1) return total;
+    const focus = bounds.top + Math.min(48, bounds.height / 4);
+    let low = 0;
+    let high = total;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (rows[middle].element.getBoundingClientRect().top <= focus) low = middle + 1;
+      else high = middle;
+    }
+    return Math.max(1, low);
+  }
+
+  // Programmatic jumps clamp at the bottom and must keep the requested page active.
+  let lastOffset = 0;
+  function setOffset(top, left = scroll.scrollLeft) {
+    positioning = true;
+    scroll.scrollTo({ top, left });
+    lastOffset = scroll.scrollTop;
+    positioning = false;
+  }
+
+  function jump(number) {
+    const target = Number.isInteger(number) ? Math.max(1, Math.min(total, number)) : pageNumber;
+    activate(target, true);
+    setOffset(topOf(rows[target - 1].element) - 8);
+  }
+
+  scroll.addEventListener('scroll', () => {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      if (positioning || Math.abs(scroll.scrollTop - lastOffset) < 0.5) return;
+      const old = pageNumber;
+      lastOffset = scroll.scrollTop;
+      activate(visiblePage());
+      if (old !== pageNumber) {
+        const bounds = scroll.getBoundingClientRect();
+        const row = rows[old - 1].element.getBoundingClientRect();
+        if (row.bottom < bounds.top - bounds.height || row.top > bounds.bottom + bounds.height) hideRow(old);
+      }
+    });
+  }, { passive: true });
+
+  async function focusRegion(number, index) {
+    if (number !== pageNumber) jump(number);
+    await showRow(number);
+    if (number !== pageNumber) return;
+    const state = resident.get(number);
+    if (!state?.regions?.length || index >= state.regions.length) return;
+    activeRegion = index;
+    items.querySelector('[aria-current]')?.removeAttribute('aria-current');
+    items.querySelector(`[data-location="${number}:${index}"]`)?.setAttribute('aria-current', 'true');
+    drawMarks(number, state);
+    updateStatus();
+    const region = state.regions[index];
+    if (region && state.pixels) {
+      const image = state.rendered[0].image;
+      const bounds = image.getBoundingClientRect();
+      setOffset(topOf(image) + (region.y + region.height / 2) * bounds.height / state.pixels.height - scroll.clientHeight / 2);
+    }
+  }
+
+  function scan(number) {
     if (!scanned.has(number)) {
-      const result = (async () => {
+      scanned.set(number, (async () => {
         if (infos.some(info => number > info.pages)) return [null];
-        const images = await Promise.all(sides.map(async side => {
-          const image = new Image();
-          image.src = `${side.url}/${number}.png`;
-          await image.decode();
-          return image;
-        }));
+        const state = resident.get(number);
+        if (state?.done && !state.error) return state.regions;
+        const images = await Promise.all(sides.map((_, index) => imageFor(index, number)));
         const result = comparePixels(...images);
         return result ? changeRegions(result) : [null];
-      })();
-      scanned.set(number, result);
+      })());
     }
     return scanned.get(number);
   }
 
-  let listedThrough = 0;
-  let listing = false;
-  let failures = 0;
-  list?.addEventListener('toggle', async () => {
-    if (!list.open || listing || listedThrough === total) return;
-    listing = true;
-    while (list.open && listedThrough < total) {
-      const number = ++listedThrough;
-      listStatus.textContent = `${number} / ${total}쪽 확인 중`;
+  async function seek(direction) {
+    if (navigating || !comparable) return;
+    navigating = true;
+    updateControls();
+    const startPage = pageNumber;
+    const startRegion = activeRegion;
+    status.textContent = '변경 위치를 찾는 중입니다.';
+    try {
+      for (let number = startPage; number >= 1 && number <= total && pageNumber === startPage; number += direction) {
+        const changes = await scan(number).catch(() => []);
+        if (pageNumber !== startPage) break;
+        const index = number === startPage && startRegion >= 0
+          ? startRegion + direction : direction > 0 ? 0 : changes.length - 1;
+        if (index >= 0 && index < changes.length) {
+          await focusRegion(number, index);
+          return;
+        }
+      }
+      if (pageNumber === startPage) status.textContent = '더 이동할 변경이 없습니다.';
+    } finally {
+      navigating = false;
+      updateControls();
+      if (status.textContent === '변경 위치를 찾는 중입니다.') updateStatus();
+    }
+  }
+
+  const locations = [];
+  let listed = 0;
+  function updateList() {
+    if (!list.open) return;
+    const group = locations.slice(listed, listed + 100);
+    listed += group.length;
+    for (const { number, index, region } of group) {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary';
+      button.dataset.location = `${number}:${index}`;
+      button.textContent = region ? `${number}쪽 · 변경 ${index + 1}` : `${number}쪽 · 페이지 변경`;
+      if (number === pageNumber && index === activeRegion) button.setAttribute('aria-current', 'true');
+      button.addEventListener('click', () => focusRegion(number, index));
+      item.append(button);
+      items.append(item);
+    }
+    list.querySelector('[data-more-changes]').hidden = listed >= locations.length;
+  }
+
+  async function countChanges() {
+    let failures = 0;
+    for (let number = 1; number <= total; number += 1) {
+      changeTotal.textContent = `전체 변경 확인 중 · ${number} / ${total}쪽`;
       try {
         const changes = await scan(number);
-        changes.forEach((region, index) => {
-          const item = document.createElement('li');
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'secondary';
-          button.dataset.location = `${number}:${index}`;
-          button.textContent = region ? `${number}쪽 · 변경 ${index + 1}` : `${number}쪽 · 페이지 변경`;
-          if (number === pageNumber && index === activeRegion) button.setAttribute('aria-current', 'true');
-          button.addEventListener('click', async () => {
-            if (navigating || loading) return;
-            if (number !== pageNumber) await render(number);
-            if (index < regions.length) focusRegion(index);
-          });
-          item.append(button);
-          items.append(item);
-        });
+        changes.forEach((region, index) => locations.push({ number, index, region }));
       } catch {
         failures += 1;
       }
     }
-    if (listedThrough === total) {
-      listStatus.textContent = `변경 ${items.childElementCount}곳${failures ? ` · 읽을 수 없는 페이지 ${failures}쪽` : ''}`;
-    }
-    listing = false;
-  });
+    changeTotal.textContent = `전체 변경 ${locations.length}건${failures ? ` · 확인 실패 ${failures}쪽` : ''}`;
+    updateList();
+  }
 
-  page.max = total;
-  totalLabel.textContent = `/ ${total}`;
-  previous.addEventListener('click', () => render(pageNumber - 1));
-  next.addEventListener('click', () => render(pageNumber + 1));
-  page.addEventListener('change', () => render(page.valueAsNumber));
+  function setZoom() {
+    const scale = Number(zoom.value) / 100;
+    stack.style.setProperty('--paper-zoom', `${zoom.value}%`);
+    stack.style.setProperty('--paper-factor', scale);
+    rows.forEach(({ cells }) => cells.forEach(cell => {
+      if (cell?.points > 0) cell.sheet.style.setProperty('--sheet-width', `${Math.round(cell.points * 4 / 3 * scale)}px`);
+    }));
+  }
+
+  previous.addEventListener('click', () => jump(pageNumber - 1));
+  next.addEventListener('click', () => jump(pageNumber + 1));
+  page.addEventListener('change', () => jump(page.valueAsNumber));
   previousChange?.addEventListener('click', () => seek(-1));
   nextChange?.addEventListener('click', () => seek(1));
-  highlight?.addEventListener('change', updateHighlight);
+  highlight?.addEventListener('change', () => resident.forEach((state, number) => drawMarks(number, state)));
   zoom.addEventListener('change', () => {
-    root.dataset.magnification = zoom.value;
-    setSheetWidths();
-    if (activeRegion >= 0) focusRegion(activeRegion);
+    const selected = activeRegion;
+    setZoom();
+    jump(pageNumber);
+    if (selected >= 0) focusRegion(pageNumber, selected);
   });
-  if (comparing) {
-    lockScrolling(sides, sync);
-    list.hidden = !comparable;
+  if (comparable) {
+    list.hidden = false;
+    list.addEventListener('toggle', () => { if (listed === 0) updateList(); });
+    list.querySelector('[data-more-changes]').addEventListener('click', updateList);
   }
   const params = new URLSearchParams(location.search);
-  await render(Number(root.closest('[data-document-editor]')?.dataset.page || params.get('page') || 1));
+  setZoom();
+  const initialPage = Number(root.closest('[data-document-editor]')?.dataset.page || params.get('page') || 1);
+  jump(Number.isInteger(initialPage) ? initialPage : 1);
   const initialChange = Number(params.get('change'));
-  if (Number.isInteger(initialChange) && initialChange > 0 && initialChange <= regions.length) {
-    focusRegion(initialChange - 1);
+  if (comparable && Number.isInteger(initialChange) && initialChange > 0) {
+    await focusRegion(pageNumber, initialChange - 1);
   }
+  if (comparable) countChanges();
+  else if (changeTotal) changeTotal.textContent = '전체 변경을 확인할 수 없습니다.';
 }
 
 document.querySelectorAll('[data-visual-viewer]').forEach(root => {

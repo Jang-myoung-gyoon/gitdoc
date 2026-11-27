@@ -171,20 +171,18 @@ fn render(
     };
     let left_count = params["counts"][0].as_u64().unwrap_or(0) as usize;
     let right_count = params["counts"][1].as_u64().unwrap_or(0) as usize;
-    let mut found = Vec::new();
-    if left != right && left_count > 0 && right_count > 0 {
-        for number in 1..=left_count.max(right_count) {
-            let before = renderer.image(Some(left), number);
-            let after = renderer.image(Some(right), number);
-            if (number > left_count || before.is_some())
-                && (number > right_count || after.is_some())
-            {
-                found.extend(
-                    (0..pages::regions(before.as_ref(), after.as_ref()).len())
-                        .map(|index| (number, index)),
-                );
-            }
-        }
+    let number = params["number"].as_u64().unwrap_or(0) as usize;
+    if left == right {
+        return Ok(json!(0));
     }
-    Ok(json!(found))
+    let before = (number <= left_count)
+        .then(|| renderer.image(Some(left), number))
+        .flatten();
+    let after = (number <= right_count)
+        .then(|| renderer.image(Some(right), number))
+        .flatten();
+    if (number <= left_count && before.is_none()) || (number <= right_count && after.is_none()) {
+        return Ok(Value::Null);
+    }
+    Ok(json!(pages::regions(before.as_ref(), after.as_ref()).len()))
 }

@@ -98,7 +98,9 @@ struct Pane {
     data: Value,
     ratios: Vec<Vec<f32>>,
     previews: HashMap<usize, Option<PagePreview>>,
-    index: Option<Vec<(usize, usize)>>,
+    index: Vec<(usize, usize)>,
+    indexed_through: usize,
+    index_failures: usize,
     indexing: bool,
     seek: Option<((usize, Option<usize>), bool)>,
     page: usize,
@@ -183,7 +185,9 @@ impl GitDoc {
     }
     fn request(&mut self, op: &'static str, scope: u64, params: Value) -> bool {
         if self.bridge.send.send(Message { op, scope, params }).is_ok() {
-            self.busy += 1;
+            if op != "changes" {
+                self.busy += 1;
+            }
             true
         } else {
             self.notify("문서 처리 엔진이 연결되지 않았습니다.", true);
@@ -280,6 +284,7 @@ impl GitDoc {
             self.pane.selected_region = highlight.map(|region| (page, region));
             self.pane.page_jump = Some(page);
             self.pane.follow_region = false;
+            self.pane.seek = None;
         }
     }
 
@@ -373,7 +378,9 @@ impl GitDoc {
     }
 
     fn receive(&mut self, ctx: &Context, frame: &eframe::Frame, reply: Reply) {
-        self.busy = self.busy.saturating_sub(1);
+        if reply.op != "changes" {
+            self.busy = self.busy.saturating_sub(1);
+        }
         let wanted = match reply.op {
             "page" | "detail" | "view" | "changes" | "branch_compare" => reply.scope == self.epoch,
             _ => true,
@@ -399,7 +406,9 @@ impl GitDoc {
                 if reply.op == "changes" {
                     self.pane.indexing = false;
                     self.pane.seek = None;
-                    self.list_changes = false;
+                    let pages = count(&self.pane.data["pages"]);
+                    self.pane.index_failures += pages.saturating_sub(self.pane.indexed_through);
+                    self.pane.indexed_through = pages;
                 }
                 if reply.op == "edit"
                     && let Some(form) = self.form.as_mut().filter(|form| form.submitting)
@@ -518,7 +527,15 @@ impl GitDoc {
             }
             "changes" => {
                 self.pane.indexing = false;
-                self.pane.index = Some(serde_json::from_value(result).unwrap_or_default());
+                let Some(number) = reply.page else { return };
+                self.pane.indexed_through = number;
+                if result.is_null() {
+                    self.pane.index_failures += 1;
+                } else {
+                    self.pane
+                        .index
+                        .extend((0..count(&result)).map(|delta| (number, delta)));
+                }
                 if let Some((last, forward)) = self.pane.seek.take() {
                     self.seek_pages(last, forward);
                 }
@@ -926,33 +943,44 @@ impl GitDoc {
             {
                 self.go_to_page(page, selected_region);
             }
-            if comparison {
-                ui.separator();
+        });
+        if comparison {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button("이전 변경").clicked() {
                     self.seek_pages(current, false);
                 }
                 if ui.button("다음 변경").clicked() {
                     self.seek_pages(current, true);
                 }
-                if ui.checkbox(&mut self.list_changes, "변경 목록").changed()
-                    && self.list_changes
-                    && self.pane.index.is_none()
-                {
-                    self.request_index();
+                if let Some(delta) = selected_region {
+                    ui.label(format!("이 페이지의 변경 {}", delta + 1));
                 }
-            }
-        });
-        if self.list_changes && comparison {
-            if let Some(index) = &self.pane.index {
+                if self.pane.indexed_through < pages {
+                    ui.label(format!(
+                        "전체 변경 확인 중 · {} / {pages}쪽",
+                        self.pane.indexed_through
+                    ));
+                } else if self.pane.index_failures == 0 {
+                    ui.label(format!("전체 변경 {}건", self.pane.index.len()));
+                } else {
+                    ui.label(format!(
+                        "전체 변경 {}건 · 확인 실패 {}쪽",
+                        self.pane.index.len(),
+                        self.pane.index_failures
+                    ));
+                }
+                ui.checkbox(&mut self.list_changes, "변경 목록");
+            });
+            if self.list_changes {
                 let mut selected = None;
                 ScrollArea::vertical()
                     .id_salt("change-list")
                     .max_height(116.0)
                     .show(ui, |ui| {
-                        if index.is_empty() {
-                            ui.weak("변경이 없습니다.");
+                        if self.pane.index.is_empty() && self.pane.indexed_through == pages {
+                            ui.weak("표시할 변경이 없습니다.");
                         }
-                        for &(p, delta) in index {
+                        for &(p, delta) in &self.pane.index {
                             if ui
                                 .selectable_label(
                                     current == (p, Some(delta)),
@@ -965,13 +993,15 @@ impl GitDoc {
                         }
                     });
                 if let Some((p, delta)) = selected {
+                    self.pane.seek = None;
                     self.go_to_page(p, Some(delta));
                 }
-            } else {
-                ui.weak("변경 위치를 찾는 중입니다.");
             }
         }
         self.continuous_pages(ui, pages);
+        if comparison && self.pane.indexed_through < pages {
+            self.request_index();
+        }
     }
 
     fn continuous_pages(&mut self, ui: &mut Ui, pages: usize) {
@@ -1052,6 +1082,7 @@ impl GitDoc {
                 self.pane.page = page;
                 self.pane.selected_region = None;
                 self.pane.follow_region = false;
+                self.pane.seek = None;
                 ui.ctx().request_repaint();
             }
         }
@@ -1161,37 +1192,44 @@ impl GitDoc {
         if self.pane.indexing {
             return;
         }
-        self.pane.indexing = true;
-        self.request(
+        let number = self.pane.indexed_through + 1;
+        self.pane.indexing = self.request(
             "changes",
             self.epoch,
-            json!({"counts":self.pane.data["counts"], "paths":self.pane.data["paths"],
+            json!({"number":number, "counts":self.pane.data["counts"], "paths":self.pane.data["paths"],
                 "pdfium_directory":self.pane.data["pdfium_directory"]}),
         );
     }
+
     fn seek_pages(&mut self, last: (usize, Option<usize>), forward: bool) {
-        if let Some(index) = &self.pane.index {
-            let choose = if forward {
-                let floor = last.1.map(|delta| (last.0, delta));
-                index
-                    .iter()
-                    .find(|p| floor.map_or(p.0 >= last.0, |from| **p > from))
-            } else {
-                index
-                    .iter()
-                    .rev()
-                    .find(|p| last.1.map_or(p.0 <= last.0, |delta| **p < (last.0, delta)))
-            };
-            if let Some(&(page, delta)) = choose {
-                self.go_to_page(page, Some(delta));
-            } else {
-                self.notify("더 이동할 변경이 없습니다.", false);
-            }
-        } else {
+        let indexed = self.pane.indexed_through;
+        let complete = indexed >= count(&self.pane.data["pages"]);
+        if !forward && indexed < last.0 && !complete {
             self.pane.seek = Some((last, forward));
-            self.request_index();
+            return;
         }
+        let index = &self.pane.index;
+        let chosen = if forward {
+            index
+                .iter()
+                .find(|p| last.1.map_or(p.0 >= last.0, |delta| **p > (last.0, delta)))
+        } else {
+            index
+                .iter()
+                .rev()
+                .find(|p| last.1.map_or(p.0 <= last.0, |delta| **p < (last.0, delta)))
+        };
+        if let Some(&(page, delta)) = chosen {
+            self.go_to_page(page, Some(delta));
+        } else if forward && !complete {
+            self.pane.seek = Some((last, forward));
+            return;
+        } else {
+            self.notify("더 이동할 변경이 없습니다.", false);
+        }
+        self.pane.seek = None;
     }
+
     fn sheets(&mut self, ui: &mut Ui) {
         let is_table = self.pane.data["delimited"] == true;
         if !is_table {

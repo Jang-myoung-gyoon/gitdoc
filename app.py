@@ -11,7 +11,7 @@ from browser_viewer import HOST, STORE_ID, browser_port
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from editing import MODES, read_pdf_notes
 from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
-from preview import PreviewError, page_sizes, preview_path, preview_png
+from preview import PreviewError, page_dimensions, preview_path, preview_png
 from workbook import read_workbook
 from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
 from workflow import MissingEntity, merge_revision, restore_revision, review_revision, save_document_edit, save_proposal
@@ -42,7 +42,7 @@ def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; style-src 'self'; form-action 'self'; "
+        "default-src 'self'; img-src 'self' blob:; style-src 'self'; form-action 'self'; "
         "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
     )
     return response
@@ -378,8 +378,8 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
 
     try:
         path = preview_path(item["extension"], item["sha256"], original_content)
-        sizes = page_sizes(path)
-        count = len(sizes)
+        dimensions = page_dimensions(path)
+        count = len(dimensions)
         if export_pdf:
             filename = f"{Path(item['filename']).stem}.pdf"
             return send_file(path, mimetype="application/pdf", download_name=filename)
@@ -393,7 +393,8 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
         return jsonify(error=str(error)), 422
     return jsonify(
         pages=count,
-        sheet_widths=sizes if item["extension"] in WORKBOOK_EXTENSIONS else [],
+        dimensions=dimensions,
+        sheet_widths=[width for width, _ in dimensions] if item["extension"] in WORKBOOK_EXTENSIONS else [],
         pdf=url_for("preview_pdf", document_id=document_id, version_id=version_id),
     )
 
