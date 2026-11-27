@@ -2,6 +2,8 @@
 
 English · [한국어](README.ko.md)
 
+<img src="assets/gitdoc-mascot.png" width="640" alt="Git and documents share a long orange body and four blue sneakers">
+
 GitDoc opens Hangul, Word, PDF, PowerPoint, and Excel files inside a desktop window. Compare versions side by side, make supported edits, and review proposals or merge branches in a local version history. [Project brief and mockups (Korean)](기획서.md)
 
 ## GitDoc Hub

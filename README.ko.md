@@ -2,6 +2,8 @@
 
 [English](README.md) · 한국어
 
+<img src="assets/gitdoc-mascot.png" width="640" alt="git과 documents 얼굴이 주황색 몸통과 파란 운동화 네 짝을 공유하는 그림">
+
 한글, Word, PDF, PowerPoint, Excel을 GitDoc에서 열고, 지원하는 항목을 직접 편집하고, 버전을 관리합니다. 두 문서를 나란히 열어 변경 위치를 확인하고, 수정안을 검토하거나 별도 브랜치에서 병합할 수 있습니다. [기획서와 화면 시안](기획서.md)
 
 ## GitDoc Hub
