@@ -1,0 +1,120 @@
+name: Release packages
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/**"
+      - "desktop/**"
+      - "templates/**"
+      - "static/**"
+      - "*.py"
+      - "requirements*.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/native
+          key: aarch64-apple-darwin
+      - name: Build the disk image
+        run: sh packaging/macos.sh
+      - name: Smoke test the disk image
+        run: |
+          set -eu
+          image=$(ls dist/GitDoc-*-macos-arm64.dmg)
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$RUNNER_TEMP/gitdoc-image" "$image"
+          test -L "$RUNNER_TEMP/gitdoc-image/Applications"
+          mkdir "$RUNNER_TEMP/Applications"
+          cp -R "$RUNNER_TEMP/gitdoc-image/GitDoc.app" "$RUNNER_TEMP/Applications/"
+          hdiutil detach -quiet "$RUNNER_TEMP/gitdoc-image"
+          bundle="$RUNNER_TEMP/Applications/GitDoc.app"
+          codesign --verify --deep --strict "$bundle"
+          for name in GitDoc gitdoc-desktop gitdoc-pdf gitdoc-ocr; do
+            test "$(lipo -archs "$bundle/Contents/MacOS/$name")" = arm64
+          done
+          "$bundle/Contents/Resources/python/bin/python3" packaging/smoke.py "$bundle/Contents/Resources/app" "$bundle"
+          codesign --verify --deep --strict "$bundle"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gitdoc-macos-arm64
+          path: dist/GitDoc-*-macos-arm64.dmg
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/native
+          key: x86_64-pc-windows-msvc
+      - name: Install Inno Setup
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+      - name: Build the installer
+        run: ./packaging/windows.ps1
+      - name: Smoke test the installer
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = (Get-Item dist\GitDoc-*-windows-x64-setup.exe).FullName
+          $install = "$env:RUNNER_TEMP\GitDoc"
+          $run = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$install`"" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "setup exited with $($run.ExitCode)" }
+          $key = "HKCU:\Software\Classes\gitdoc"
+          $command = (Get-Item "$key\shell\open\command").GetValue("")
+          if ($command -ne "`"$install\gitdoc-desktop.exe`" `"%1`"") { throw "gitdoc:// opens $command" }
+          & "$install\python\python.exe" packaging\smoke.py "$install\app" $install
+          if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
+          $run = Start-Process "$install\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "uninstall exited with $($run.ExitCode)" }
+          if (Test-Path $key) { throw "the gitdoc:// handler survived the uninstall" }
+          if (Test-Path "$install\gitdoc-desktop.exe") { throw "the uninstall left the app behind" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gitdoc-windows-x64
+          path: dist/GitDoc-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that the tag matches the app version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' desktop/native/Cargo.toml | head -n 1)
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME does not match version $version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "GitDoc $version" \
+            "dist/GitDoc-$version-macos-arm64.dmg" "dist/GitDoc-$version-windows-x64-setup.exe"

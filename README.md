@@ -14,6 +14,28 @@ The [GitDoc Hub](hub/README.md) is a separate hosted workspace for shared text d
 
 The macOS and Windows desktop window uses Rust and [eframe](https://github.com/emilk/egui/tree/main/crates/eframe). It starts the Python document engine as a child process and talks to it over standard input and output. The desktop app and MCP share the engine and SQLite repository.
 
+### Download
+
+Experimental packages are attached to each release on the [Releases page](../../releases). They include the Python engine and PDFium, so no Python or Rust installation is needed.
+
+| System | File |
+| --- | --- |
+| macOS 13 or later, Apple Silicon | `GitDoc-<version>-macos-arm64.dmg` |
+| Windows 10 or later, x64 | `GitDoc-<version>-windows-x64-setup.exe` |
+
+Intel Macs are not packaged. The packages are unsigned, so the system asks before the first launch.
+
+- **macOS**: open the disk image and drag GitDoc to Applications. Open it once, then choose **System Settings ▸ Privacy & Security ▸ Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/GitDoc.app`.
+- **Windows**: run the setup file. On the SmartScreen prompt choose **More info ▸ Run anyway**. It installs for the current user without administrator rights and registers `gitdoc://` links. Uninstalling removes the app and the link handler.
+
+Packaged apps keep the repository, preview cache, and logs in `~/Library/Application Support/GitDoc` on macOS and `%APPDATA%\GitDoc` on Windows. Uninstalling or replacing the app leaves this folder in place. `DOCVERS_DB` still selects a different repository file.
+
+LibreOffice, Poppler, rhwp, and Tesseract are not bundled. Install the ones you need as described in [Version history and comparison](#version-history-and-comparison). A packaged app also looks for rhwp at `tools/rhwp/rhwp` (`rhwp.exe` on Windows) inside its data folder.
+
+The bundled Python runs the CLI and MCP server against the same repository. On macOS use `/Applications/GitDoc.app/Contents/Resources/python/bin/python3` with `/Applications/GitDoc.app/Contents/Resources/app/docvers.py` or `mcp_server.py`. On Windows use `python\python.exe` and `app\docvers.py` or `app\mcp_server.py` in `%LOCALAPPDATA%\Programs\GitDoc`.
+
+### Run from source
+
 Install Python 3.12 and a current stable Rust toolchain with Cargo. On macOS 12 or later, install Xcode Command Line Tools. On Windows, use the MSVC Rust toolchain and the Visual Studio Build Tools C++ desktop development workload.
 
 **macOS**
@@ -35,6 +57,16 @@ py -3.12 -m venv .venv
 `docvers.py open` builds the executable with Cargo on first launch. After updating the source, rebuild with `cargo build --locked --manifest-path desktop/native/Cargo.toml`. On macOS, run `./desktop/build.sh` to build `.build/GitDoc.app` for Finder.
 
 The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a different file and give the desktop app, CLI, and MCP the same value.
+
+### Cutting a release
+
+The [release workflow](.github/workflows/release.yml) builds both packages with `packaging/macos.sh` and `packaging/windows.ps1`, installs each one on a clean runner, and checks it with `packaging/smoke.py`. It runs on pull requests that touch the app or the packaging, on manual dispatch, and on version tags.
+
+1. Set the new `version` in `desktop/native/Cargo.toml`, refresh `Cargo.lock` with `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`, and merge the change. The packages take their version from this file.
+2. Tag that commit `vX.Y.Z` and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+3. The workflow verifies that the tag matches the version, then publishes a GitHub Release with the disk image and the installer.
+
+To build locally, run `sh packaging/macos.sh` on an Apple Silicon Mac or `./packaging/windows.ps1` in PowerShell 7 with Inno Setup 6 installed. Output goes to `dist/`. The macOS bundle is ad-hoc signed. Set `CODESIGN_IDENTITY` to sign it with a certificate.
 
 ## Browser viewer
 

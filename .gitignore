@@ -3,4 +3,5 @@ __pycache__/
 data/
 .mcp-venv/
 .build/
+dist/
 desktop/native/target/
