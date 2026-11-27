@@ -92,6 +92,7 @@ pub enum Format {
 pub struct Editor {
     pub page: usize,
     format: Format,
+    extension: String,
     pub waiting: bool,
     pub error: Option<String>,
     count: usize,
@@ -130,10 +131,11 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(page: usize, session: Id, format: Format) -> Self {
+    pub fn new(page: usize, session: Id, format: Format, extension: String) -> Self {
         Self {
             page,
             format,
+            extension,
             waiting: true,
             error: None,
             count: 0,
@@ -275,20 +277,59 @@ impl Editor {
         Some([first.index, last.index])
     }
 
+    fn insertion_tools(&mut self, ui: &mut Ui, action: &mut Option<(&str, Value)>) {
+        ui.add_enabled_ui(self.count > 0, |ui| {
+            ui.menu_button("도형", |ui| {
+                for (label, value) in [
+                    ("사각형", "rectangle"),
+                    ("타원", "ellipse"),
+                    ("삼각형", "triangle"),
+                    ("화살표", "arrow"),
+                ] {
+                    if ui.button(label).clicked() {
+                        *action = Some(("shape", json!(value)));
+                        ui.close();
+                    }
+                }
+            });
+            ui.menu_button("표", |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        DragValue::new(&mut self.table[0])
+                            .range(1..=12)
+                            .suffix("행"),
+                    );
+                    ui.add(
+                        DragValue::new(&mut self.table[1])
+                            .range(1..=12)
+                            .suffix("열"),
+                    );
+                });
+                if ui.button("표 삽입").clicked() {
+                    *action = Some(("table", json!(self.table)));
+                    ui.close();
+                }
+            });
+        });
+    }
+
     fn request(&mut self, ctx: &Context, operation: &str, value: Value) -> Command {
         let target = self.selected.map(Target::json);
-        let same = !matches!(
-            operation,
-            "page"
-                | "undo"
-                | "redo"
-                | "new_slide"
-                | "duplicate_slide"
-                | "delete_slide"
-                | "delete_object"
-                | "group"
-                | "ungroup"
-        );
+        let paged_insertion =
+            self.format != Format::Slides && matches!(operation, "table" | "shape");
+        let same = !paged_insertion
+            && !matches!(
+                operation,
+                "page"
+                    | "undo"
+                    | "redo"
+                    | "new_slide"
+                    | "duplicate_slide"
+                    | "delete_slide"
+                    | "delete_object"
+                    | "group"
+                    | "ungroup"
+            );
         self.pending_target = if same { self.selected } else { None };
         if same && operation != "move_object" {
             self.next_text = self.text.as_ref().map(|edit| edit.target);
@@ -574,6 +615,7 @@ impl Editor {
                 });
             });
             if self.format != Format::Slides {
+                ui.horizontal_wrapped(|ui| self.insertion_tools(ui, &mut action));
                 return;
             }
             ui.horizontal_wrapped(|ui| {
@@ -620,39 +662,7 @@ impl Editor {
                         }
                     },
                 );
-                ui.add_enabled_ui(self.count > 0, |ui| {
-                    ui.menu_button("도형", |ui| {
-                        for (label, value) in [
-                            ("사각형", "rectangle"),
-                            ("타원", "ellipse"),
-                            ("삼각형", "triangle"),
-                            ("화살표", "arrow"),
-                        ] {
-                            if ui.button(label).clicked() {
-                                action = Some(("shape", json!(value)));
-                                ui.close();
-                            }
-                        }
-                    });
-                    ui.menu_button("표", |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                DragValue::new(&mut self.table[0])
-                                    .range(1..=12)
-                                    .suffix("행"),
-                            );
-                            ui.add(
-                                DragValue::new(&mut self.table[1])
-                                    .range(1..=12)
-                                    .suffix("열"),
-                            );
-                        });
-                        if ui.button("표 삽입").clicked() {
-                            action = Some(("table", json!(self.table)));
-                            ui.close();
-                        }
-                    });
-                });
+                self.insertion_tools(ui, &mut action);
                 ui.separator();
                 ui.add_enabled_ui(object, |ui| {
                     ui.menu_button("정렬", |ui| {

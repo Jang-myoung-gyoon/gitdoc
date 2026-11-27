@@ -5,14 +5,6 @@ use serde_json::{Value, json};
 type Action = (&'static str, Value);
 
 impl Format {
-    fn extension(self) -> &'static str {
-        match self {
-            Self::Slides => "PPTX",
-            Self::Word => "DOC",
-            Self::Hangul => "HWP",
-        }
-    }
-
     fn navigator(self) -> &'static str {
         match self {
             Self::Slides => "슬라이드",
@@ -82,11 +74,7 @@ impl Editor {
                                         .halign(Align::Min),
                                 )
                                 .on_hover_text(title);
-                                ui.label(
-                                    RichText::new(self.format.extension())
-                                        .color(accent)
-                                        .strong(),
-                                );
+                                ui.label(RichText::new(&self.extension).color(accent).strong());
                                 if ui.available_width() > 65.0 {
                                     ui.add(Label::new(RichText::new(version).weak()).truncate())
                                         .on_hover_text(version);
@@ -308,7 +296,7 @@ impl Editor {
         ui.separator();
         let inner_width = (width - 15.0).max(20.0);
         ScrollArea::vertical()
-            .id_salt(("editor-navigator", self.format.extension()))
+            .id_salt(("editor-navigator", &self.extension))
             .max_height((height - 44.0).max(40.0))
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -419,7 +407,7 @@ mod tests {
     }
 
     fn fixture(format: Format, ctx: &Context) -> Editor {
-        let mut editor = Editor::new(1, Id::new("test-editor"), format);
+        let mut editor = Editor::new(1, Id::new("test-editor"), format, "SAMPLE".into());
         editor.waiting = false;
         editor.count = 3;
         editor.width = 612.0;
@@ -491,6 +479,42 @@ mod tests {
             let page_two = find_text(&ui.shapes, "2");
             let command = click(&ctx, &mut editor, size, page_two);
             assert!(matches!(command, Some(Command::Page(params)) if params["number"] == 2));
+        }
+    }
+
+    #[test]
+    fn all_canvas_formats_send_table_and_shape_from_the_toolbar() {
+        for (format, extension) in [
+            (Format::Slides, "PPTX"),
+            (Format::Word, "DOC"),
+            (Format::Word, "DOCX"),
+            (Format::Hangul, "HWP"),
+            (Format::Hangul, "HWPX"),
+        ] {
+            let ctx = Context::default();
+            let size = vec2(1080.0, 820.0);
+            let mut editor = fixture(format, &ctx);
+            editor.extension = extension.into();
+            editor.table = [3, 4];
+            frame(&ctx, &mut editor, size, vec![]);
+            let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            find_text(&ui.shapes, extension);
+            let table = find_text(&ui.shapes, "표");
+            assert!(click(&ctx, &mut editor, size, table).is_none());
+            let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
+            let insert = find_text(&menu.shapes, "표 삽입");
+            assert!(matches!(click(&ctx, &mut editor, size, insert),
+                             Some(Command::Page(params)) if params["operation"] == "table"
+                                 && params["value"] == json!([3, 4])));
+            editor.waiting = false;
+            let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            let shape = find_text(&ui.shapes, "도형");
+            assert!(click(&ctx, &mut editor, size, shape).is_none());
+            let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
+            let arrow = find_text(&menu.shapes, "화살표");
+            assert!(matches!(click(&ctx, &mut editor, size, arrow),
+                             Some(Command::Page(params)) if params["operation"] == "shape"
+                                 && params["value"] == "arrow"));
         }
     }
 

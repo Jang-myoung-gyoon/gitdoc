@@ -12,13 +12,15 @@ from pathlib import Path
 
 import olefile
 
+from desktop.document_objects import HANGUL_SHAPES, SHAPE_SIZE, arrow_polygon, insert_word_object, insertion_value
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
 from page_text import embedded_text
-from preview import page_dimensions, preview_path, preview_png, rhwp_command, run_converter
+from preview import PreviewError, page_dimensions, preview_path, preview_png, rhwp_command, run_converter
 from uploads import MAX_FILE
 
+HANGUL_EXTENSIONS = ("hwp", "hwpx")
 MAX_HISTORY = 128 * 1024 * 1024
 
 
@@ -90,10 +92,9 @@ def rhwp(args, folder):
     return run_converter([rhwp_command(), *args], folder, env=dict(os.environ, RHWP_WEBFONT_OFFLINE="1"))
 
 
-def hwp_locations(source, page, text):
+def hwp_locations(source, page, placement, text):
     folder = source.parent
     number = page - 1
-    placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number), "--json"], folder))["pages"][0]
     section = placement["section"]
     rhwp(["export-render-tree", str(source), "-p", str(number), "-o", str(folder)], folder)
     root = json.loads((folder/f"render_tree_{page:03d}.json").read_bytes())
@@ -160,14 +161,47 @@ def change_hwp(source, original, value, section, paragraph):
     flags = ["--section", str(section), "--para", str(paragraph),
              "--offset", str(address["charOffset"]+left)]
     if before:
-        output = folder/"deleted.hwp"
+        output = folder/f"deleted{source.suffix}"
         rhwp(["edit", "delete-text", str(source), *flags, "--count", str(len(before)), "-o", str(output)], folder)
         source = output
     if after:
-        output = folder/"inserted.hwp"
+        output = folder/f"inserted{source.suffix}"
         rhwp(["edit", "insert-text", str(source), *flags, "--text", after, "-o", str(output)], folder)
         source = output
     return source.read_bytes()
+
+
+def hangul_xml(source):
+    if source.suffix == ".hwpx":
+        return source.read_bytes()
+    target = source.with_suffix(".hwpx")
+    rhwp(["export-hwpx", str(source), str(target)], source.parent)
+    return target.read_bytes()
+
+
+def insert_hangul_object(folder, extension, data, operation, value, section, paragraph):
+    source = folder/f"document.{extension}"
+    source.write_bytes(data)
+    flags = ["--section", str(section), "--para", str(paragraph), "--offset", "0"]
+    if operation == "table":
+        rows, columns = value
+        flags += ["--rows", str(rows), "--cols", str(columns)]
+    else:
+        width, height = SHAPE_SIZE
+        flags += ["--shape", HANGUL_SHAPES[value], "--width", str(width), "--height", str(height), "--treat-as-char"]
+    destination = folder/f"updated.{extension}"
+    if extension == "hwpx":
+        with open_package(data):
+            pass
+    try:
+        rhwp(["edit", f"insert-{operation}", str(source), *flags, "-o", str(destination)], folder)
+    except PreviewError as error:
+        raise ValueError("한글 개체를 삽입할 수 없습니다. 설치한 rhwp의 삽입 명령과 문서 편집 권한을 확인하세요.") from error
+    if value != "arrow":
+        return destination.read_bytes()
+    # rhwp's CLI writes a triangle polygon; edit the native polygon's vertices in HWPX.
+    updated = arrow_polygon(hangul_xml(source), hangul_xml(destination), section, paragraph)
+    return convert_format("hwpx", "hwp", updated) if extension == "hwp" else updated
 
 
 class PagedEditor:
@@ -186,6 +220,9 @@ class PagedEditor:
         self.current_key = None
         self.texts = {}
         self.locations = []
+        self.page_objects = []
+        self.page_count = 0
+        self.hangul_anchor = None
 
     @property
     def data(self):
@@ -207,22 +244,30 @@ class PagedEditor:
         width, height = sizes[number-1]
         with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
             folder = Path(work)
-            if extension == "hwp":
-                source = folder/"document.hwp"
+            if extension in HANGUL_EXTENSIONS:
+                source = folder/f"document.{extension}"
                 source.write_bytes(data)
                 if key != self.current_key:
-                    target = folder/"document.hwpx"
-                    rhwp(["export-hwpx", str(source), str(target)], folder)
-                    self.texts = dict(hwp_paragraphs(target.read_bytes()))
-                objects = hwp_locations(source, number, self.texts)
+                    self.texts = dict(hwp_paragraphs(hangul_xml(source)))
+                placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number-1), "--json"], folder))["pages"][0]
+                section = placement["section"]
+                self.hangul_anchor = next(
+                    ((section, item["paraIndex"])
+                     for column in placement["columns"] for item in column["items"]
+                     if "paraIndex" in item and not item.get("isEndnote")
+                     and (section, item["paraIndex"]) in self.texts),
+                    (section, 0) if count == 1 and (section, 0) in self.texts else None)
+                objects = hwp_locations(source, number, placement, self.texts)
             else:
                 if key != self.current_key:
                     self.locations = word_locations(data, pdf, count)
                 objects = self.locations[number-1]
-        self.current_key = key
         png = Path(self.directory.name)/"document.png"
         png.write_bytes(preview_png(pdf, number, prefer_pdfium=True))
         fonts = use_rendered_fonts(objects, pdf, number, Path(self.directory.name) / "fonts")
+        self.current_key = key
+        self.page_objects = objects
+        self.page_count = count
         return {"page": number, "count": count, "width": width, "height": height,
                 "objects": objects, "image": str(png), "fonts": fonts}
 
@@ -252,19 +297,36 @@ class PagedEditor:
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
 
     def apply(self, source, operation, text_edit, target, value):
+        if operation in ("table", "shape"):
+            value = insertion_value(operation, value)
+            if text_edit:
+                source = self.apply(source, None, text_edit, None, None)
+            if self.extension in HANGUL_EXTENSIONS:
+                selected = None if target is None else next(
+                    (item["id"] for item in self.page_objects if item["id"] == target.get("id")), None)
+                anchor = (selected >> 32, (selected & 0xffffffff) - 1) if selected else self.hangul_anchor
+                if anchor is None:
+                    raise ValueError("이 페이지에서 삽입 위치를 확인할 수 없습니다. 본문 문단이 있는 페이지를 선택하세요.")
+                with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+                    return insert_hangul_object(Path(work), self.extension, source, operation, value, *anchor)
+            candidates = [item["id"] for item in self.page_objects]
+            if target and target.get("id") in candidates:
+                candidates.insert(0, target["id"])
+            return insert_word_object(source, operation, value, candidates, self.page_count == 1,
+                                      legacy=self.extension == "doc")
         selected = (text_edit or {}).get("target") or target
         if selected is None:
             raise ValueError("편집할 문단을 선택하세요.")
         identity = selected["id"]
         edited = None if not text_edit else valid_text(text_edit["text"].replace("\t", " "), 20000, multiline=True)
-        if self.extension == "hwp":
+        if self.extension in HANGUL_EXTENSIONS:
             section, paragraph = identity >> 32, (identity & 0xffffffff) - 1
             original = self.texts.get((section, paragraph))
             if not original or edited is None:
                 raise ValueError("편집할 한글 문단을 확인하세요.")
             with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
                 folder = Path(work)
-                input_file = folder/"document.hwp"
+                input_file = folder/f"document.{self.extension}"
                 input_file.write_bytes(source)
                 return change_hwp(input_file, original, edited, section, paragraph)
         with open_package(source) as archive:

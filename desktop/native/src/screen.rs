@@ -365,11 +365,12 @@ impl GitDoc {
             .unwrap_or("");
         let format = match extension {
             "pptx" => Some(presentation::Format::Slides),
-            "doc" => Some(presentation::Format::Word),
-            "hwp" => Some(presentation::Format::Hangul),
+            "doc" | "docx" => Some(presentation::Format::Word),
+            "hwp" | "hwpx" => Some(presentation::Format::Hangul),
             _ => None,
         };
         if !find_only && let Some(format) = format {
+            let label = extension.to_ascii_uppercase();
             self.epoch += 1;
             let args = json!({"doc": self.doc, "branch": self.branch, "base": self.head(), "number": page});
             if self.request("deck_open", self.epoch, args) {
@@ -377,10 +378,17 @@ impl GitDoc {
                     page,
                     Id::new(("canvas", self.epoch)),
                     format,
+                    label,
                 ));
             }
             return;
         }
+        self.open_editor_form(find_only);
+    }
+
+    fn open_editor_form(&mut self, find_only: bool) {
+        let page = self.target_page();
+        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
         let mode = match extension {
             "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
@@ -1101,8 +1109,7 @@ impl GitDoc {
             }
             let edit_label = match extension.as_str() {
                 "pptx" => Some("슬라이드 편집"),
-                "doc" | "hwp" => Some("본문 편집"),
-                "hwpx" | "docx" => Some("텍스트 수정"),
+                "doc" | "docx" | "hwp" | "hwpx" => Some("본문 편집"),
                 "xlsx" => Some("셀 수정"),
                 "pdf" => Some("페이지 도구"),
                 _ => None,
@@ -1112,7 +1119,12 @@ impl GitDoc {
             {
                 self.edit_form();
             }
-            if matches!(extension.as_str(), "hwp" | "pptx")
+            if extension == "docx"
+                && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("텍스트 수정")).clicked()
+            {
+                self.open_editor_form(false);
+            }
+            if matches!(extension.as_str(), "hwp" | "hwpx" | "pptx")
                 && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("찾기·바꾸기")).clicked()
             {
                 self.open_editor(true);
