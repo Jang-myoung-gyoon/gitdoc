@@ -24,14 +24,41 @@ concurrency:
 jobs:
   macos:
     runs-on: macos-15
+    timeout-minutes: 65
+    env:
+      GITDOC_DISTRIBUTION: ${{ github.repository == 'Jang-myoung-gyoon/gitdoc' && github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check that the tag matches the macOS build version
+        if: env.GITDOC_DISTRIBUTION == 'true'
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' desktop/native/Cargo.toml | head -n 1)
+          test "$GITHUB_REF_NAME" = "v$version"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/native
           key: aarch64-apple-darwin
-      - name: Build the disk image
-        run: sh packaging/macos.sh
+      - name: Assemble the macOS app
+        run: sh packaging/macos.sh --assemble-only
+      - name: Build the ad-hoc disk image
+        if: env.GITDOC_DISTRIBUTION != 'true'
+        run: sh packaging/macos.sh --package-only
+      - name: Sign the app and disk image with Developer ID
+        if: env.GITDOC_DISTRIBUTION == 'true'
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: sh packaging/macos-sign.sh
+      - name: Notarize and validate the signed disk image
+        if: env.GITDOC_DISTRIBUTION == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: sh packaging/macos-notarize.sh dist/GitDoc-*-macos-arm64.dmg
       - name: Smoke test the disk image
         run: |
           set -eu
@@ -48,6 +75,9 @@ jobs:
           done
           "$bundle/Contents/Resources/python/bin/python3" -B packaging/smoke.py "$bundle/Contents/Resources/app" "$bundle"
           codesign --verify --deep --strict "$bundle"
+          if [ "$GITDOC_DISTRIBUTION" = true ]; then
+            spctl --assess --type execute --verbose=2 "$bundle"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: gitdoc-macos-arm64
@@ -96,7 +126,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'Jang-myoung-gyoon/gitdoc' && github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     needs: [macos, windows]
     runs-on: ubuntu-latest
     permissions:
