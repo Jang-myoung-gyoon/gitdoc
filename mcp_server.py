@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from browser_viewer import viewer_url, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
-from desktop.bridge import content, page_path, save_file, versions
+from desktop.bridge import content, edit_contents, page_path, save_file, versions
 from desktop.exporting import export_formats
 from desktop_link import checked_document_path, desktop_url, document_path
 from document_render import describe_page, preview_layout, render_page, use_pdfium, visual_difference
@@ -136,9 +136,10 @@ def read_version(document_id: int, version_id: int, offset: Offset = 0,
 def get_document_capabilities() -> dict[str, object]:
     """Identify the workspace and list GitDoc's registration, direct-edit and export formats."""
     edits = {"replace": ["replace_text"], "cell": ["edit_cell"],
-             "page": ["right", "left", "note", "insert"]}
+             "page": ["right", "left", "note", "insert", "delete"]}
     return {**workspace_info(), "formats": {
-        extension: {"direct_edits": edits.get(MODES.get(extension), []),
+        extension: {"direct_edits": edits.get(MODES.get(extension), []) + (
+                        ["edit_blocks"] if extension in ("docx", "pptx") else []),
                     "export_formats": export_formats(extension)}
         for extension in EXTENSIONS}}
 
@@ -341,13 +342,43 @@ class EditCell(BaseModel):
 
 
 class EditPDFPage(BaseModel):
-    operation: Literal["right", "left", "note", "insert"]
+    operation: Literal["right", "left", "note", "insert", "delete"]
     page: Annotated[int, Field(ge=1)]
     note: str = ""
     file_path: str | None = Field(default=None, description="For insertion, an optional absolute PDF path; omit to insert a blank page.")
 
 
-Edit = Annotated[ReplaceText | EditCell | EditPDFPage, Field(discriminator="operation")]
+class ParagraphStyle(BaseModel):
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    align: Literal["left", "center", "right", "justify"] | None = None
+    size: Annotated[int, Field(ge=6, le=120)] | None = None
+    font: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    color: Annotated[str, Field(pattern=r"^[0-9A-Fa-f]{6}$")] | None = None
+
+
+class ParagraphChange(BaseModel):
+    id: Page
+    text: Annotated[str, Field(max_length=20000)]
+    style: ParagraphStyle = Field(default_factory=ParagraphStyle)
+
+
+class EditOfficeBlocks(BaseModel):
+    operation: Literal["edit_blocks"]
+    changes: Annotated[list[ParagraphChange], Field(min_length=1, max_length=1000)]
+
+
+Edit = Annotated[ReplaceText | EditCell | EditPDFPage | EditOfficeBlocks, Field(discriminator="operation")]
+
+
+@server.tool(annotations=read_only, structured_output=True)
+def list_editable_blocks(document_id: int, version_id: int, offset: Offset = 0,
+                         limit: Limit = 50) -> dict[str, object]:
+    """Read editable DOCX paragraphs or PPTX slide text. Block IDs refer to this exact version."""
+    blocks = edit_contents(document_id, version_id)
+    return {"blocks": blocks[offset:offset + limit], "total": len(blocks),
+            "next_offset": offset + limit if offset + limit < len(blocks) else None}
 
 
 def version_result(document_id, version_id):
@@ -391,8 +422,8 @@ def submit_revision(document_id: int, base_version_id: int, file_path: str, reas
 def edit_revision(document_id: int, base_version_id: int, edit: Edit, reason: str,
                   branch: str = "main") -> dict[str, object]:
     """Edit text, an XLSX cell, or a PDF page. Insert before the selected page or use page count + 1 to append."""
-    mode = "replace" if isinstance(edit, ReplaceText) else "cell" if isinstance(edit, EditCell) else "page"
-    fields = edit.model_dump()
+    mode = "replace" if isinstance(edit, (ReplaceText, EditOfficeBlocks)) else "cell" if isinstance(edit, EditCell) else "page"
+    fields = edit.model_dump(exclude_none=True)
     file = fields.pop("file_path", None)
     version_id = save_document_edit(document_id, branch, base_version_id, fields, reason,
                                     expected_mode=mode, source=load_local_file(file) if file else None)

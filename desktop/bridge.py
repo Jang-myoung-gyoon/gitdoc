@@ -1,6 +1,8 @@
 """Local JSON-lines interface for the native GitDoc window."""
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -13,14 +15,14 @@ from browser_viewer import viewer_url, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from desktop_link import document_path
 from desktop.exporting import convert_format, export_formats, write_export
-from editing import read_pdf_notes
+from editing import editable_office_blocks, read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from page_alignment import comparison_pages, footer_regions
 from page_text import page_text
 from preview import CACHE, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
-    VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
+    DATABASE, VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
     find_document, find_version, first_parent_ids, initialize, merge_state, new_branch, search_documents, text_diff,
 )
 from uploads import load_local_file
@@ -217,6 +219,38 @@ def edit(doc, branch, base, fields, reason, file=None):
     return save_document_edit(doc, branch, base, fields, reason, source=load_local_file(file) if file else None)
 
 
+def edit_contents(doc, version):
+    with database(readonly=True) as db:
+        record = item(db, doc, version, "extension, content")
+    return editable_office_blocks(record["extension"], record["content"])
+
+
+def open_editor_file(path):
+    if os.name == "nt":
+        os.startfile(str(path))
+    else:
+        command = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.run([command, str(path)], check=True, timeout=10, capture_output=True)
+
+
+def working_copy(doc, branch, base):
+    with database(readonly=True) as db:
+        active = require(find_branch(db, doc, branch), "브랜치")
+        if active["head_id"] != base:
+            raise ValueError("확정본이 변경되었습니다. 최신 버전을 다시 열어 주세요.")
+        record = item(db, doc, base, "filename, content")
+    working = DATABASE.parent / "working-edits"
+    working.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix=f"{doc}-{base}-", dir=working))
+    path = directory / Path(record["filename"]).name
+    write_export(path, record["content"], overwrite=False)
+    try:
+        open_editor_file(path)
+    except (OSError, subprocess.SubprocessError):
+        return {"path": str(path), "opened": False}
+    return {"path": str(path), "opened": True}
+
+
 def restore(doc, branch, version, base, reason):
     return restore_revision(doc, branch, version, base, reason)
 
@@ -228,7 +262,8 @@ def rewind(doc, branch, version, base):
 OPERATIONS = {
     "workspace": workspace_info, "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
-    "branch": create_branch, "submit": submit, "edit": edit, "review": review,
+    "branch": create_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,
+    "working_copy": working_copy, "edit_import": submit,
     "restore": restore, "rewind": rewind, "save": save_file, "print": print_preview, "merge": merge,
     "browser": open_browser_view, "font_raster": font_raster,
 }

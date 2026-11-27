@@ -105,14 +105,16 @@ Open **Edit document** from an approved version and enter changes beside the pre
 | Format | In-app edits |
 | --- | --- |
 | HWP, HWPX | Replace text in body and table content with an rhwp 0.9 build that provides text editing |
-| DOCX, PPTX | Replace existing text in Word body, tables, headers, footers, and footnotes, or in PowerPoint slides |
-| XLSX | Enter text, a number, or a formula in a cell, or clear the value. Excel recalculates formulas based on workbook settings. |
-| PDF | Rotate a page, add a note annotation, or insert a blank page or pages from another PDF |
+| DOCX, PPTX | Edit Word text blocks or PowerPoint slide text directly. Change font, size, color, alignment, bold, italics, and underline, or use find and replace. |
+| XLSX | Double-click a cell on the current version to edit its value or formula, or clear the value. Excel recalculates formulas based on workbook settings. |
+| PDF | Rotate or delete a page, add a note annotation, or insert a blank page or pages from another PDF. |
 
 To insert pages, enter the page number they should go before. Enter the current page count plus one to append. GitDoc records the insertion position and page count in the version history. When comparing versions, **GitDoc 편집 기록** takes priority through recorded PDF edits. **자동 판정** identifies inferred insertions from uploaded versions where no applicable record exists.
 | DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
 
-[office_oxide](https://github.com/yfedoseev/office_oxide) edits DOCX and PPTX text. GitDoc imports its edited XML when the result matches the expected change and formatting. GitDoc's XML editor handles other cases and XLSX cell edits. A replacement spanning multiple Word or PowerPoint runs takes the formatting of the first character. Review the preview for layout and styling.
+[office_oxide](https://github.com/yfedoseev/office_oxide) handles compatible Word and PowerPoint find-and-replace edits. GitDoc edits the document XML directly for individual text blocks, formatting, and spreadsheet cells. Save several text block changes together as one draft, then review the rendered comparison. The equivalent MCP workflow is `list_editable_blocks` followed by `edit_revision` with `operation: edit_blocks`.
+
+For editing shapes, charts, or page layout, use **전문 편집기로 열기**. GitDoc opens a local working copy in the installed application associated with the file type. Save in the original format, return to GitDoc, and choose **저장한 파일 가져오기** to submit the working copy for review.
 
 ## Exporting versions
 

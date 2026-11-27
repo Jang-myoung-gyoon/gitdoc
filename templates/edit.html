@@ -52,7 +52,7 @@
       <input id="edit-page" name="page" type="number" min="1" value="{{ fields.get('page', 1) }}" required>
       <label for="edit-operation">작업</label>
       <select id="edit-operation" name="operation">
-        {% for operation, label in [('right', '시계 방향으로 90° 회전'), ('left', '반시계 방향으로 90° 회전'), ('note', '메모 추가'), ('insert', '페이지 삽입')] %}
+        {% for operation, label in [('right', '시계 방향으로 90° 회전'), ('left', '반시계 방향으로 90° 회전'), ('note', '메모 추가'), ('insert', '페이지 삽입'), ('delete', '페이지 삭제')] %}
         <option value="{{ operation }}" {% if fields.get('operation') == operation %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>

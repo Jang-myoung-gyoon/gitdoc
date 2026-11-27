@@ -1,6 +1,7 @@
 use crate::{
     Destination,
     bridge::{Bridge, Message, Reply},
+    office_editor::Editor,
     paper::{self, PaperRow},
     paper_text::{self, Lines},
 };
@@ -37,6 +38,7 @@ enum Action {
     Branch,
     Submit,
     Edit,
+    External,
     Approve,
     Reject,
     Restore,
@@ -60,6 +62,8 @@ struct Form {
     page: usize,
     submitting: bool,
     error: Option<String>,
+    office: Option<Editor>,
+    find_mode: bool,
 }
 
 impl Form {
@@ -80,11 +84,15 @@ impl Form {
             page: 1,
             submitting: false,
             error: None,
+            office: None,
+            find_mode: false,
         }
     }
     fn needs_file(&self) -> bool {
-        matches!(self.action, Action::Register | Action::Submit)
-            || self.action == Action::Merge && self.values["conflict"] == true
+        matches!(
+            self.action,
+            Action::Register | Action::Submit | Action::External
+        ) || self.action == Action::Merge && self.values["conflict"] == true
     }
 }
 
@@ -340,27 +348,63 @@ impl GitDoc {
             .map(|row| text(&row["extension"]))
             .unwrap_or("");
         let mode = match extension {
-            "docx" | "pptx" | "hwp" | "hwpx" => "replace",
+            "docx" | "pptx" => "blocks",
+            "hwp" | "hwpx" => "replace",
             "xlsx" => "cell",
             "pdf" => "page",
             _ => return,
-        }
-        .to_owned();
+        };
+        let open_blocks = mode == "blocks";
+        let sheet_name = self
+            .pane
+            .sheets
+            .get(self.pane.sheet)
+            .cloned()
+            .unwrap_or_default();
+        let address = self.pane.cell.clone();
+        let cell_value = rows(&self.pane.data["books"])
+            .last()
+            .and_then(|book| {
+                rows(book)
+                    .iter()
+                    .find(|sheet| text(&sheet["name"]) == sheet_name)
+            })
+            .map(|sheet| &sheet["cells"][&address]);
+        let cell_input = cell_value.map(|cell| {
+            if let Some(formula) = cell[1].as_str() {
+                ("formula", format!("={formula}"))
+            } else {
+                (
+                    if cell[3] == "number" {
+                        "number"
+                    } else {
+                        "text"
+                    },
+                    text(&cell[0]).to_owned(),
+                )
+            }
+        });
         self.open_form(
             Action::Edit,
             "문서 편집",
             json!({"doc":self.doc,"branch":self.branch,"base":self.head()}),
         );
         if let Some(form) = &mut self.form {
-            form.mode = mode;
-            form.sheet = self
-                .pane
-                .sheets
-                .get(self.pane.sheet)
-                .cloned()
-                .unwrap_or_default();
-            form.cell = self.pane.cell.clone();
+            form.mode = mode.into();
+            form.sheet = sheet_name;
+            form.cell = address;
             form.page = page;
+            if let Some((kind, value)) = cell_input {
+                form.kind = kind.into();
+                form.replacement = value;
+            }
+        }
+        if open_blocks {
+            self.request(
+                "edit_contents",
+                self.epoch,
+                json!({"doc":self.doc, "version":self.head()}),
+            );
         }
     }
     fn register_form(&mut self, path: Option<PathBuf>) {
@@ -382,9 +426,8 @@ impl GitDoc {
             self.busy = self.busy.saturating_sub(1);
         }
         let wanted = match reply.op {
-            "page" | "detail" | "view" | "changes" | "page_text" | "branch_compare" => {
-                reply.scope == self.epoch
-            }
+            "page" | "detail" | "view" | "changes" | "page_text" | "branch_compare"
+            | "edit_contents" => reply.scope == self.epoch,
             _ => true,
         };
         if !wanted {
@@ -429,8 +472,13 @@ impl GitDoc {
                     self.pane.index_failures += pages.saturating_sub(self.pane.indexed_through);
                     self.pane.indexed_through = pages;
                 }
-                if matches!(reply.op, "edit" | "rewind")
-                    && let Some(form) = self.form.as_mut().filter(|form| form.submitting)
+                if matches!(
+                    reply.op,
+                    "edit" | "rewind" | "edit_contents" | "working_copy" | "edit_import"
+                ) && let Some(form) = self
+                    .form
+                    .as_mut()
+                    .filter(|form| form.submitting || form.mode == "blocks")
                 {
                     form.submitting = false;
                     form.error = Some(error);
@@ -441,6 +489,24 @@ impl GitDoc {
             }
         };
         match reply.op {
+            "working_copy" => {
+                if let Some(form) = self
+                    .form
+                    .as_mut()
+                    .filter(|form| form.action == Action::External)
+                {
+                    form.file = Some(PathBuf::from(text(&result["path"])));
+                    form.submitting = false;
+                    if result["opened"] != true {
+                        form.error = Some("연결된 편집기를 시작할 수 없습니다. 파일 경로를 복사해 편집기에서 여세요.".into());
+                    }
+                }
+            }
+            "edit_contents" => {
+                if let Some(form) = self.form.as_mut().filter(|form| form.mode == "blocks") {
+                    form.office = Some(Editor::new(&result));
+                }
+            }
             "workspace" => {
                 let workspace_id = text(&result["workspace_id"]);
                 self.workspace = format!(
@@ -593,8 +659,8 @@ impl GitDoc {
                 );
                 self.notify("브랜치를 만들었습니다.", false);
             }
-            "submit" | "edit" => {
-                if reply.op == "edit" {
+            "submit" | "edit" | "edit_import" => {
+                if reply.op != "submit" {
                     self.form = None;
                 }
                 let place = Destination {
@@ -825,6 +891,9 @@ impl GitDoc {
                                 count(&version["page_insert_before"])
                             ));
                         }
+                        if count(&version["page_delete_at"]) > 0 {
+                            label.push_str(&format!("\nGitDoc 편집 기록 · {}쪽 삭제", count(&version["page_delete_at"])));
+                        }
                         let response = ui.selectable_label(self.ids.last() == Some(&v), label);
                         if response.clicked() {
                             selected = Some((v, version["status"] == "pending"));
@@ -938,6 +1007,16 @@ impl GitDoc {
             }
             if ui.add_enabled(selected==self.head() && matches!(extension.as_str(),"hwp"|"hwpx"|"docx"|"pptx"|"xlsx"|"pdf"),Button::new("문서 편집")).clicked() {
                 self.edit_form();
+            }
+            if ui.add_enabled(selected > 0 && selected == self.head() && self.busy == 0,
+                Button::new("전문 편집기로 열기")).clicked() {
+                let args = json!({"doc":self.doc,"branch":self.branch,"base":self.head()});
+                self.open_form(Action::External, "외부 편집 작업 사본", args.clone());
+                let sent = self.request("working_copy", 0, args);
+                if let Some(form) = &mut self.form {
+                    form.submitting = sent;
+                    form.error = (!sent).then(|| self.notice.clone());
+                }
             }
             if ui.add_enabled(approved && selected!=self.head(),Button::new("이 버전 복원")).clicked() {
                 self.open_form(Action::Restore,"이 버전 복원",json!({"doc":self.doc,"branch":self.branch,"base":self.head(),"version":selected}));
@@ -1530,6 +1609,11 @@ impl GitDoc {
         }
         let name = self.pane.sheets.get(self.pane.sheet).unwrap_or(&name);
         let mut cell = None;
+        let mut edit_cell = false;
+        let can_edit_cell = self.ids.last() == Some(&self.head())
+            && self
+                .record(self.head())
+                .is_some_and(|record| record["extension"] == "xlsx");
         let start = if self.pane.scroll_to {
             cell_position(&self.pane.cell).unwrap_or_default()
         } else {
@@ -1637,7 +1721,13 @@ impl GitDoc {
                                                         ),
                                                     )
                                                     .on_hover_text(&addr);
-                                                if response.clicked() {
+                                                if response.double_clicked()
+                                                    && can_edit_cell
+                                                    && side + 1 == self.ids.len()
+                                                {
+                                                    edit_cell = true;
+                                                    cell = Some(addr);
+                                                } else if response.clicked() {
                                                     cell = Some(addr);
                                                 }
                                             }
@@ -1653,6 +1743,9 @@ impl GitDoc {
             });
         if let Some(addr) = cell {
             self.pane.cell = addr;
+            if edit_cell {
+                self.edit_form();
+            }
         }
         self.pane.scroll_to = false;
     }
@@ -1746,13 +1839,30 @@ impl GitDoc {
         let Some(form) = &mut self.form else {
             return;
         };
+        let editor_width = (ctx.content_rect().width() - 90.0).min(1060.0);
+        let preview = self
+            .pane
+            .previews
+            .get(&self.pane.page)
+            .and_then(Option::as_ref)
+            .and_then(|preview| preview.textures.last())
+            .and_then(Option::as_ref);
+        let wide_editor = form.mode == "blocks" && editor_width >= 850.0 && preview.is_some();
         let mut save = false;
         let mut cancel = false;
         let modal = Modal::new(Id::new(("form", form.title))).show(ctx, |ui| {
-            ui.set_width(390.0);
+            ui.set_width(if wide_editor { editor_width } else if form.mode == "blocks" { editor_width.min(620.0) } else { 390.0 });
             ui.heading(form.title);
             ui.add_enabled_ui(!form.submitting, |ui| {
-                if form.needs_file() {
+                if form.action == Action::External {
+                    ui.label("열린 파일을 같은 이름과 형식으로 저장한 뒤 수정안으로 가져오세요.");
+                    if let Some(path) = &form.file {
+                        ui.monospace(path.to_string_lossy());
+                        if ui.button("파일 경로 복사").clicked() {
+                            ctx.copy_text(path.to_string_lossy().into_owned());
+                        }
+                    }
+                } else if form.needs_file() {
                     if let Some(path) = &form.file {
                         ui.label(path.file_name().unwrap_or_default().to_string_lossy());
                     }
@@ -1776,7 +1886,29 @@ impl GitDoc {
                     ui.label("선택한 버전 이후의 커밋은 복구 브랜치에 보관합니다.");
                 }
                 if form.action == Action::Edit {
-                    match form.mode.as_str() {
+                    if form.mode == "blocks" {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut form.find_mode, false, "본문 편집");
+                            ui.selectable_value(&mut form.find_mode, true, "찾기·바꾸기");
+                        });
+                    }
+                    match if form.mode == "blocks" && form.find_mode { "replace" } else { &form.mode } {
+                        "blocks" => {
+                            if let Some(office) = &mut form.office {
+                                if let Some(texture) = preview.filter(|_| wide_editor) {
+                                    ui.columns(2, |columns| {
+                                        office.show(&mut columns[0]);
+                                        let paper = &mut columns[1];
+                                        paper.strong("현재 원본 페이지");
+                                        paper.add(Image::new(texture).max_size(vec2(paper.available_width(), 350.0)));
+                                    });
+                                } else {
+                                    office.show(ui);
+                                }
+                            } else if form.error.is_none() {
+                                ui.label("편집할 본문을 불러오는 중…");
+                            }
+                        }
                         "replace" => {
                             let label = ui.label("찾을 문구");
                             ui.text_edit_singleline(&mut form.find)
@@ -1786,10 +1918,10 @@ impl GitDoc {
                                 .labelled_by(label.id);
                         }
                         "cell" => {
-                            ui.label("시트 이름");
-                            ui.text_edit_singleline(&mut form.sheet);
-                            ui.label("셀 주소");
-                            ui.text_edit_singleline(&mut form.cell);
+                            let label = ui.label("시트 이름");
+                            ui.text_edit_singleline(&mut form.sheet).labelled_by(label.id);
+                            let label = ui.label("셀 주소");
+                            ui.text_edit_singleline(&mut form.cell).labelled_by(label.id);
                             ComboBox::from_id_salt("value-kind")
                                 .selected_text(match form.kind.as_str() {
                                     "number" => "숫자",
@@ -1808,7 +1940,8 @@ impl GitDoc {
                                     }
                                 });
                             if form.kind != "clear" {
-                                ui.text_edit_multiline(&mut form.replacement);
+                                let label = ui.label("셀 값 또는 수식");
+                                ui.text_edit_multiline(&mut form.replacement).labelled_by(label.id);
                             }
                         }
                         _ => {
@@ -1824,6 +1957,7 @@ impl GitDoc {
                                     "note" => "메모 추가",
                                     "left" => "왼쪽 회전",
                                     "insert" => "페이지 삽입",
+                                    "delete" => "페이지 삭제",
                                     _ => "오른쪽 회전",
                                 })
                                 .show_ui(ui, |ui| {
@@ -1832,12 +1966,15 @@ impl GitDoc {
                                         ("left", "왼쪽 회전"),
                                         ("note", "메모 추가"),
                                         ("insert", "페이지 삽입"),
+                                        ("delete", "페이지 삭제"),
                                     ] {
                                         ui.selectable_value(&mut form.kind, key.into(), label);
                                     }
                                 });
                             if form.kind == "note" {
                                 ui.text_edit_multiline(&mut form.replacement);
+                            } else if form.kind == "delete" {
+                                ui.label("지정한 쪽을 새 수정안에서 제거합니다.");
                             } else if form.kind == "insert" {
                                 ui.label("지정한 쪽 앞에 삽입합니다. 맨 뒤에 넣으려면 마지막 쪽 번호에 1을 더하세요.");
                                 if let Some(file) = &form.file {
@@ -1861,7 +1998,7 @@ impl GitDoc {
                 }
                 let required_reason = matches!(
                     form.action,
-                    Action::Edit | Action::Submit | Action::Merge | Action::Restore
+                    Action::Edit | Action::External | Action::Submit | Action::Merge | Action::Restore
                 );
                 let required_name = matches!(form.action, Action::Register | Action::Branch);
                 if required_reason || matches!(form.action, Action::Approve | Action::Reject) {
@@ -1875,9 +2012,16 @@ impl GitDoc {
                 }
                 let valid = (!form.needs_file() || form.file.is_some())
                     && (!required_reason || !form.reason.trim().is_empty())
-                    && (!required_name || !form.name.trim().is_empty());
+                    && (!required_name || !form.name.trim().is_empty())
+                    && (form.mode != "blocks" || if form.find_mode {
+                        !form.find.is_empty() && form.find != form.replacement
+                    } else { form.office.as_ref().is_some_and(Editor::has_changes) });
                 ui.horizontal(|ui| {
-                    save = ui.add_enabled(valid, Button::new("확인")).clicked();
+                    save = ui.add_enabled(valid, Button::new(match form.action {
+                        Action::Edit => "수정안 저장",
+                        Action::External => "저장한 파일 가져오기",
+                        _ => "확인",
+                    })).clicked();
                     cancel = ui.button("취소").clicked();
                 });
             });
@@ -1907,9 +2051,14 @@ impl GitDoc {
                     "branch"
                 }
                 Action::Submit => "submit",
+                Action::External => "edit_import",
                 Action::Edit => {
                     args["fields"] = match form.mode.as_str() {
-                        "replace" => json!({"find":form.find,"replacement":form.replacement}),
+                        "blocks" if !form.find_mode => json!({"operation":"edit_blocks",
+                            "changes":form.office.as_ref().map(Editor::edits)}),
+                        "blocks" | "replace" => {
+                            json!({"find":form.find,"replacement":form.replacement})
+                        }
                         "cell" => {
                             json!({"sheet":form.sheet,"cell":form.cell,"value_kind":form.kind,"value":form.replacement})
                         }
@@ -1944,11 +2093,14 @@ impl GitDoc {
             }
             if matches!(
                 form.action,
-                Action::Edit | Action::Submit | Action::Merge | Action::Restore
+                Action::Edit | Action::External | Action::Submit | Action::Merge | Action::Restore
             ) {
                 args["reason"] = json!(form.reason);
             }
-            if matches!(form.action, Action::Edit | Action::Rewind) {
+            if matches!(
+                form.action,
+                Action::Edit | Action::External | Action::Rewind
+            ) {
                 let sent = self.request(operation, 0, args);
                 if let Some(form) = &mut self.form {
                     form.submitting = sent;

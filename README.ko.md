@@ -105,14 +105,16 @@ python docvers.py fonts --remove "Calibri"
 | 형식 | 직접 편집 |
 | --- | --- |
 | HWP, HWPX | rhwp로 본문·표의 문구 일괄 변경. 편집 명령을 제공하는 rhwp 0.9 계열 필요 |
-| DOCX, PPTX | Word 본문·표·머리말·꼬리말·각주, PowerPoint 슬라이드의 기존 문구 변경 |
-| XLSX | 셀을 선택해 텍스트·숫자·수식 입력 또는 값 삭제. 수정본을 Excel에서 열면 계산 설정에 따라 수식이 갱신됩니다 |
-| PDF | 페이지 회전, 메모 주석 추가, 빈 페이지 또는 다른 PDF의 페이지 삽입 |
+| DOCX, PPTX | Word 단락과 PowerPoint 슬라이드 텍스트를 직접 수정하고, 글꼴·크기·색·굵게·기울임·밑줄·정렬을 적용하거나 찾기·바꾸기 |
+| XLSX | 최신 버전에서 셀을 더블클릭해 기존 값이나 수식을 불러와 수정하거나 삭제. Excel에서 문서의 계산 설정에 따라 수식 갱신 |
+| PDF | 페이지 회전·삭제, 메모 추가, 빈 페이지 또는 다른 PDF의 페이지 삽입 |
 
 페이지를 삽입할 때는 새 페이지가 들어갈 쪽 번호를 지정합니다. 맨 뒤에 넣으려면 현재 페이지 수에 1을 더하세요. 삽입 위치와 장수는 버전 이력에 저장됩니다. 비교 화면에서는 **GitDoc 편집 기록**을 우선 적용합니다. 적용할 기록이 없는 외부 업로드의 삽입은 **자동 판정**으로 표시합니다.
 | DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | 기존 편집기에서 수정한 파일을 GitDoc에 제출 |
 
-[office_oxide](https://github.com/yfedoseev/office_oxide)는 DOCX/PPTX 텍스트 편집에 사용합니다. 검증 기준과 일치하는 편집 XML만 원본 문서 패키지에 넣고, 다른 경우에는 GitDoc의 XML 편집 경로를 사용합니다. XLSX는 기존 셀 편집 경로로 처리합니다. Word와 PowerPoint에서 하나의 문구가 여러 서식에 걸쳐 있으면 교체 문구에는 시작 지점의 서식이 적용됩니다. 앱의 페이지 미리보기는 서식과 배치 검토에 사용할 수 있습니다.
+[office_oxide](https://github.com/yfedoseev/office_oxide)는 DOCX/PPTX의 호환되는 찾기·바꾸기에 사용합니다. 단락별 텍스트와 서식 변경, 셀 편집은 GitDoc이 문서 XML에 적용합니다. 여러 단락을 수정안 하나로 저장한 뒤 렌더링된 비교 화면에서 검토합니다. MCP에서는 `list_editable_blocks`로 단락을 조회하고 `edit_revision`에 `operation: edit_blocks`를 지정합니다.
+
+도형·차트·페이지 레이아웃은 **전문 편집기로 열기**에서 편집할 수 있습니다. GitDoc이 만든 로컬 작업 사본이 파일 형식에 연결된 앱에서 열립니다. 원래 파일 형식으로 저장한 뒤 GitDoc의 **저장한 파일 가져오기**를 눌러 수정안으로 제출하세요.
 
 ## 버전 내보내기
 

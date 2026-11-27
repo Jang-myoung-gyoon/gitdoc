@@ -100,22 +100,24 @@ def edit_runs(runs, find, replacement, limit):
     for node in runs:
         starts.append(starts[-1] + len(node.text))
     for match in reversed(matches):
-        first = bisect_right(starts, match.start()) - 1
-        last = bisect_left(starts, match.end()) - 1
-        start = match.start() - starts[first]
-        end = match.end() - starts[last]
-        left, right = runs[first], runs[last]
-        suffix = right.text[end:]
-        left.text = left.text[:start] + replacement + (suffix if left is right else "")
-        if left is not right:
-            right.text = suffix
-            for node in runs[first + 1:last]:
-                node.text = ""
+        replace_run_span(runs, starts, match.start(), match.end(), replacement)
     if matches:
         for node in runs:
             if (node.text or "").strip() != node.text:
                 node.set(XML_SPACE, "preserve")
     return len(matches)
+
+
+def replace_run_span(runs, starts, start, end, replacement):
+    first = min(len(runs) - 1, bisect_right(starts, start) - 1)
+    last = max(first, bisect_left(starts, end) - 1)
+    left, right = runs[first], runs[last]
+    suffix = (right.text or "")[end - starts[last]:]
+    left.text = (left.text or "")[:start - starts[first]] + replacement + (suffix if left is right else "")
+    if left is not right:
+        right.text = suffix
+        for node in runs[first + 1:last]:
+            node.text = ""
 
 
 def oxide_text_parts(extension, data, find, replacement, expected, count):
@@ -140,23 +142,28 @@ def oxide_text_parts(extension, data, find, replacement, expected, count):
         return expected
 
 
+def office_parts(archive, extension):
+    names = archive.namelist()
+    if extension == "docx":
+        if "word/settings.xml" in names:
+            settings = parse_part(archive, "word/settings.xml")
+            if any(node.get(f"{{{WORD}}}enforcement") in ("1", "true", "on")
+                   for node in settings.findall(".//{*}documentProtection")):
+                raise ValueError("편집이 제한된 Word 문서입니다.")
+        paths = [name for name in names
+                 if re.fullmatch(r"word/(document|header\d+|footer\d+|footnotes|endnotes)\.xml", name)]
+        paths.sort(key=lambda name: (name != "word/document.xml", name))
+        return WORD, paths
+    if extension == "pptx":
+        return SLIDE, [path for _, path in ordered_parts(archive, ZIP_MARKERS["pptx"], "sldId", ())]
+    raise ValueError("본문 편집을 지원하는 DOCX 또는 PPTX 문서를 선택하세요.")
+
+
 def office_replace(extension, data, find, replacement):
     parts = {}
     count = 0
     with open_package(data) as archive:
-        names = archive.namelist()
-        if extension == "docx":
-            if "word/settings.xml" in names:
-                settings = parse_part(archive, "word/settings.xml")
-                if any(node.get(f"{{{WORD}}}enforcement") in ("1", "true", "on")
-                       for node in settings.findall(".//{*}documentProtection")):
-                    raise ValueError("편집이 제한된 Word 문서입니다.")
-            paths = [name for name in names
-                     if re.fullmatch(r"word/(document|header\d+|footer\d+|footnotes|endnotes)\.xml", name)]
-            namespace = WORD
-        else:
-            paths = [path for _, path in ordered_parts(archive, ZIP_MARKERS["pptx"], "sldId", ())]
-            namespace = SLIDE
+        namespace, paths = office_parts(archive, extension)
         for name in paths:
             root = parse_part(archive, name)
             changed = 0
@@ -169,6 +176,152 @@ def office_replace(extension, data, find, replacement):
         if not count:
             raise ValueError("편집 가능한 텍스트에서 찾을 문구가 없습니다.")
         parts = oxide_text_parts(extension, data, find, replacement, parts, count)
+        return rewrite_package(archive, parts)
+
+
+def office_blocks(archive, extension):
+    namespace, paths = office_parts(archive, extension)
+    tag = f"{{{namespace}}}"
+    number = 0
+    for section, path in enumerate(paths, 1):
+        root = parse_part(archive, path)
+        name = Path(path).stem
+        if namespace == SLIDE:
+            group = f"슬라이드 {section}"
+        else:
+            group = {"document": "본문", "footnotes": "각주", "endnotes": "미주"}.get(
+                name, name.replace("header", "머리글 ").replace("footer", "바닥글 "))
+        for paragraph in root.iter(tag + "p"):
+            for runs in text_groups(paragraph, namespace):
+                number += 1
+                yield number, group, path, root, tag, paragraph, runs
+
+
+def editable_office_blocks(extension, data):
+    with open_package(data) as archive:
+        return [{"id": number, "section": section, "text": "".join(run.text for run in runs)}
+                for number, section, _, _, _, _, runs in office_blocks(archive, extension)]
+
+
+def format_block(tag, paragraph, runs, style):
+    word = tag == f"{{{WORD}}}"
+    align = style.get("align")
+    if align:
+        properties = paragraph.find(tag + "pPr")
+        if properties is None:
+            properties = etree.Element(tag + "pPr")
+            paragraph.insert(0, properties)
+        if word:
+            justification = properties.find(tag + "jc")
+            if justification is None:
+                justification = etree.SubElement(properties, tag + "jc")
+            justification.set(tag + "val", "both" if align == "justify" else align)
+        else:
+            properties.set("algn", {"left": "l", "center": "ctr", "right": "r", "justify": "just"}[align])
+    if not (style.keys() - {"align"}):
+        return
+    for content in runs:
+        run = content.getparent()
+        if run.tag != tag + "r":
+            continue
+        properties = run.find(tag + "rPr")
+        if properties is None:
+            properties = etree.Element(tag + "rPr")
+            run.insert(0, properties)
+        for name, attribute in (("bold", "b"), ("italic", "i"), ("underline", "u"),
+                                ("size", "sz"), ("font", "rFonts")):
+            if name not in style:
+                continue
+            value = style[name]
+            if word:
+                prop = properties.find(tag + attribute)
+                if prop is None:
+                    prop = etree.SubElement(properties, tag + attribute)
+                if name == "font":
+                    for script in ("ascii", "hAnsi", "eastAsia", "cs"):
+                        prop.set(tag + script, value)
+                    for attr in tuple(prop.attrib):
+                        if attr.lower().endswith("theme"):
+                            del prop.attrib[attr]
+                else:
+                    val = str(value * 2) if name == "size" else ("single" if value else "none") if name == "underline" else str(int(value))
+                    prop.set(tag + "val", val)
+            elif name == "font":
+                for script in ("latin", "ea", "cs"):
+                    prop = properties.find(tag + script)
+                    if prop is None:
+                        prop = etree.Element(tag + script)
+                        later = ("ea", "cs", "sym", "hlinkClick", "hlinkMouseOver", "rtl", "extLst")
+                        order = later[later.index(script) + 1:] if script in later else later
+                        index = next((i for i, child in enumerate(properties) if child.tag in {tag + name for name in order}), len(properties))
+                        properties.insert(index, prop)
+                    prop.set("typeface", value)
+            else:
+                val = str(value * 100) if name == "size" else ("sng" if value else "none") if name == "underline" else str(int(value))
+                properties.set(attribute, val)
+        if "color" in style:
+            color = style["color"].upper()
+            if word:
+                prop = properties.find(tag + "color")
+                if prop is None:
+                    prop = etree.SubElement(properties, tag + "color")
+                prop.attrib.clear()
+                prop.set(tag + "val", color)
+            else:
+                fills = {tag + name for name in ("noFill", "solidFill", "gradFill", "blipFill", "pattFill", "grpFill")}
+                for child in tuple(properties):
+                    if child.tag in fills:
+                        properties.remove(child)
+                fill = etree.Element(tag + "solidFill")
+                line = properties.find(tag + "ln")
+                properties.insert(properties.index(line) + 1 if line is not None else 0, fill)
+                etree.SubElement(fill, tag + "srgbClr", val=color)
+
+
+def replace_office_blocks(extension, data, changes):
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 1000:
+        raise ValueError("한 번에 변경할 텍스트 단락은 1~1,000개까지 선택하세요.")
+    edits = {}
+    for change in changes:
+        block_id = change["id"]
+        if type(block_id) is not int or block_id < 1 or block_id in edits:
+            raise ValueError("단락 번호를 확인하세요.")
+        style = change.get("style", {})
+        if any(type(style.get(key, False)) is not bool for key in ("bold", "italic", "underline")) or (
+            "align" in style and style["align"] not in ("left", "center", "right", "justify")
+        ) or ("size" in style and (type(style["size"]) is not int or not 6 <= style["size"] <= 120)):
+            raise ValueError("단락 서식을 확인하세요.")
+        if "font" in style and not valid_text(style["font"], 100).strip():
+            raise ValueError("글꼴 이름을 확인하세요.")
+        if "color" in style and not re.fullmatch(r"[0-9A-Fa-f]{6}", style["color"]):
+            raise ValueError("글자 색을 확인하세요.")
+        if style.keys() - {"bold", "italic", "underline", "align", "size", "font", "color"}:
+            raise ValueError("지원하는 단락 서식을 선택하세요.")
+        edits[block_id] = valid_text(change["text"], 20000), style
+    parts = {}
+    with open_package(data) as archive:
+        for number, _, path, root, tag, paragraph, runs in office_blocks(archive, extension):
+            if number not in edits:
+                continue
+            replacement, style = edits.pop(number)
+            original = "".join(run.text for run in runs)
+            if original != replacement:
+                prefix = len(os.path.commonprefix((original, replacement)))
+                suffix = len(os.path.commonprefix((original[prefix:][::-1], replacement[prefix:][::-1])))
+                starts = [0]
+                for run in runs:
+                    starts.append(starts[-1] + len(run.text))
+                replace_run_span(runs, starts, prefix, len(original) - suffix,
+                                 replacement[prefix:len(replacement) - suffix])
+                for run in runs:
+                    if run.text and run.text.strip() != run.text:
+                        run.set(XML_SPACE, "preserve")
+            if style:
+                format_block(tag, paragraph, runs, style)
+            if original != replacement or style:
+                parts[path] = root
+        if edits or not parts:
+            raise ValueError("편집할 단락 또는 변경 내용을 확인하세요.")
         return rewrite_package(archive, parts)
 
 
@@ -332,6 +485,7 @@ def update_pdf(data, page_number, operation, note, source=None):
         raise ValueError("PDF 페이지 번호를 확인하세요.")
     writer = PdfWriter(clone_from=reader)
     inserted = 0
+    deleted = None
     if operation == "insert":
         if source is None:
             reference = writer.pages[min(page_number, base_count) - 1]
@@ -348,6 +502,11 @@ def update_pdf(data, page_number, operation, note, source=None):
     elif operation in ("left", "right"):
         page = writer.pages[page_number - 1]
         page.rotate(90 if operation == "right" else -90)
+    elif operation == "delete":
+        if base_count <= 1:
+            raise ValueError("PDF에는 적어도 한 페이지가 있어야 합니다.")
+        writer.remove_page(page_number - 1, clean=True)
+        deleted = page_number
     elif operation == "note" and note.strip():
         page = writer.pages[page_number - 1]
         box = page.cropbox
@@ -358,13 +517,15 @@ def update_pdf(data, page_number, operation, note, source=None):
         raise ValueError("PDF 작업을 선택하거나 메모 내용을 입력하세요.")
     output = io.BytesIO()
     writer.write(output)
-    return output.getvalue(), (base_count, page_number if inserted else None, inserted)
+    return output.getvalue(), (base_count, page_number if inserted else None, inserted, deleted)
 
 
 def modify_document(extension, data, fields, max_file):
     kind = MODES.get(extension)
     try:
         if kind == "replace":
+            if fields.get("operation") == "edit_blocks":
+                return replace_office_blocks(extension, data, fields.get("changes"))
             find = valid_text(fields.get("find", ""), 300)
             replacement = valid_text(fields.get("replacement", ""), 2000)
             if not find or find == replacement:

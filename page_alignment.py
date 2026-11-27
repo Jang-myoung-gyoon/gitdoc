@@ -250,18 +250,23 @@ def footer_regions(paths, pairs):
 
 def page_lineage(db, document_id, version_id, count):
     steps = []
-    fields = "id, sha256, base_id, restored_from, merge_parent_id, page_base_count, page_insert_before, page_insert_count"
+    fields = ("id, sha256, base_id, restored_from, merge_parent_id, page_base_count, "
+              "page_insert_before, page_insert_count, page_delete_at")
     current = find_version(db, document_id, version_id, fields)
     while current:
         parent = None
         base, inserted = current["page_base_count"], current["page_insert_count"]
         start = current["page_insert_before"]
-        if (base and inserted is not None and count == base + inserted
-                and (inserted == 0 or start and 1 <= start <= base + 1)):
+        deleted = current["page_delete_at"]
+        if (base and inserted is not None and count == base + inserted - bool(deleted)
+                and (inserted == 0 or start and 1 <= start <= base + 1)
+                and (not deleted or inserted == 0 and 1 <= deleted <= base)):
             parent = find_version(db, document_id, current["base_id"], fields)
             if parent:
                 if inserted:
                     steps.append((current["id"], start, inserted))
+                elif deleted:
+                    steps.append((current["id"], deleted, 0))
                 count = base
         if parent is None:
             for candidate in (current["restored_from"], current["base_id"], current["merge_parent_id"]):
@@ -275,7 +280,10 @@ def page_lineage(db, document_id, version_id, count):
     root = (current["id"] if current else version_id, count)
     pages = [(root[0], i) for i in range(1, count + 1)]
     for version, start, inserted in reversed(steps):
-        pages[start - 1:start - 1] = [(version, i) for i in range(1, inserted + 1)]
+        if inserted:
+            pages[start - 1:start - 1] = [(version, i) for i in range(1, inserted + 1)]
+        else:
+            pages.pop(start - 1)
     return root, pages
 
 

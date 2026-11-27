@@ -54,6 +54,14 @@ class RecordedInsertionTests(unittest.TestCase):
         later = save_document_edit(self.doc, "main", changed, {"operation": "right", "page": 3}, "rotate")
         self.assertEqual(self.compare(self.base, later), (expected, [None, "recorded", None, None]))
 
+    def test_delete_records_the_exact_page_among_identical_pages(self):
+        deleted = save_document_edit(self.doc, "main", self.base, {"operation": "delete", "page": 2}, "delete")
+        expected = ([[1, 1], [2, None], [3, 2]], [None, "recorded", None])
+        self.assertEqual(self.compare(self.base, deleted), expected)
+        review_revision(self.doc, deleted, "approve", self.base)
+        later = save_document_edit(self.doc, "main", deleted, {"operation": "right", "page": 2}, "rotate")
+        self.assertEqual(self.compare(self.base, later), expected)
+
     def test_uploaded_pdf_still_uses_inference_and_file_insertion_records_count(self):
         uploaded = save_proposal(self.doc, "main", self.base, pdf(5), "upload")
         self.assertEqual(self.compare(self.base, uploaded)[1].count("inferred"), 2)
