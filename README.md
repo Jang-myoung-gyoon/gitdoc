@@ -103,23 +103,27 @@ Spreadsheet units are cell values and extracted formulas keyed by sheet and addr
 In the desktop version history, right-click a commit to rewind the current branch to that version or to remove that commit and the newer commits from the branch. GitDoc asks for confirmation and creates a `recovery-…` branch at the old head. A regular restore instead records the old contents as a new version. The rewind is also available through `reset_document_branch`.
 
 Open **텍스트 수정** from an approved version to change its text beside the preview. Saving opens the comparison with the previous version. If the head changes while editing, start again from the latest version.
-Enable **설정 → 수정안 검토 사용** in the desktop app to save new desktop edits and submissions as pending drafts. A yellow background in the version history identifies pending drafts, which can be approved or rejected. Review is off by default, so new desktop versions are approved immediately. Existing pending drafts keep their status. MCP and CLI draft tools continue to create pending revisions.
 
+Enable **설정 → 수정안 검토 사용** in the desktop app to save new desktop edits and submissions as pending drafts. A yellow background in the version history identifies pending drafts, which can be approved or rejected. Review is off by default, so new desktop versions are approved immediately. Existing pending drafts keep their status. MCP and CLI draft tools continue to create pending revisions.
 
 | Format | In-app edits |
 | --- | --- |
-| HWP, HWPX | Replace text in body and table content with an rhwp 0.9 build that provides text editing |
+| HWP | Type directly in body paragraphs that fit on one page, or find and replace text in the body and tables |
+| HWPX | Replace text in body and table content with rhwp |
+| DOC | Type directly in Word paragraphs and apply basic formatting |
 | DOCX | Edit Word text blocks and formatting, or find and replace text |
 | PPTX | Type directly on slides and in table cells, format text, and edit slides and objects |
 | XLSX | Double-click a cell on the current version to edit its value or formula, or clear the value. Excel recalculates formulas based on workbook settings. |
 | PDF | Rotate or delete a page, add a note annotation, or insert a blank page or pages from another PDF. |
-| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
+| PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
 
 Open **슬라이드 편집** from the current approved PPTX version and click text or a table cell on the canvas. Use the keyboard to type, select, copy, paste, undo, and redo. The toolbar includes font, size, bold, italic, underline, color, alignment, lists, indentation, and spacing. It also adds, duplicates, and deletes slides and inserts text boxes, images, shapes, and tables. Shift-click objects to group them. The editor writes changes with [python-pptx](https://github.com/scanny/python-pptx). Text embedded in an image requires editing or replacing the image.
 
 Save with **수정안 저장**, **Cmd+S** on macOS, or **Ctrl+S** on Windows. The change reason is optional. Press **Enter** in the reason field to save. Changing text-box alignment redraws only that box on the editing canvas. When the slide order stays the same at save time, GitDoc renders the changed slides and reuses the verified unchanged pages for the comparison preview.
 
-The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. PDF edits are saved as drafts for review. Password-protected and signed originals cannot be edited.
+Open **본문 편집** to click and type in DOC and HWP body paragraphs. The new version keeps the original extension. DOC uses a LibreOffice round trip through DOCX, which may change some layout or formatting. Direct HWP editing uses rhwp and requires a body paragraph whose source position can be verified.
+
+The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. Password-protected and signed originals cannot be edited.
 
 To insert pages, enter the page number they should go before. Enter the current page count plus one to append. GitDoc records the insertion position and page count in the version history. When comparing versions, **GitDoc 편집 기록** takes priority through recorded PDF edits. **자동 판정** identifies inferred insertions from uploaded versions where no applicable record exists.
 
@@ -133,7 +137,7 @@ Open **Save** to export the selected version. Every supported format can be save
 | --- | --- |
 | HWP or HWPX | The other Hangul format |
 | DOC | DOCX and ODT |
-| DOCX | ODT |
+| DOCX | ODT and DOC |
 | ODT, ODS, ODP | DOCX, XLSX, and PPTX, respectively |
 | PPT or PPTX | The other PowerPoint format and ODP |
 | XLS or XLSX | The other Excel format and ODS |

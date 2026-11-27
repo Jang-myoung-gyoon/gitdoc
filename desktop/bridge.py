@@ -246,21 +246,25 @@ def rewind(doc, branch, version, base):
     return reset_branch(doc, branch, version, base)
 
 
-class PresentationSession:
+class CanvasSession:
     working = None
 
     def open(self, doc, branch, base, number):
-        from desktop.presentation import Deck
-
         self.close()
         with database(readonly=True) as db:
             active = require(find_branch(db, doc, branch), "브랜치")
             if active["head_id"] != base:
                 raise ValueError("새 확정본에서 다시 편집하세요.")
             original = item(db, doc, base, "filename, extension, sha256, content")
-        if original["extension"] != "pptx":
-            raise ValueError("PPTX 프레젠테이션을 선택하세요.")
-        working = Deck(original["content"], original["sha256"])
+        extension = original["extension"]
+        if extension == "pptx":
+            from desktop.presentation import Deck
+            working = Deck(original["content"], original["sha256"])
+        elif extension in ("doc", "hwp"):
+            from desktop.paged_editor import PagedEditor
+            working = PagedEditor(extension, original["content"])
+        else:
+            raise ValueError("캔버스 편집을 지원하는 문서를 선택하세요.")
         try:
             result = working.page(number)
         except Exception:
@@ -269,6 +273,7 @@ class PresentationSession:
         self.working = working
         self.destination = doc, branch, base
         self.filename = original["filename"]
+        self.extension = extension
         return result
 
     def page(self, **params):
@@ -276,7 +281,7 @@ class PresentationSession:
 
     def active(self):
         if self.working is None:
-            raise ValueError("프레젠테이션 편집을 다시 시작하세요.")
+            raise ValueError("문서 편집을 다시 시작하세요.")
         return self.working
 
     def save(self, reason, number, text_edit=None):
@@ -285,13 +290,16 @@ class PresentationSession:
             working.page(number, text_edit=text_edit)
         if working.position == 0:
             raise ValueError("저장할 변경이 없습니다.")
-        upload = prepare_upload(self.filename, working.data)
-        try:
-            working.prime_preview(upload[3])
-        except (OSError, PreviewError, PyPdfError, PdfiumError, ValueError):
-            # The normal preview path remains available when reuse is impossible.
-            pass
-        version = save_proposal(*self.destination, upload, reason.strip() or "슬라이드 편집", desktop=True)
+        slide = self.extension == "pptx"
+        upload = prepare_upload(self.filename, working.data if slide else working.final_data())
+        if slide:
+            try:
+                working.prime_preview(upload[3])
+            except (OSError, PreviewError, PyPdfError, PdfiumError, ValueError):
+                # The normal preview path remains available when reuse is impossible.
+                pass
+        label = "슬라이드 편집" if slide else "본문 편집"
+        version = save_proposal(*self.destination, upload, reason.strip() or label, desktop=True)
         result = saved_version(self.destination[0], version)
         self.close()
         return result
@@ -302,7 +310,7 @@ class PresentationSession:
             self.working = None
 
 
-presentation = PresentationSession()
+canvas_editor = CanvasSession()
 
 
 OPERATIONS = {
@@ -311,8 +319,8 @@ OPERATIONS = {
     "branch": create_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,
     "restore": restore, "rewind": rewind, "save": save_file, "print": print_preview, "merge": merge,
     "browser": open_browser_view, "font_raster": font_raster,
-    "deck_open": presentation.open, "deck_page": presentation.page,
-    "deck_save": presentation.save, "deck_close": presentation.close,
+    "deck_open": canvas_editor.open, "deck_page": canvas_editor.page,
+    "deck_save": canvas_editor.save, "deck_close": canvas_editor.close,
 }
 
 

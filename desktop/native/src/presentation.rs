@@ -73,8 +73,16 @@ pub enum Command {
     Close,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Slides,
+    Word,
+    Hangul,
+}
+
 pub struct Editor {
     pub page: usize,
+    format: Format,
     pub waiting: bool,
     pub error: Option<String>,
     count: usize,
@@ -110,9 +118,10 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(page: usize, session: Id) -> Self {
+    pub fn new(page: usize, session: Id, format: Format) -> Self {
         Self {
             page,
+            format,
             waiting: true,
             error: None,
             count: 0,
@@ -271,7 +280,7 @@ impl Editor {
         };
         let mut params = json!({"number": number, "operation": operation, "value": value,
             "target": target, "ids": self.multiple, "selection": self.selection(ctx),
-            "patch_text": operation == "align" && self.image.is_some()});
+            "patch_text": operation == "align" && self.image.is_some() && self.format == Format::Slides});
         // Text belongs to the current slide, including when navigating away.
         if let Some(edit) = self
             .text_edit()
@@ -329,7 +338,7 @@ impl Editor {
             ));
         }
         self.text = None;
-        if multi {
+        if multi && self.format == Format::Slides {
             if let Some(target) = item {
                 if let Some(current) = self
                     .selected
@@ -406,6 +415,9 @@ impl Editor {
                     || action = Some(("paste", Value::Null)),
                 );
                 ui.separator();
+                if self.format == Format::Hangul {
+                    return;
+                }
                 ui.add_enabled_ui(text, |ui| {
                     ui.menu_button(self.font.clone(), |ui| {
                         for value in [
@@ -456,6 +468,9 @@ impl Editor {
                         ("글자색", &mut self.color, "color"),
                         ("강조색", &mut self.highlight, "highlight"),
                     ] {
+                        if operation == "highlight" && self.format == Format::Word {
+                            continue;
+                        }
                         ui.menu_button(RichText::new(label).color(*color), |ui| {
                             for (name, value) in [
                                 ("검정", Color32::BLACK),
@@ -492,6 +507,9 @@ impl Editor {
                             action = Some(("align", json!(value)))
                         });
                     }
+                    if self.format != Format::Slides {
+                        return;
+                    }
                     button(ui, true, "• 목록", "글머리 기호", || {
                         action = Some(("bullet", Value::Null))
                     });
@@ -514,6 +532,9 @@ impl Editor {
                     });
                 });
             });
+            if self.format != Format::Slides {
+                return;
+            }
             ui.horizontal_wrapped(|ui| {
                 button(
                     ui,
@@ -715,20 +736,34 @@ impl Editor {
                     .suffix("%")
                     .text("확대"),
             );
-            ui.weak("글자를 클릭해 편집 · Shift+클릭으로 개체 선택");
-            ui.menu_button("개체 선택", |ui| {
-                ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                    for object in self.objects.iter().filter(|o| o.target.cell.is_none()) {
-                        if ui
-                            .selectable_label(Some(object.target) == self.selected, &object.name)
-                            .clicked()
-                        {
-                            action = Some(("select", object.target.json()));
-                            ui.close();
-                        }
-                    }
-                });
+            ui.weak(if self.format == Format::Slides {
+                "글자를 클릭해 편집 · Shift+클릭으로 개체 선택"
+            } else {
+                "본문 글자를 클릭해 편집"
             });
+            ui.menu_button(
+                if self.format == Format::Slides {
+                    "개체 선택"
+                } else {
+                    "문단 선택"
+                },
+                |ui| {
+                    ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                        for object in self.objects.iter().filter(|o| o.target.cell.is_none()) {
+                            if ui
+                                .selectable_label(
+                                    Some(object.target) == self.selected,
+                                    &object.name,
+                                )
+                                .clicked()
+                            {
+                                action = Some(("select", object.target.json()));
+                                ui.close();
+                            }
+                        }
+                    });
+                },
+            );
         });
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
@@ -875,7 +910,7 @@ impl Editor {
             self.focus_reason = true;
             ctx.request_repaint();
         }
-        if self.selected.is_some() {
+        if self.selected.is_some() && self.format != Format::Hangul {
             for (key, tool) in [(Key::B, "bold"), (Key::I, "italic"), (Key::U, "underline")] {
                 if consume(Modifiers::COMMAND, key) && self.text.is_some() {
                     return Some((tool, Value::Null));
@@ -892,7 +927,7 @@ impl Editor {
             if self.undo && consume(Modifiers::COMMAND, Key::Z) {
                 return Some(("undo", Value::Null));
             }
-            if self.selected.is_some() {
+            if self.selected.is_some() && self.format == Format::Slides {
                 if consume(Modifiers::NONE, Key::Delete) || consume(Modifiers::NONE, Key::Backspace)
                 {
                     return Some(("delete_object", Value::Null));
@@ -928,7 +963,12 @@ impl Editor {
         let Some(texture) = &self.image else {
             return None;
         };
-        let width = (ui.available_width() - 24.0).max(180.0).min(940.0) * self.zoom / 100.0;
+        let limit = if self.format == Format::Slides {
+            940.0
+        } else {
+            700.0
+        };
+        let width = (ui.available_width() - 24.0).clamp(180.0, limit) * self.zoom / 100.0;
         let left = ((ui.available_width() - width) / 2.0).max(0.0);
         let size = vec2(width, width * self.height / self.width);
         let (_, space) = ui.allocate_space(vec2(left + size.x, size.y));
@@ -968,17 +1008,19 @@ impl Editor {
                     Stroke::new(1.5_f32, border),
                     StrokeKind::Inside,
                 );
-                for anchor in [
-                    bounds.left_top(),
-                    bounds.right_top(),
-                    bounds.left_bottom(),
-                    bounds.right_bottom(),
-                ] {
-                    ui.painter().rect_filled(
-                        Rect::from_center_size(anchor, vec2(5.0, 5.0)),
-                        0.0,
-                        border,
-                    );
+                if self.format == Format::Slides {
+                    for anchor in [
+                        bounds.left_top(),
+                        bounds.right_top(),
+                        bounds.left_bottom(),
+                        bounds.right_bottom(),
+                    ] {
+                        ui.painter().rect_filled(
+                            Rect::from_center_size(anchor, vec2(5.0, 5.0)),
+                            0.0,
+                            border,
+                        );
+                    }
                 }
             } else if hit == Some(object.target) {
                 ui.painter().rect_stroke(
@@ -990,6 +1032,7 @@ impl Editor {
             }
         }
         if !self.waiting
+            && self.format == Format::Slides
             && let Some(object) = self
                 .objects
                 .iter()

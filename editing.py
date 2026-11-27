@@ -278,7 +278,7 @@ def format_block(tag, paragraph, runs, style):
                 etree.SubElement(fill, tag + "srgbClr", val=color)
 
 
-def replace_office_blocks(extension, data, changes):
+def replace_office_blocks(extension, data, changes, *, allow_line_breaks=False):
     if not isinstance(changes, list) or not 1 <= len(changes) <= 1000:
         raise ValueError("한 번에 변경할 텍스트 단락은 1~1,000개까지 선택하세요.")
     edits = {}
@@ -297,7 +297,7 @@ def replace_office_blocks(extension, data, changes):
             raise ValueError("글자 색을 확인하세요.")
         if style.keys() - {"bold", "italic", "underline", "align", "size", "font", "color"}:
             raise ValueError("지원하는 단락 서식을 선택하세요.")
-        edits[block_id] = valid_text(change["text"], 20000), style
+        edits[block_id] = valid_text(change["text"], 20000, multiline=allow_line_breaks), style
     parts = {}
     with open_package(data) as archive:
         for number, _, path, root, tag, paragraph, runs in office_blocks(archive, extension):
@@ -318,6 +318,19 @@ def replace_office_blocks(extension, data, changes):
                         run.set(XML_SPACE, "preserve")
             if style:
                 format_block(tag, paragraph, runs, style)
+            if allow_line_breaks:
+                for run in runs:
+                    lines = (run.text or "").split("\n")
+                    if len(lines) < 2:
+                        continue
+                    run.text = lines[0]
+                    current = run
+                    for text in lines[1:]:
+                        line_break = etree.Element(tag + "br")
+                        current.addnext(line_break)
+                        current = etree.Element(tag + "t", {XML_SPACE: "preserve"})
+                        current.text = text
+                        line_break.addnext(current)
             if original != replacement or style:
                 parts[path] = root
         if edits or not parts:

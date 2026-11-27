@@ -354,30 +354,41 @@ impl GitDoc {
         self.form = Some(Form::new(action, title, values));
     }
     fn edit_form(&mut self) {
+        self.open_editor(false);
+    }
+
+    fn open_editor(&mut self, find_only: bool) {
         let page = self.target_page();
         let extension = self
             .record(self.head())
             .map(|row| text(&row["extension"]))
             .unwrap_or("");
-        if extension == "pptx" {
+        let format = match extension {
+            "pptx" => Some(presentation::Format::Slides),
+            "doc" => Some(presentation::Format::Word),
+            "hwp" => Some(presentation::Format::Hangul),
+            _ => None,
+        };
+        if !find_only && let Some(format) = format {
             self.epoch += 1;
             let args = json!({"doc": self.doc, "branch": self.branch, "base": self.head(), "number": page});
             if self.request("deck_open", self.epoch, args) {
                 self.deck = Some(presentation::Editor::new(
                     page,
-                    Id::new(("pptx", self.epoch)),
+                    Id::new(("canvas", self.epoch)),
+                    format,
                 ));
             }
             return;
         }
         let mode = match extension {
-            "docx" => "blocks",
+            "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
             "xlsx" => "cell",
             "pdf" => "page",
             _ => return,
         };
-        let open_blocks = mode == "blocks";
+        let open_blocks = mode == "blocks" && !find_only;
         let sheet_name = self
             .pane
             .sheets
@@ -418,6 +429,7 @@ impl GitDoc {
         );
         if let Some(form) = &mut self.form {
             form.mode = mode.into();
+            form.find_mode = find_only;
             form.sheet = sheet_name;
             form.cell = address;
             form.page = page;
@@ -1088,7 +1100,8 @@ impl GitDoc {
             }
             let edit_label = match extension.as_str() {
                 "pptx" => Some("슬라이드 편집"),
-                "hwp" | "hwpx" | "docx" => Some("텍스트 수정"),
+                "doc" | "hwp" => Some("본문 편집"),
+                "hwpx" | "docx" => Some("텍스트 수정"),
                 "xlsx" => Some("셀 수정"),
                 "pdf" => Some("페이지 도구"),
                 _ => None,
@@ -1097,6 +1110,11 @@ impl GitDoc {
                 && ui.add_enabled(selected > 0 && selected == self.head(), Button::new(label)).clicked()
             {
                 self.edit_form();
+            }
+            if matches!(extension.as_str(), "hwp" | "pptx")
+                && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("찾기·바꾸기")).clicked()
+            {
+                self.open_editor(true);
             }
             if ui.add_enabled(approved && selected!=self.head(),Button::new("이 버전 복원")).clicked() {
                 self.open_form(Action::Restore,"이 버전 복원",json!({"doc":self.doc,"branch":self.branch,"base":self.head(),"version":selected}));

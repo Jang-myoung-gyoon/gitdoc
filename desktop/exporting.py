@@ -12,7 +12,7 @@ from preview import (
 
 OFFICE_FORMATS = {
     "doc": {"docx": "Office Open XML Text", "odt": "writer8"},
-    "docx": {"odt": "writer8"},
+    "docx": {"odt": "writer8", "doc": "MS Word 97"},
     "odt": {"docx": "Office Open XML Text"},
     "ods": {"xlsx": "Calc MS Excel 2007 XML"},
     "odp": {"pptx": "Impress MS PowerPoint 2007 XML"},
