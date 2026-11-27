@@ -335,7 +335,10 @@ impl GitDoc {
             rfd::FileDialog::new()
                 .add_filter(
                     "문서",
-                    &["hwp", "hwpx", "docx", "pdf", "ppt", "pptx", "xls", "xlsx"],
+                    &[
+                        "hwp", "hwpx", "doc", "docx", "docm", "pdf", "ppt", "pptx", "pptm", "xls",
+                        "xlsx", "xlsm", "odt", "ods", "odp",
+                    ],
                 )
                 .pick_file()
         });
@@ -1353,7 +1356,7 @@ impl GitDoc {
                 if let Some(extension) = self
                     .record(self.ids.last().copied().unwrap_or(0))
                     .map(|row| text(&row["extension"]))
-                    && matches!(extension, "xls" | "xlsx")
+                    && matches!(extension, "xls" | "xlsx" | "xlsm")
                 {
                     let sheets = self.pane.data["books"].is_array();
                     if ui

@@ -123,7 +123,7 @@ def xls_sheets(data):
 
 
 def read_workbook(extension, data):
-    source = xlsx_sheets(data) if extension == "xlsx" else xls_sheets(data)
+    source = xls_sheets(data) if extension == "xls" else xlsx_sheets(data)
     sheets = []
     budget = MAX_CELLS
     for sheet in source:

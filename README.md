@@ -41,12 +41,12 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 | --- | --- |
 | PDF | Render and compare pages side by side |
 | HWP, HWPX | Convert to PDF with rhwp |
-| DOCX, PPT, PPTX | Convert to PDF with LibreOffice |
-| XLS, XLSX | Compare cell values, merges, and some formatting by sheet and address. Print-layout preview is also available. |
+| DOC, DOCX, DOCM, ODT, PPT, PPTX, PPTM, ODP, ODS | Convert to PDF with LibreOffice |
+| XLS, XLSX, XLSM | Compare cell values, merges, and some formatting by sheet and address. Print-layout preview is also available. |
 
 The native app renders pages with PDFium and computes visual changes in its Rust worker. The Python bridge supplies cached PDF paths and document metadata. The browser preview uses Poppler's `pdftoppm`. LibreOffice's `soffice` can be found on PATH or in standard installation locations. For Hangul files, install the [rhwp](https://github.com/edwardkim/rhwp) executable on PATH or at `data/tools/rhwp/rhwp` (`rhwp.exe` on Windows). Use `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, and `DOCVERS_RHWP` to supply explicit tool paths.
 
-GitDoc compares pages by page number, so inserting a page can flag later pages as changed. Hangul and Office layout depends on the converter and installed fonts. The spreadsheet view shows values and XLSX formulas, with differences in cell values, merged ranges, and some formatting. Use print-layout preview to review charts and printed pages. Original downloads are available for encrypted files or files that fail to render.
+GitDoc compares pages by page number, so inserting a page can flag later pages as changed. Hangul and Office layout depends on the converter and installed fonts. The spreadsheet view shows values and XLSX formulas, with differences in cell values, merged ranges, and some formatting. Use print-layout preview to review charts and printed pages. Original downloads are available for encrypted files or files that fail to render. GitDoc keeps DOCM, XLSM, and PPTM bytes intact and disables macro execution in the conversion profile. ODS uses page comparison.
 
 ## Automatic version labels
 
@@ -70,7 +70,7 @@ Open **Edit document** from an approved version and enter changes beside the pre
 | DOCX, PPTX | Replace existing text in Word body, tables, headers, footers, and footnotes, or in PowerPoint slides |
 | XLSX | Enter text, a number, or a formula in a cell, or clear the value. Excel recalculates formulas based on workbook settings. |
 | PDF | Rotate a page or add a note annotation |
-| PPT, XLS | Submit a revised file from an external editor |
+| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM | Submit a revised file from an external editor |
 
 [office_oxide](https://github.com/yfedoseev/office_oxide) edits DOCX and PPTX text. GitDoc imports its edited XML when the result matches the expected change and formatting. GitDoc's XML editor handles other cases and XLSX cell edits. A replacement spanning multiple Word or PowerPoint runs takes the formatting of the first character. Review the preview for layout and styling.
 
@@ -81,7 +81,9 @@ Open **Save** to export the selected version. Every supported format can be save
 | Source | Additional editable exports |
 | --- | --- |
 | HWP or HWPX | The other Hangul format |
+| DOC | DOCX and ODT |
 | DOCX | ODT |
+| ODT, ODS, ODP | DOCX, XLSX, and PPTX, respectively |
 | PPT or PPTX | The other PowerPoint format and ODP |
 | XLS or XLSX | The other Excel format and ODS |
 

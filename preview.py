@@ -10,13 +10,17 @@ from threading import BoundedSemaphore
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+from formats import WORKBOOK_EXTENSIONS
 from store import DATABASE, ROOT
 
 CACHE = DATABASE.parent / "previews-v1"
 BUNDLED_BIN = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override"
 HANCOM_FONTS = Path("/Applications/Hancom Office HWP Viewer.app/Contents/Resources/Hnc/Shared/TTF/Install")
-OFFICE_FILTERS = {"docx": "writer_pdf_Export", "ppt": "impress_pdf_Export",
-                  "pptx": "impress_pdf_Export", "xls": "calc_pdf_Export", "xlsx": "calc_pdf_Export"}
+OFFICE_FILTERS = {
+    **dict.fromkeys(("doc", "docx", "docm", "odt"), "writer_pdf_Export"),
+    **dict.fromkeys(("ppt", "pptx", "pptm", "odp"), "impress_pdf_Export"),
+    **dict.fromkeys((*WORKBOOK_EXTENSIONS, "ods"), "calc_pdf_Export"),
+}
 WORKERS = BoundedSemaphore(2)
 MAX_PREVIEW = 100 * 1024 * 1024
 
@@ -87,7 +91,7 @@ def convert(source, destination, extension):
         command = executable("soffice", "DOCVERS_SOFFICE", BUNDLED_BIN / "soffice")
         profile = office_profile(folder)
         options = OFFICE_FILTERS[extension]
-        if extension in ("xls", "xlsx"):
+        if extension in WORKBOOK_EXTENSIONS or extension == "ods":
             options += ':{"SinglePageSheets":{"type":"boolean","value":"true"}}'
         args = [command, f"-env:UserInstallation={profile.as_uri()}", "--headless",
                 "--convert-to", f"pdf:{options}", "--outdir", str(folder), str(source)]

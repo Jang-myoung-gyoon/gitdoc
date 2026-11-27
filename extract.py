@@ -10,8 +10,10 @@ from zipfile import ZipFile
 
 import olefile
 import xlrd
-from defusedxml import ElementTree as xml
+from defusedxml import DefusedXmlException, ElementTree as xml
 from pypdf import PdfReader
+
+from formats import MACRO_CONTENT_TYPES, ODF_MIMETYPES
 
 OLE = bytes.fromhex("D0CF11E0A1B11AE1")
 ZIP_MARKERS = {
@@ -19,6 +21,9 @@ ZIP_MARKERS = {
     "pptx": "ppt/presentation.xml",
     "xlsx": "xl/workbook.xml",
     "hwpx": "Contents/content.hpf",
+    "docm": "word/document.xml",
+    "pptm": "ppt/presentation.xml",
+    "xlsm": "xl/workbook.xml",
 }
 
 
@@ -29,14 +34,34 @@ def matches_format(extension, data):
         with olefile.OleFileIO(io.BytesIO(data)) as container:
             if extension == "hwp":
                 return container.exists("FileHeader") and container.openstream("FileHeader").read(32).startswith(b"HWP Document File")
+            if extension == "doc":
+                return container.exists("WordDocument")
             if extension == "ppt":
                 return container.exists("PowerPoint Document")
             if extension == "xls":
                 return container.exists("Workbook") or container.exists("Book")
-            return extension in ("docx", "pptx", "xlsx") and container.exists("EncryptedPackage")
-    if extension in ZIP_MARKERS:
+            return extension in ZIP_MARKERS and extension != "hwpx" and container.exists("EncryptedPackage")
+    if extension in ZIP_MARKERS or extension in ODF_MIMETYPES:
         with ZipFile(io.BytesIO(data)) as package:
-            return ZIP_MARKERS[extension] in package.namelist()
+            names = package.namelist()
+            if extension in ODF_MIMETYPES:
+                if "mimetype" not in names or "content.xml" not in names:
+                    return False
+                expected = ODF_MIMETYPES[extension]
+                return package.getinfo("mimetype").file_size == len(expected) and package.read("mimetype") == expected
+            marker = ZIP_MARKERS[extension]
+            if marker not in names:
+                return False
+            if extension not in MACRO_CONTENT_TYPES:
+                return True
+            try:
+                types = read_xml(package, "[Content_Types].xml")
+            except (KeyError, xml.ParseError, DefusedXmlException):
+                return False
+            override = types.find(f"./{{*}}Override[@PartName='/{marker}']")
+            default = types.find("./{*}Default[@Extension='xml']")
+            media_type = override if override is not None else default
+            return media_type is not None and media_type.get("ContentType") == MACRO_CONTENT_TYPES[extension]
     return extension == "xls" and data[:2] in (b"\x09\x00", b"\x09\x02", b"\x09\x04", b"\x09\x08")
 
 
@@ -67,14 +92,14 @@ def ordered_parts(package, name, item_kind, attributes):
 def office_lines(extension, data):
     with ZipFile(io.BytesIO(data)) as package:
         marker = ZIP_MARKERS[extension]
-        if extension == "docx":
+        if extension in ("docx", "docm"):
             yield from paragraph_text(read_xml(package, marker))
         elif extension == "hwpx":
             sections = [name for name in package.namelist()
                         if re.fullmatch(r"Contents/section\d+\.xml", name)]
             for name in sorted(sections, key=lambda item: int(re.search(r"\d+", item).group())):
                 yield from paragraph_text(read_xml(package, name))
-        elif extension == "pptx":
+        elif extension in ("pptx", "pptm"):
             for number, (_, path) in enumerate(ordered_parts(package, marker, "sldId", ()), 1):
                 yield f"[슬라이드 {number}]"
                 yield from paragraph_text(read_xml(package, path))
@@ -100,9 +125,20 @@ def office_lines(extension, data):
                         yield f"{sheet}!{cell.get('r')}  {value!r}"
 
 
+def odf_lines(data):
+    with ZipFile(io.BytesIO(data)) as package:
+        content = read_xml(package, "content.xml")
+        namespace = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
+        for node in content.iter():
+            if node.tag in (namespace + "p", namespace + "h"):
+                yield "".join(node.itertext())
+
+
 def extract(extension, data):
     if extension in ZIP_MARKERS:
         yield from office_lines(extension, data)
+    elif extension in ODF_MIMETYPES:
+        yield from odf_lines(data)
     elif extension == "pdf":
         for number, page in enumerate(PdfReader(io.BytesIO(data)).pages, 1):
             lines = (page.extract_text() or "").splitlines()
@@ -143,10 +179,11 @@ def extract(extension, data):
 
                 command = executable("soffice", "DOCVERS_SOFFICE", BUNDLED_BIN / "soffice")
                 profile = office_profile(folder)
+                target = {"doc": "docx", "ppt": "pptx"}[extension]
                 run_converter([command, f"-env:UserInstallation={profile.as_uri()}",
-                               "--headless", "--convert-to", "pptx", "--outdir", directory,
+                               "--headless", "--convert-to", target, "--outdir", directory,
                                str(source)], folder)
-                yield from office_lines("pptx", (folder / "document.pptx").read_bytes())
+                yield from office_lines(target, (folder / f"document.{target}").read_bytes())
 
 
 def extract_for_version(extension, data):

@@ -9,9 +9,10 @@ from pypdf.errors import PyPdfError
 from werkzeug.exceptions import SecurityError
 
 from editing import MODES, read_pdf_notes
+from formats import EXTENSIONS, WORKBOOK_EXTENSIONS
 from preview import PreviewError, page_sizes, preview_path, preview_png
 from workbook import read_workbook
-from uploads import EXTENSIONS, MAX_FILE, prepare_upload
+from uploads import MAX_FILE, prepare_upload
 from workflow import MissingEntity, merge_revision, restore_revision, review_revision, save_document_edit, save_proposal
 from store import (
     DATABASE, VERSION_FIELDS, branch_history, branch_list, create_document, database,
@@ -21,6 +22,7 @@ from store import (
 
 STORE_ID = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
 app = Flask(__name__)
+app.jinja_env.globals.update(extensions=EXTENSIONS, workbook_extensions=WORKBOOK_EXTENSIONS)
 app.config.update(SECRET_KEY=os.urandom(32), MAX_CONTENT_LENGTH=MAX_FILE + 256 * 1024,
                   TRUSTED_HOSTS=["localhost", "127.0.0.1"], SESSION_COOKIE_SAMESITE="Strict")
 @app.before_request
@@ -321,7 +323,7 @@ def pdf_notes(document_id, version_id, page):
 def workbook(document_id, version_id):
     with database() as db:
         item = version(db, document_id, version_id, "extension, content")
-    if item["extension"] not in ("xls", "xlsx"):
+    if item["extension"] not in WORKBOOK_EXTENSIONS:
         abort(404)
     try:
         sheets = read_workbook(item["extension"], item["content"])
@@ -360,7 +362,7 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
         return jsonify(error=str(error)), 422
     return jsonify(
         pages=count,
-        sheet_widths=sizes if item["extension"] in ("xls", "xlsx") else [],
+        sheet_widths=sizes if item["extension"] in WORKBOOK_EXTENSIONS else [],
         pdf=url_for("preview_pdf", document_id=document_id, version_id=version_id),
     )
 

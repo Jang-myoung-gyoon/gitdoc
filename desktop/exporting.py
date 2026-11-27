@@ -3,7 +3,6 @@
 import os
 import tempfile
 from pathlib import Path
-from zipfile import BadZipFile, ZipFile
 
 from extract import matches_format
 from preview import (
@@ -12,16 +11,15 @@ from preview import (
 )
 
 OFFICE_FORMATS = {
+    "doc": {"docx": "Office Open XML Text", "odt": "writer8"},
     "docx": {"odt": "writer8"},
+    "odt": {"docx": "Office Open XML Text"},
+    "ods": {"xlsx": "Calc MS Excel 2007 XML"},
+    "odp": {"pptx": "Impress MS PowerPoint 2007 XML"},
     "ppt": {"pptx": "Impress MS PowerPoint 2007 XML", "odp": "impress8"},
     "pptx": {"ppt": "MS PowerPoint 97", "odp": "impress8"},
     "xls": {"xlsx": "Calc MS Excel 2007 XML", "ods": "calc8"},
     "xlsx": {"xls": "MS Excel 97", "ods": "calc8"},
-}
-ODF_MIMETYPES = {
-    "odt": b"application/vnd.oasis.opendocument.text",
-    "odp": b"application/vnd.oasis.opendocument.presentation",
-    "ods": b"application/vnd.oasis.opendocument.spreadsheet",
 }
 HANCOM_FORMATS = {"hwp": {"hwpx": "export-hwpx"}, "hwpx": {"hwp": "convert"}}
 
@@ -53,18 +51,9 @@ def convert_format(extension, target, data):
                            "--convert-to", f"{target}:{options}", "--outdir", str(folder), str(source)], folder)
         if not destination.is_file() or not 0 < destination.stat().st_size <= MAX_PREVIEW:
             raise PreviewError("변환한 문서를 만들 수 없거나 파일 크기 한도를 초과했습니다.")
-        if target in ODF_MIMETYPES:
-            try:
-                with ZipFile(destination) as archive:
-                    valid = archive.read("mimetype") == ODF_MIMETYPES[target]
-            except (BadZipFile, KeyError) as error:
-                raise PreviewError("변환한 문서의 형식이 올바르지 않습니다.") from error
-            if valid:
-                return destination.read_bytes()
-        else:
-            output = destination.read_bytes()
-            if matches_format(target, output):
-                return output
+        output = destination.read_bytes()
+        if matches_format(target, output):
+            return output
         raise PreviewError("변환한 문서의 형식이 올바르지 않습니다.")
 
 

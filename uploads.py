@@ -5,9 +5,9 @@ from pathlib import Path
 from zipfile import BadZipFile
 
 from extract import extract_for_version, matches_format
+from formats import EXTENSIONS
 
 MAX_FILE = 30 * 1024 * 1024
-EXTENSIONS = ("hwp", "hwpx", "docx", "pdf", "ppt", "pptx", "xls", "xlsx")
 
 
 def prepare_upload(name, data):

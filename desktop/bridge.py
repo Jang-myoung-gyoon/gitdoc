@@ -9,6 +9,7 @@ import pypdfium2_raw
 
 from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
+from formats import WORKBOOK_EXTENSIONS
 from preview import page_dimensions, page_sizes, preview_path
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
@@ -74,7 +75,7 @@ def view(doc, ids, mode="auto"):
     selected = records[-1]
     result = {"versions": [row["version_label"] for row in records], "diff": "\n".join(diff),
               "filename": selected["filename"], "save_as": export_formats(selected["extension"])}
-    if mode == "auto" and all(row["extension"] in ("xls", "xlsx") for row in records):
+    if mode == "auto" and all(row["extension"] in WORKBOOK_EXTENSIONS for row in records):
         try:
             books = [read_workbook(row["extension"], content(doc, row["id"])) for row in records]
         except Exception as error:

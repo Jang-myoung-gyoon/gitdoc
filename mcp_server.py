@@ -6,6 +6,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 from desktop_link import desktop_url, document_path
+from formats import WORKBOOK_EXTENSIONS
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch, find_document, initialize, new_branch,
     find_version, merge_state, search_documents as find_documents, text_diff,
@@ -53,7 +54,7 @@ def difference(before, after):
 
 
 def sheet_locations(lines, before, after):
-    if before["extension"] not in ("xls", "xlsx"):
+    if before["extension"] not in WORKBOOK_EXTENSIONS:
         return []
     locations = {}
     for line in lines:

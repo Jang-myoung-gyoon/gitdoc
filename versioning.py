@@ -3,6 +3,8 @@
 import re
 from collections import Counter
 
+from formats import WORKBOOK_EXTENSIONS
+
 INITIAL_VERSION = "v1.0.0"
 CELL_ADDRESS = re.compile(r"^(.+)!([A-Z]{1,3}[1-9]\d*)  ")
 
@@ -17,7 +19,7 @@ def classify_change(extension, before_text, after_text, *, identical=False):
         return "patch", "identical"
     if not before_text or not after_text:
         return "patch", "unavailable"
-    if extension in ("xls", "xlsx"):
+    if extension in WORKBOOK_EXTENSIONS:
         before, after = cell_values(before_text), cell_values(after_text)
         changed = sum(before.get(key) != after.get(key) for key in before.keys() | after.keys())
         basis = "cells"
