@@ -34,8 +34,12 @@ impl Bridge {
         let (output, replies) = mpsc::channel();
         std::thread::spawn(move || {
             let mut command = Command::new(executable);
+            // A release package ignores the user's own Python settings and packages, and writes no bytecode.
+            if root.join("PACKAGED").is_file() {
+                command.args(["-E", "-s", "-B"]);
+            }
             command
-                .current_dir(root)
+                .current_dir(&root)
                 .args(["-m", "desktop.bridge"])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

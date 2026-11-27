@@ -18,7 +18,7 @@ from pypdfium2 import PdfDocument, PdfiumError, raw
 from delimited import SEPARATORS, normalized_table
 from font_policy import font_directories, font_environment, generic_fallback, office_replacements, policy_key
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
-from store import DATABASE, ROOT
+from store import DATA, DATABASE
 
 CACHE = DATABASE.parent / "previews-v2"
 BUNDLED_BIN = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override"
@@ -96,7 +96,7 @@ def office_profile(folder, replacements=None):
 
 
 def rhwp_command():
-    return executable("rhwp", "DOCVERS_RHWP", ROOT / "data/tools/rhwp/rhwp")
+    return executable("rhwp", "DOCVERS_RHWP", DATA / "tools/rhwp/rhwp")
 
 
 def convert(source, destination, extension, *, page_range=None, hidden_slides=False):

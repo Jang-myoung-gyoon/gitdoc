@@ -14,7 +14,7 @@ from PIL import Image
 from pypdfium2 import PdfDocument, PdfiumError, raw
 
 from preview import PDFIUM_LOCK, PreviewError, executable, preview_png, run_converter
-from store import ROOT
+from store import ROOT, packaged_tool
 
 OCR_WORKERS = BoundedSemaphore(1)
 
@@ -123,7 +123,7 @@ def tesseract_lines(command, image, size):
 
 
 def recognize(path, number):
-    helper = ROOT / ".build/GitDoc.app/Contents/MacOS/gitdoc-ocr"
+    helper = packaged_tool("gitdoc-ocr") or ROOT / ".build/GitDoc.app/Contents/MacOS/gitdoc-ocr"
     try:
         command = str(helper) if helper.is_file() else executable("tesseract", "DOCVERS_TESSERACT", helper)
     except PreviewError:

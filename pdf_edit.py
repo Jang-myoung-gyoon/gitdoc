@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from store import PACKAGED, packaged_tool
+
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT / "desktop" / "native"
 INVALID = "PDF 구조를 읽을 수 없습니다. 원본을 확인하세요."
@@ -21,6 +23,11 @@ def editor_executable():
             raise ValueError("DOCVERS_PDF_EDITOR에 지정된 실행 파일을 찾을 수 없습니다.")
         return editor
 
+    if PACKAGED:
+        editor = packaged_tool("gitdoc-pdf")
+        if editor is None:
+            raise ValueError("PDF 편집 도구를 찾을 수 없습니다. GitDoc을 다시 설치하세요.")
+        return editor
     suffix = ".exe" if os.name == "nt" else ""
     target = ROOT / os.environ.get("CARGO_TARGET_DIR", str(PROJECT / "target"))
     editor = target / "debug" / ("gitdoc-pdf" + suffix)

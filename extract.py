@@ -181,8 +181,11 @@ def extract(extension, data):
             source.write_bytes(data)
             if extension == "hwp":
                 command = Path(sys.executable).with_name("hwp5txt.exe" if os.name == "nt" else "hwp5txt")
+                # Release packages ship the converter module without its launcher script.
+                command = [str(command)] if command.is_file() else [
+                    sys.executable, "-c", "from hwp5.hwp5txt import main; main()"]
                 try:
-                    result = subprocess.run([str(command), str(source)], capture_output=True,
+                    result = subprocess.run([*command, str(source)], capture_output=True,
                                             check=True, timeout=20)
                 except (OSError, subprocess.SubprocessError):
                     from preview import rhwp_command, run_converter
