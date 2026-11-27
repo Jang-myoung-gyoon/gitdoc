@@ -13,6 +13,7 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 from lxml import etree
+from office_oxide import EditableDocument, OfficeOxideError
 from pypdf import PdfReader, PdfWriter
 from pypdf.annotations import Text
 from pypdf.errors import PyPdfError
@@ -51,7 +52,9 @@ def rewrite_package(package, parts):
     with ZipFile(output, "w") as updated:
         for entry in package.infolist():
             if entry.filename in parts:
-                data = etree.tostring(parts[entry.filename], encoding="UTF-8", xml_declaration=True)
+                part = parts[entry.filename]
+                data = part if isinstance(part, bytes) else etree.tostring(
+                    part, encoding="UTF-8", xml_declaration=True)
             else:
                 data = package.read(entry)
             updated.writestr(copy(entry), data)
@@ -115,6 +118,28 @@ def edit_runs(runs, find, replacement, limit):
     return len(matches)
 
 
+def oxide_text_parts(extension, data, find, replacement, expected, count):
+    """Use the Rust editor's XML when it preserves GitDoc's edit and formatting."""
+    try:
+        document = EditableDocument.from_bytes(data, extension)
+        try:
+            if document.replace_text(find, replacement) != count:
+                return expected
+            edited = document.to_bytes()
+        finally:
+            document.close()
+        with open_package(edited) as archive:
+            parts = {}
+            for name, reference in expected.items():
+                candidate = parse_part(archive, name)
+                if etree.tostring(candidate, method="c14n") != etree.tostring(reference, method="c14n"):
+                    return expected
+                parts[name] = archive.read(name)
+            return parts
+    except (OfficeOxideError, BadZipFile, KeyError, ValueError, etree.LxmlError):
+        return expected
+
+
 def office_replace(extension, data, find, replacement):
     parts = {}
     count = 0
@@ -143,6 +168,7 @@ def office_replace(extension, data, find, replacement):
                 count += changed
         if not count:
             raise ValueError("편집 가능한 텍스트에서 찾을 문구가 없습니다.")
+        parts = oxide_text_parts(extension, data, find, replacement, parts, count)
         return rewrite_package(archive, parts)
 
 
