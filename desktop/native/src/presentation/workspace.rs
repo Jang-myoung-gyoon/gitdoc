@@ -499,7 +499,14 @@ mod tests {
             frame(&ctx, &mut editor, size, vec![]);
             let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
             find_text(&ui.shapes, extension);
-            let table = find_text(&ui.shapes, "표");
+            let table = find_text(
+                &ui.shapes,
+                if format == Format::Slides {
+                    "표"
+                } else {
+                    "▦ 표"
+                },
+            );
             assert!(click(&ctx, &mut editor, size, table).is_none());
             let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
             let insert = find_text(&menu.shapes, "표 삽입");
@@ -508,13 +515,100 @@ mod tests {
                                  && params["value"] == json!([3, 4])));
             editor.waiting = false;
             let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
-            let shape = find_text(&ui.shapes, "도형");
+            let shape = find_text(
+                &ui.shapes,
+                if format == Format::Slides {
+                    "도형"
+                } else {
+                    "◇ 도형"
+                },
+            );
             assert!(click(&ctx, &mut editor, size, shape).is_none());
             let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
             let arrow = find_text(&menu.shapes, "화살표");
             assert!(matches!(click(&ctx, &mut editor, size, arrow),
                              Some(Command::Page(params)) if params["operation"] == "shape"
                                  && params["value"] == "arrow"));
+        }
+    }
+
+    #[test]
+    fn shape_toolbar_selects_the_second_duplicate_and_respects_the_contextual_order() {
+        for (format, size, title, second_shape) in [
+            (
+                Format::Word,
+                vec2(1080.0, 820.0),
+                "도형 서식",
+                "사각형 · 본문 문단 4 · 32×18 mm",
+            ),
+            (
+                Format::Hangul,
+                vec2(560.0, 720.0),
+                "도형 도구",
+                "사각형 · 구역 1 · 문단 4 · 32×18 mm",
+            ),
+        ] {
+            let ctx = Context::default();
+            let mut editor = fixture(format, &ctx);
+            editor.edit_digest = "snapshot".into();
+            editor.dirty = true;
+            editor.undo = true;
+            editor.page_shapes = serde_json::from_value(json!([
+                {"address": [0, 2], "kind": "rectangle", "size": [32, 18],
+                 "move_up": false, "move_down": true, "resize": true},
+                {"address": [0, 3], "kind": "rectangle", "size": [32, 18],
+                 "move_up": true, "move_down": false, "resize": true}
+            ]))
+            .unwrap();
+            frame(&ctx, &mut editor, size, vec![]);
+            let (initial, _) = frame(&ctx, &mut editor, size, vec![]);
+            find_text(&initial.shapes, title);
+            let select = find_text(&initial.shapes, "도형 선택");
+            assert!(click(&ctx, &mut editor, size, select).is_none());
+            let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
+            let second = find_text(&menu.shapes, second_shape);
+            assert!(click(&ctx, &mut editor, size, second).is_none());
+
+            let (selected, _) = frame(&ctx, &mut editor, size, vec![]);
+            let arrange = find_text(&selected.shapes, "배치");
+            let dimensions = find_text(&selected.shapes, "크기");
+            let reading_order =
+                |a: Pos2, b: Pos2| a.y + 10.0 < b.y || ((a.y - b.y).abs() <= 10.0 && a.x < b.x);
+            if format == Format::Word {
+                assert!(reading_order(arrange, dimensions));
+            } else {
+                assert!(reading_order(dimensions, arrange));
+            }
+            let down = find_text(&selected.shapes, "↓ 문단 아래로");
+            assert!(click(&ctx, &mut editor, size, down).is_none());
+            let up = find_text(&selected.shapes, "↑ 문단 위로");
+            assert!(matches!(click(&ctx, &mut editor, size, up),
+                             Some(Command::Page(params)) if params["operation"] == "shape_up"
+                                 && params["value"] == json!({"address": [0, 3], "digest": "snapshot"})));
+            editor.waiting = false;
+            editor.shape_size = [46, 22];
+            let (selected, _) = frame(&ctx, &mut editor, size, vec![]);
+            let apply = find_text(&selected.shapes, "크기 적용");
+            assert!(matches!(click(&ctx, &mut editor, size, apply),
+                             Some(Command::Page(params)) if params["operation"] == "shape_size"
+                                 && params["value"]["size"] == json!([46, 22])
+                                 && params["value"]["address"] == json!([0, 3])));
+            editor.waiting = false;
+            let (selected, _) = frame(&ctx, &mut editor, size, vec![]);
+            let delete = find_text(&selected.shapes, "도형 삭제");
+            assert!(matches!(click(&ctx, &mut editor, size, delete),
+                             Some(Command::Page(params)) if params["operation"] == "delete_shape"
+                                 && params["value"]["address"] == json!([0, 3])));
+            editor.waiting = false;
+            let undo = Event::Key {
+                key: Key::Z,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            };
+            assert!(matches!(frame(&ctx, &mut editor, size, vec![undo]).1,
+                             Some(Command::Page(params)) if params["operation"] == "undo"));
         }
     }
 
@@ -546,6 +640,7 @@ mod tests {
             ];
             frame(&ctx, &mut editor, size, vec![]);
             let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            find_text(&ui.shapes, "표 레이아웃");
             let tables = find_text(&ui.shapes, menu_name);
             assert!(click(&ctx, &mut editor, size, tables).is_none());
             let (menu, _) = frame(&ctx, &mut editor, size, vec![]);

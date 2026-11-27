@@ -161,6 +161,8 @@ Open **본문 편집** in DOC, DOCX, HWP, or HWPX. Use **표** to select 1–12 
 
 In HWP and HWPX, click a table or select it from **기존 표**. GitDoc outlines the selection. In DOC and DOCX, use **문서 표** to select a top-level body table by its order, dimensions, and text. **표 전체 삭제** removes the selected table and its contents. Undo is available before saving.
 
+For existing standalone inline shapes, open **도형 선택** under **도형 서식** in Word documents or **도형 도구** in Hangul documents. Pick the shape by paragraph and size. Move it one paragraph up or down where available, enter its width and height in millimeters, or delete it. Undo is available before saving. Floating and grouped shapes require additional support. Rotation and resizing rotated shapes are outside these controls.
+
 DOC uses LibreOffice to convert to DOCX for editing and back to DOC when saving. HWP and HWPX use rhwp with table and shape insertion support. HWP triangles and right arrows use editable, closed HWPX polygons that rhwp saves back to HWP. Legacy format conversions can change existing layout or formatting. For direct text entry, the canvas uses the font, size, and color from the preview. Unavailable fonts follow the document font substitution rules.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. Password-protected and signed originals cannot be edited.

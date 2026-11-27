@@ -148,6 +148,77 @@ class DocumentObjectTests(unittest.TestCase):
                 self.assertEqual(self.table_sizes(extension, new["content"]), [(3, 4)])
                 self.assertEqual(get_preview_info(document_id, result["id"], added)["page_counts"], [1, 1])
 
+    def test_existing_adjacent_shapes_are_edited_by_source_address(self):
+        for extension in ("doc", "docx", "hwp", "hwpx"):
+            with self.subTest(extension=extension):
+                self.check_shape_edits(extension)
+
+    def check_shape_edits(self, extension):
+        path = self.folder / f"sample.{extension}"
+        version = register_document(str(path), f"Adjacent shapes {extension}")["version"]
+        document, original = version["document_id"], version["id"]
+        session = CanvasSession()
+        self.addCleanup(session.close)
+        session.open(document, "main", original, 1)
+        session.page(number=1, operation="table", value=[2, 3])
+        for kind in ("rectangle", "rectangle", "arrow"):
+            session.page(number=1, operation="shape", value=kind)
+        base = session.save("Create a table and three adjacent shapes", 1)["id"]
+        review_revision(document, base, "approve", original)
+        before = session.open(document, "main", base, 1)
+        self.assertEqual(len(before["shapes"]), 3)
+        old_image = self.image(before)
+        rectangles = [item for item in before["shapes"] if item["kind"] == "rectangle"]
+        self.assertEqual(len(rectangles), 2)
+        self.assertEqual(rectangles[0]["size"], rectangles[1]["size"])
+
+        def action(result, address, operation, **extra):
+            return session.page(number=1, operation=operation,
+                                value={"digest": result["edit_digest"], "address": address, **extra})
+
+        first, second = [item["address"] for item in rectangles]
+        with self.assertRaises(ValueError):
+            action(before, second, "shape_size", size=[40, 900])
+        size = [45, 22]
+        resized = action(before, second, "shape_size", size=size)
+        edits = {item["address"][1]: item["size"] for item in resized["shapes"]}
+        self.assertEqual((edits[first[1]], edits[second[1]]), (rectangles[0]["size"], size))
+        self.assertIsNotNone(ImageChops.difference(self.image(resized), old_image).getbbox())
+        with self.assertRaises(ValueError):
+            action(before, second, "delete_shape")
+
+        moved = action(resized, second, "shape_up")
+        self.assertEqual(next(item["address"] for item in moved["shapes"] if item["size"] == size), first)
+        undone = session.page(number=1, operation="undo")
+        self.assertEqual(next(item["address"] for item in undone["shapes"] if item["size"] == size), second)
+        redone = session.page(number=1, operation="redo")
+        self.assertEqual(redone["shapes"], moved["shapes"])
+        updated = session.save("Resize and move the chosen rectangle", 1)["id"]
+        review_revision(document, updated, "approve", base)
+        reopened = session.open(document, "main", updated, 1)
+        self.assertEqual(next(item["address"] for item in reopened["shapes"] if item["size"] == size), first)
+        unchanged = [item for item in reopened["shapes"] if item["address"] != first]
+        removed = action(reopened, first, "delete_shape")
+        self.assertEqual([(item["kind"], item["size"]) for item in unchanged],
+                         [(item["kind"], item["size"]) for item in removed["shapes"]])
+        saved = session.save("Remove the chosen rectangle", 1)
+        self.assertEqual(saved["status"], "pending")
+        review_revision(document, saved["id"], "approve", updated)
+        self.assertEqual(session.open(document, "main", saved["id"], 1)["shapes"], removed["shapes"])
+
+        with store.database(readonly=True) as db:
+            source = store.find_version(db, document, original, "content")
+            base_record = store.find_version(db, document, base, "content, extracted")
+            final = store.find_version(db, document, saved["id"], "content, extension, extracted")
+        self.assertEqual(source["content"], path.read_bytes())
+        self.assertEqual(final["extension"], extension)
+        self.assertEqual(self.table_sizes(extension, base_record["content"]), [(2, 3)])
+        self.assertEqual(self.table_sizes(extension, final["content"]), [(2, 3)])
+        self.assertIn("GitDoc object demo", final["extracted"])
+        self.assertEqual(get_preview_info(document, saved["id"], base)["page_counts"], [1, 1])
+        _, page = render_document_page(document, saved["id"])
+        self.assertEqual(page.to_image_content().mimeType, "image/png")
+
     @staticmethod
     def table_sizes(extension, data):
         if extension in ("hwp", "hwpx"):

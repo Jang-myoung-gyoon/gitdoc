@@ -18,6 +18,7 @@ from desktop.document_objects import (
 )
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
+from desktop.shape_editor import apply_shape, prepare_legacy_shapes, shape_catalog
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
 from page_text import embedded_text
 from preview import PreviewError, page_dimensions, preview_path, preview_png, rhwp_command, run_converter
@@ -25,6 +26,9 @@ from uploads import MAX_FILE
 
 HANGUL_EXTENSIONS = ("hwp", "hwpx")
 MAX_HISTORY = 128 * 1024 * 1024
+SHAPE_EDITS = ("delete_shape", "shape_up", "shape_down", "shape_size")
+# HWP 5 FileHeader properties: password, distribution, DRM and certificate flags.
+HWP_READ_ONLY = sum(1 << bit for bit in (1, 2, 4, 7, 8, 9, 10))
 
 
 def normalized(text):
@@ -245,6 +249,13 @@ class PagedEditor:
         self.page_count = 0
         self.hangul_anchor = None
         self.tables = []
+        self.shapes = []
+        self.shape_xml = None
+        self.hwp_shapes_allowed = True
+        if extension == "hwp":
+            with olefile.OleFileIO(io.BytesIO(data)) as document:
+                header = document.openstream("FileHeader").read(40)
+                self.hwp_shapes_allowed = len(header) == 40 and not int.from_bytes(header[36:40], "little") & HWP_READ_ONLY
 
     @property
     def data(self):
@@ -264,38 +275,46 @@ class PagedEditor:
         count = len(sizes)
         number = max(1, min(count, number))
         width, height = sizes[number-1]
+        texts, locations, anchor = self.texts, self.locations, self.hangul_anchor
+        shapes, shape_xml = self.shapes, self.shape_xml
+        changed = key != self.current_key
         with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
             folder = Path(work)
             if extension in HANGUL_EXTENSIONS:
                 source = folder/f"document.{extension}"
                 source.write_bytes(data)
-                if key != self.current_key:
-                    self.texts = dict(hwp_paragraphs(hangul_xml(source)))
+                if changed:
+                    content = hangul_xml(source)
+                    texts = dict(hwp_paragraphs(content))
+                    shapes = shape_catalog(content, hangul=True) if self.hwp_shapes_allowed else []
+                    shape_xml = content if shapes and extension == "hwp" else None
                 placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number-1), "--json"], folder))["pages"][0]
                 section = placement["section"]
-                self.hangul_anchor = next(
+                anchor = next(
                     ((section, item["paraIndex"])
                      for column in placement["columns"] for item in column["items"]
                      if "paraIndex" in item and not item.get("isEndnote")
-                     and (section, item["paraIndex"]) in self.texts),
-                    (section, 0) if count == 1 and (section, 0) in self.texts else None)
-                objects, tables = hwp_locations(source, number, placement, self.texts)
+                     and (section, item["paraIndex"]) in texts),
+                    (section, 0) if count == 1 and (section, 0) in texts else None)
+                objects, tables = hwp_locations(source, number, placement, texts)
             else:
-                if key != self.current_key:
-                    self.locations = word_locations(data, pdf, count)
+                if changed:
+                    locations = word_locations(data, pdf, count)
                     tables = word_tables(data)
+                    shapes = shape_catalog(data, hangul=False)
                 else:
                     tables = self.tables
-                objects = self.locations[number-1]
+                objects = locations[number-1]
         png = Path(self.directory.name)/"document.png"
         png.write_bytes(preview_png(pdf, number, prefer_pdfium=True))
         fonts = use_rendered_fonts(objects, pdf, number, Path(self.directory.name) / "fonts")
         self.current_key = key
         self.page_objects = objects
         self.page_count = count
-        self.tables = tables
+        self.tables, self.shapes, self.shape_xml = tables, shapes, shape_xml
+        self.texts, self.locations, self.hangul_anchor = texts, locations, anchor
         return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
-                "objects": objects, "tables": tables, "image": str(png), "fonts": fonts}
+                "objects": objects, "tables": tables, "shapes": shapes, "image": str(png), "fonts": fonts}
 
     def page(self, number, operation=None, text_edit=None, target=None, value=None, **_):
         index = self.position
@@ -323,6 +342,21 @@ class PagedEditor:
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
 
     def apply(self, source, operation, text_edit, target, value):
+        if operation in SHAPE_EDITS:
+            address = value.get("address") if isinstance(value, dict) else None
+            if (text_edit or not isinstance(address, list) or len(address) != 2
+                    or any(type(i) is not int for i in address) or value.get("digest") != self.current_key
+                    or not any(shape["address"] == address for shape in self.shapes)):
+                raise ValueError("편집할 도형을 다시 선택하세요.")
+            size = value.get("size")
+            if (operation == "shape_size" and (not isinstance(size, list) or len(size) != 2
+                    or not all(type(number) is int and 2 <= number <= limit for number, limit in zip(size, (180, 250))))):
+                raise ValueError("도형 너비는 2~180 mm, 높이는 2~250 mm로 입력하세요.")
+            changed = apply_shape(self.shape_xml if self.extension == "hwp" else source,
+                                  address, operation, size, hangul=self.extension in HANGUL_EXTENSIONS)
+            if self.extension == "hwp":
+                return convert_format("hwpx", "hwp", changed)
+            return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
         if operation == "delete_table":
             address = value.get("address") if isinstance(value, dict) else None
             if (text_edit or not isinstance(address, list) or any(type(i) is not int for i in address)
