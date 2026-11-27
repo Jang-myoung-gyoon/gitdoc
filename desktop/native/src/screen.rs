@@ -33,11 +33,15 @@ fn status(value: &Value) -> &'static str {
     }
 }
 
-fn library_heading(ui: &mut Ui) -> Response {
+fn library_heading(ui: &mut Ui) -> (Response, Response) {
+    ui.heading("문서함");
     ui.horizontal_wrapped(|ui| {
-        ui.heading("문서함");
-        ui.button("＋ 문서 등록")
-            .on_hover_text("파일을 선택해 문서함에 등록합니다.")
+        (
+            ui.button("＋ 문서 등록")
+                .on_hover_text("파일을 선택해 문서함에 등록합니다."),
+            ui.button("＋ 새 문서")
+                .on_hover_text("빈 문서를 만들어 문서함에 추가합니다."),
+        )
     })
     .inner
 }
@@ -53,6 +57,7 @@ fn saved_message(result: &Value) -> &'static str {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Action {
     Register,
+    CreateBlank,
     Branch,
     Submit,
     Edit,
@@ -397,7 +402,10 @@ impl GitDoc {
 
     fn open_editor_form(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
+        let extension = self
+            .record(self.head())
+            .map(|row| text(&row["extension"]))
+            .unwrap_or("");
         let mode = match extension {
             "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
@@ -564,11 +572,13 @@ impl GitDoc {
                     self.pane.index_failures += pages.saturating_sub(self.pane.indexed_through);
                     self.pane.indexed_through = pages;
                 }
-                if matches!(reply.op, "edit" | "rewind" | "edit_contents")
-                    && let Some(form) = self
-                        .form
-                        .as_mut()
-                        .filter(|form| form.submitting || form.mode == "blocks")
+                if matches!(
+                    reply.op,
+                    "edit" | "rewind" | "edit_contents" | "create_blank"
+                ) && let Some(form) = self
+                    .form
+                    .as_mut()
+                    .filter(|form| form.submitting || form.mode == "blocks")
                 {
                     form.submitting = false;
                     form.error = Some(error);
@@ -721,6 +731,13 @@ impl GitDoc {
                 self.comparison_anchor = (ids[0] != ids[1]).then(|| ids[0]);
                 self.comparison = result;
                 self.open_view(ids, Destination::default());
+            }
+            "create_blank" => {
+                self.form = None;
+                self.query.clear();
+                self.refresh();
+                self.open_doc(id(&result["document_id"]), Destination::default());
+                self.notify("빈 문서를 만들었습니다.", false);
             }
             "register" => {
                 self.query.clear();
@@ -876,8 +893,15 @@ impl GitDoc {
                 if self.deck.is_some() {
                     ui.disable();
                 }
-                if library_heading(ui).clicked() {
+                let (register, blank) = library_heading(ui);
+                if register.clicked() {
                     self.register_form(None);
+                }
+                if blank.clicked() {
+                    self.open_form(Action::CreateBlank, "새 문서", json!({}));
+                    if let Some(form) = &mut self.form {
+                        form.kind = "docx".into();
+                    }
                 }
                 let search =
                     ui.add(TextEdit::singleline(&mut self.query).hint_text("제목 또는 파일명"));
@@ -2039,13 +2063,24 @@ impl GitDoc {
                         form.file = Some(path);
                     }
                 }
-                if matches!(form.action, Action::Branch | Action::Register) {
-                    ui.label(if form.action == Action::Register {
+                if matches!(form.action, Action::Branch | Action::Register | Action::CreateBlank) {
+                    ui.label(if matches!(form.action, Action::Register | Action::CreateBlank) {
                         "문서 제목"
                     } else {
                         "브랜치 이름"
                     });
                     ui.text_edit_singleline(&mut form.name);
+                }
+                if form.action == Action::CreateBlank {
+                    ui.label("파일 형식");
+                    ComboBox::from_id_salt("blank-format")
+                        .selected_text(form.kind.to_ascii_uppercase())
+                        .show_ui(ui, |ui| {
+                            for (name, label) in [("docx", "DOCX · 문서"), ("pptx", "PPTX · 프레젠테이션"),
+                                                  ("xlsx", "XLSX · 스프레드시트"), ("pdf", "PDF · 페이지")] {
+                                ui.selectable_value(&mut form.kind, name.into(), label);
+                            }
+                        });
                 }
                 if form.action == Action::Rewind {
                     ui.label(format!("{} 브랜치의 확정본을 {}으로 옮깁니다.",
@@ -2167,7 +2202,7 @@ impl GitDoc {
                     form.action,
                     Action::Submit | Action::Merge | Action::Restore
                 );
-                let required_name = matches!(form.action, Action::Register | Action::Branch);
+                let required_name = matches!(form.action, Action::Register | Action::CreateBlank | Action::Branch);
                 let mut submit_from_reason = false;
                 if required_reason || matches!(form.action, Action::Edit | Action::Approve | Action::Reject) {
                     let label = ui.label(if required_reason {
@@ -2194,6 +2229,7 @@ impl GitDoc {
                 ui.horizontal(|ui| {
                     save = ui.add_enabled(valid, Button::new(match form.action {
                         Action::Edit => "수정안 저장",
+                        Action::CreateBlank => "만들기",
                         _ => "확인",
                     })).clicked() || valid && submit_from_reason;
                     cancel = ui.button("취소").clicked();
@@ -2219,6 +2255,11 @@ impl GitDoc {
                 Action::Register => {
                     args["title"] = json!(form.name);
                     "register"
+                }
+                Action::CreateBlank => {
+                    args["title"] = json!(form.name);
+                    args["extension"] = json!(form.kind);
+                    "create_blank"
                 }
                 Action::Branch => {
                     args["name"] = json!(form.name);
@@ -2270,7 +2311,10 @@ impl GitDoc {
             ) {
                 args["reason"] = json!(form.reason);
             }
-            if matches!(form.action, Action::Edit | Action::Rewind) {
+            if matches!(
+                form.action,
+                Action::Edit | Action::Rewind | Action::CreateBlank
+            ) {
                 let sent = self.request(operation, 0, args);
                 if let Some(form) = &mut self.form {
                     form.submitting = sent;
@@ -2408,7 +2452,7 @@ fn sheet_changes(books: &[Value], names: &[String]) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     #[test]
-    fn library_register_button_responds_at_narrow_width() {
+    fn library_create_button_responds_at_narrow_width() {
         let ctx = Context::default();
         let mut clicked = false;
         let mut position = Pos2::ZERO;
@@ -2421,7 +2465,7 @@ mod tests {
                 },
                 |ctx| {
                     CentralPanel::default().show(ctx, |ui| {
-                        let response = library_heading(ui);
+                        let (_, response) = library_heading(ui);
                         clicked = response.clicked();
                         position = response.rect.center();
                     });
@@ -2432,7 +2476,7 @@ mod tests {
         let (_, point, output) = frame(vec![]);
         assert!(point.x < 220.0);
         assert!(output.shapes.iter().any(|shape| {
-            matches!(&shape.shape, epaint::Shape::Text(text) if text.galley.job.text == "＋ 문서 등록")
+            matches!(&shape.shape, epaint::Shape::Text(text) if text.galley.job.text == "＋ 새 문서")
         }));
         let mouse = |pressed| Event::PointerButton {
             pos: point,
