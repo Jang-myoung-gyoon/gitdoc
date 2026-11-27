@@ -8,6 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import pypdfium2_raw
+from pypdf.errors import PyPdfError
+from pypdfium2 import PdfiumError
 
 from browser_viewer import viewer_url, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
@@ -16,14 +18,14 @@ from desktop.exporting import convert_format, export_formats, write_export
 from editing import editable_office_blocks, read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
-from page_alignment import comparison_pages, footer_regions
+from page_alignment import comparison_pages, footer_regions, reused_pages
 from page_text import page_text
-from preview import CACHE, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
+from preview import CACHE, PreviewError, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
     find_document, find_version, first_parent_ids, initialize, merge_state, new_branch, search_documents, text_diff,
 )
-from uploads import load_local_file
+from uploads import load_local_file, prepare_upload
 from workbook import read_workbook
 from workflow import merge_revision, require, reset_branch, restore_revision, review_revision, save_document_edit, save_proposal
 
@@ -114,7 +116,7 @@ def view(doc, ids, mode="auto", row_key=None):
     counts, faults, paths, ratios = map(list, zip(*previews))
     pairs, sources = comparison_pages(doc, ids, paths, counts)
     return dict(result, pages=len(pairs), pairs=pairs, sources=sources, counts=counts, faults=faults, paths=paths, ratios=ratios,
-                footers=footer_regions(paths, pairs),
+                footers=footer_regions(paths, pairs), reused=reused_pages(paths, pairs),
                 substitute_fonts=poppler_available() and any(path and unembedded_fonts(Path(path)) for path in paths),
                 pdfium_directory=str(Path(pypdfium2_raw.__file__).resolve().parent),
                 pdf_notes=len(records) == 1 and records[0]["extension"] == "pdf")
@@ -231,12 +233,72 @@ def rewind(doc, branch, version, base):
     return reset_branch(doc, branch, version, base)
 
 
+class PresentationSession:
+    working = None
+
+    def open(self, doc, branch, base, number):
+        from desktop.presentation import Deck
+
+        self.close()
+        with database(readonly=True) as db:
+            active = require(find_branch(db, doc, branch), "브랜치")
+            if active["head_id"] != base:
+                raise ValueError("새 확정본에서 다시 편집하세요.")
+            original = item(db, doc, base, "filename, extension, sha256, content")
+        if original["extension"] != "pptx":
+            raise ValueError("PPTX 프레젠테이션을 선택하세요.")
+        working = Deck(original["content"], original["sha256"])
+        try:
+            result = working.page(number)
+        except Exception:
+            working.close()
+            raise
+        self.working = working
+        self.destination = doc, branch, base
+        self.filename = original["filename"]
+        return result
+
+    def page(self, **params):
+        return self.active().page(**params)
+
+    def active(self):
+        if self.working is None:
+            raise ValueError("프레젠테이션 편집을 다시 시작하세요.")
+        return self.working
+
+    def save(self, reason, number, text_edit=None):
+        working = self.active()
+        if text_edit is not None:
+            working.page(number, text_edit=text_edit)
+        if working.position == 0:
+            raise ValueError("저장할 변경이 없습니다.")
+        upload = prepare_upload(self.filename, working.data)
+        try:
+            working.prime_preview(upload[3])
+        except (OSError, PreviewError, PyPdfError, PdfiumError, ValueError):
+            # The normal preview path remains available when reuse is impossible.
+            pass
+        version = save_proposal(*self.destination, upload, reason.strip() or "슬라이드 편집")
+        self.close()
+        return version
+
+    def close(self):
+        if self.working is not None:
+            self.working.close()
+            self.working = None
+
+
+presentation = PresentationSession()
+
+
 OPERATIONS = {
     "workspace": workspace_info, "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,
     "restore": restore, "rewind": rewind, "save": save_file, "print": print_preview, "merge": merge,
     "browser": open_browser_view, "font_raster": font_raster,
+    "deck_open": presentation.open, "deck_page": presentation.page,
+    "deck_save": presentation.save, "deck_close": presentation.close,
 }
 
 

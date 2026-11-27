@@ -107,14 +107,19 @@ Open **텍스트 수정** from an approved version to change its text beside the
 | Format | In-app edits |
 | --- | --- |
 | HWP, HWPX | Replace text in body and table content with an rhwp 0.9 build that provides text editing |
-| DOCX, PPTX | Edit Word text blocks or PowerPoint slide text directly, or use find and replace. Existing formatting is preserved outside the replaced text. |
+| DOCX | Edit Word text blocks and formatting, or find and replace text |
+| PPTX | Type directly on slides and in table cells, format text, and edit slides and objects |
 | XLSX | Double-click a cell on the current version to edit its value or formula, or clear the value. Excel recalculates formulas based on workbook settings. |
 | PDF | Rotate or delete a page, add a note annotation, or insert a blank page or pages from another PDF. |
+| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
+
+Open **슬라이드 편집** from the current approved PPTX version and click text or a table cell on the canvas. Use the keyboard to type, select, copy, paste, undo, and redo. The toolbar includes font, size, bold, italic, underline, color, alignment, lists, indentation, and spacing. It also adds, duplicates, and deletes slides and inserts text boxes, images, shapes, and tables. Shift-click objects to group them. The editor writes changes with [python-pptx](https://github.com/scanny/python-pptx). Text embedded in an image requires editing or replacing the image.
+
+Save with **수정안 저장**, **Cmd+S** on macOS, or **Ctrl+S** on Windows. The change reason is optional. Press **Enter** in the reason field to save. When slide order stays the same, GitDoc renders the changed slides and reuses the verified unchanged pages for the comparison preview.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. PDF edits are saved as drafts for review. Password-protected and signed originals cannot be edited.
 
 To insert pages, enter the page number they should go before. Enter the current page count plus one to append. GitDoc records the insertion position and page count in the version history. When comparing versions, **GitDoc 편집 기록** takes priority through recorded PDF edits. **자동 판정** identifies inferred insertions from uploaded versions where no applicable record exists.
-| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
 
 [office_oxide](https://github.com/yfedoseev/office_oxide) handles compatible Word and PowerPoint find-and-replace edits. GitDoc edits the document XML directly for individual text blocks, formatting, and spreadsheet cells. Save several text block changes together as one draft, then review the rendered comparison. The equivalent MCP workflow is `list_editable_blocks` followed by `edit_revision` with `operation: edit_blocks`.
 

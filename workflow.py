@@ -40,7 +40,7 @@ def save_proposal(document_id, name, base, upload, reason, *, page_edit=None):
 
 
 def save_document_edit(document_id, name, base, fields, reason, expected_mode=None, *, source=None):
-    reason = reason_for(reason)
+    reason = reason_for(reason.strip() or "문서 편집")
     with database() as db:
         active = require(find_branch(db, document_id, name), "브랜치")
         if active["head_id"] != base:

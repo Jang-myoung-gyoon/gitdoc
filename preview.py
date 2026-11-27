@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -98,7 +99,7 @@ def rhwp_command():
     return executable("rhwp", "DOCVERS_RHWP", ROOT / "data/tools/rhwp/rhwp")
 
 
-def convert(source, destination, extension):
+def convert(source, destination, extension, *, page_range=None, hidden_slides=False):
     folder = source.parent
     env = font_environment(CACHE)
     if extension in ("hwp", "hwpx"):
@@ -113,8 +114,15 @@ def convert(source, destination, extension):
         command = executable("soffice", "DOCVERS_SOFFICE", BUNDLED_BIN / "soffice")
         profile = office_profile(folder, office_replacements(source))
         options = OFFICE_FILTERS[extension]
+        properties = {}
         if extension == "ods" or (extension in WORKBOOK_EXTENSIONS and extension not in DELIMITED_EXTENSIONS):
-            options += ':{"SinglePageSheets":{"type":"boolean","value":"true"}}'
+            properties["SinglePageSheets"] = {"type": "boolean", "value": "true"}
+        if page_range:
+            properties["PageRange"] = {"type": "string", "value": page_range}
+        if hidden_slides:
+            properties["ExportHiddenSlides"] = {"type": "boolean", "value": "true"}
+        if properties:
+            options += ":" + json.dumps(properties, separators=(",", ":"))
         args = [command, f"-env:UserInstallation={profile.as_uri()}", "--headless"]
         if extension in DELIMITED_EXTENSIONS:
             separator = ord(SEPARATORS[extension])
@@ -149,8 +157,21 @@ def page_sizes(path):
     return tuple(width for width, _ in page_dimensions(path))
 
 
+def preview_cache_path(extension, digest):
+    return CACHE / f"{extension}-{digest}-{policy_key()}.pdf"
+
+
+def publish_preview(extension, digest, staged):
+    destination = preview_cache_path(extension, digest)
+    if not destination.is_file() and 0 < staged.stat().st_size <= MAX_PREVIEW:
+        read_page_dimensions(staged)
+        staged.replace(destination)
+        return True
+    return False
+
+
 def preview_path(extension, digest, load_content):
-    path = CACHE / f"{extension}-{digest}-{policy_key()}.pdf"
+    path = preview_cache_path(extension, digest)
     if path.is_file():
         return path
     with WORKERS:

@@ -107,14 +107,19 @@ python docvers.py fonts --remove "Calibri"
 | 형식 | 직접 편집 |
 | --- | --- |
 | HWP, HWPX | rhwp로 본문·표의 문구 일괄 변경. 편집 명령을 제공하는 rhwp 0.9 계열 필요 |
-| DOCX, PPTX | Word 단락과 PowerPoint 슬라이드 텍스트를 직접 수정하거나 찾기·바꾸기 |
+| DOCX | Word 단락의 내용과 서식을 수정하거나 찾기·바꾸기 |
+| PPTX | 슬라이드에서 글자와 표 셀을 직접 편집하고, 서식과 슬라이드·개체를 수정 |
 | XLSX | 최신 버전에서 셀을 더블클릭해 기존 값이나 수식을 불러와 수정하거나 삭제. Excel에서 문서의 계산 설정에 따라 수식 갱신 |
 | PDF | 페이지 회전·삭제, 메모 추가, 빈 페이지 또는 다른 PDF의 페이지 삽입 |
+| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | 기존 편집기에서 수정한 파일을 GitDoc에 제출 |
+
+PPTX 최신 확정본에서 **슬라이드 편집**을 열고 캔버스에서 글자나 표 셀을 클릭하세요. 키보드로 입력하고 텍스트 선택, 복사·붙여넣기, 실행 취소·다시 실행을 사용할 수 있습니다. 위쪽 도구 모음에서 글꼴, 크기, 굵게·기울임·밑줄, 색상, 정렬, 목록, 들여쓰기와 줄 간격을 바꿀 수 있습니다. 슬라이드를 추가·복제·삭제하고, 텍스트 상자·이미지·도형·표를 삽입할 수 있습니다. Shift+클릭으로 여러 개체를 선택해 그룹으로 묶을 수 있습니다. 편집 작업은 [python-pptx](https://github.com/scanny/python-pptx)에 적용되며, 이미지로 들어간 글자를 바꾸려면 이미지 자체를 교체해야 합니다.
+
+**수정안 저장** 또는 macOS의 **Cmd+S**, Windows의 **Ctrl+S**로 저장하세요. 변경 사유는 선택 사항이며, 사유 칸에서 **Enter**를 누르면 저장합니다. 슬라이드 순서가 그대로일 때 변경된 슬라이드의 PDF 페이지만 새로 렌더링하고 확인된 기존 페이지를 비교 미리보기에 재사용합니다.
 
 데스크톱 앱, MCP, CLI는 [lopdf](https://github.com/J-F-Liu/lopdf) 기반 Rust PDF 편집 도구를 함께 사용합니다. macOS 앱 번들에 편집 도구가 포함되며, Windows에서도 일반 Cargo 빌드로 앱과 함께 생성됩니다. PDF 편집 결과는 검토할 수 있는 수정안으로 저장됩니다. 암호가 걸렸거나 서명된 원본은 편집할 수 없습니다.
 
 페이지를 삽입할 때는 새 페이지가 들어갈 쪽 번호를 지정합니다. 맨 뒤에 넣으려면 현재 페이지 수에 1을 더하세요. 삽입 위치와 장수는 버전 이력에 저장됩니다. 비교 화면에서는 **GitDoc 편집 기록**을 우선 적용합니다. 적용할 기록이 없는 외부 업로드의 삽입은 **자동 판정**으로 표시합니다.
-| DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | 기존 편집기에서 수정한 파일을 GitDoc에 제출 |
 
 [office_oxide](https://github.com/yfedoseev/office_oxide)는 DOCX/PPTX의 호환되는 찾기·바꾸기에 사용합니다. 단락별 텍스트와 서식 변경, 셀 편집은 GitDoc이 문서 XML에 적용합니다. 여러 단락을 수정안 하나로 저장한 뒤 렌더링된 비교 화면에서 검토합니다. MCP에서는 `list_editable_blocks`로 단락을 조회하고 `edit_revision`에 `operation: edit_blocks`를 지정합니다.
 

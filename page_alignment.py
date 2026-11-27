@@ -65,17 +65,51 @@ def cached_fingerprints(path):
         pass
 
     pages = render_fingerprints(path)
-    if all(key is not None for key, _ in pages):
-        try:
-            with tempfile.TemporaryDirectory(dir=cached.parent) as folder:
-                temporary = Path(folder) / cached.name
-                with gzip.open(temporary, "wt", encoding="ascii", compresslevel=1) as stream:
-                    json.dump([(width, height, key.hex(), image.hex())
-                               for (width, height, key), image in pages], stream)
-                temporary.replace(cached)
-        except OSError:
-            pass
+    store_fingerprints(path, pages)
     return pages
+
+
+def store_fingerprints(path, pages):
+    if any(key is None for key, _ in pages):
+        return
+    cached = path.with_suffix(f".pages-v1-{PDFIUM_INFO.build}.json.gz")
+    try:
+        with tempfile.TemporaryDirectory(dir=cached.parent) as folder:
+            temporary = Path(folder) / cached.name
+            with gzip.open(temporary, "wt", encoding="ascii", compresslevel=1) as stream:
+                json.dump([(width, height, key.hex(), image.hex())
+                           for (width, height, key), image in pages], stream)
+            temporary.replace(cached)
+    except OSError:
+        pass
+
+
+def reuse_fingerprints(base, draft, pages):
+    values = list(fingerprints(base))
+    for index, (path, page) in pages.items():
+        values[index] = fingerprints(path)[page - 1]
+    store_fingerprints(draft, values)
+    record = {"base": base.name, "changed": sorted(pages)}
+    marker = draft.with_suffix(".reused-pages.json")
+    with tempfile.TemporaryDirectory(dir=marker.parent) as folder:
+        temporary = Path(folder) / marker.name
+        temporary.write_text(json.dumps(record), encoding="ascii")
+        temporary.replace(marker)
+
+
+def reused_pages(paths, pairs):
+    if len(paths) != 2 or not all(paths):
+        return [False] * len(pairs)
+    left, right = map(Path, paths)
+    for base, draft in ((left, right), (right, left)):
+        try:
+            record = json.loads(draft.with_suffix(".reused-pages.json").read_text(encoding="ascii"))
+            if record["base"] == base.name:
+                changed = set(record["changed"])
+                return [a is not None and a == b and a - 1 not in changed for a, b in pairs]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return [False] * len(pairs)
 
 
 def positional_pages(counts):

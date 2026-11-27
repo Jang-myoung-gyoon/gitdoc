@@ -4,6 +4,7 @@ use crate::{
     office_editor::Editor,
     paper::{self, PaperRow},
     paper_text::{self, Lines},
+    presentation,
 };
 use eframe::egui::*;
 use serde_json::{Value, json};
@@ -147,6 +148,7 @@ pub struct GitDoc {
     error: bool,
     pane: Pane,
     form: Option<Form>,
+    deck: Option<presentation::Editor>,
     zoom: f32,
     show_diff: bool,
     list_changes: bool,
@@ -174,6 +176,7 @@ impl GitDoc {
             error: false,
             pane: Pane::default(),
             form: None,
+            deck: None,
             zoom: 100.0,
             show_diff: false,
             list_changes: false,
@@ -326,7 +329,7 @@ impl GitDoc {
             self.epoch,
             json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable,
                 "pages":self.pane.page_pairs.get(page - 1),
-                "footer":self.pane.data["footers"][page - 1],
+                "footer":self.pane.data["footers"][page - 1], "reused": self.pane.data["reused"][page - 1],
                 "substitute_fonts":self.pane.data["substitute_fonts"],
                 "paths":self.pane.data["paths"],"pdfium_directory":self.pane.data["pdfium_directory"],
                 "pdf_notes":self.pane.data["pdf_notes"]}),
@@ -344,8 +347,19 @@ impl GitDoc {
             .record(self.head())
             .map(|row| text(&row["extension"]))
             .unwrap_or("");
+        if extension == "pptx" {
+            self.epoch += 1;
+            let args = json!({"doc": self.doc, "branch": self.branch, "base": self.head(), "number": page});
+            if self.request("deck_open", self.epoch, args) {
+                self.deck = Some(presentation::Editor::new(
+                    page,
+                    Id::new(("pptx", self.epoch)),
+                ));
+            }
+            return;
+        }
         let mode = match extension {
-            "docx" | "pptx" => "blocks",
+            "docx" => "blocks",
             "hwp" | "hwpx" => "replace",
             "xlsx" => "cell",
             "pdf" => "page",
@@ -428,10 +442,37 @@ impl GitDoc {
         }
         let wanted = match reply.op {
             "page" | "detail" | "view" | "changes" | "page_text" | "branch_compare"
-            | "edit_contents" => reply.scope == self.epoch,
+            | "edit_contents" | "deck_open" | "deck_page" | "deck_save" => {
+                reply.scope == self.epoch
+            }
             _ => true,
         };
         if !wanted {
+            return;
+        }
+        if matches!(reply.op, "deck_open" | "deck_page" | "deck_save") {
+            let head = self.head();
+            let Some(deck) = &mut self.deck else { return };
+            let result = reply.result;
+            if reply.op == "deck_save" {
+                match result {
+                    Ok(version) => {
+                        let place = Destination {
+                            ids: vec![head, id(&version)],
+                            branch: Some(self.branch.clone()),
+                            page: deck.page,
+                            ..Default::default()
+                        };
+                        self.deck = None;
+                        self.refresh();
+                        self.open_doc(self.doc, place);
+                        self.notify("수정안을 검토 대기로 저장했습니다.", false);
+                    }
+                    Err(error) => deck.set_error(error),
+                }
+            } else if let Err(error) = result.and_then(|value| deck.update(ctx, &value)) {
+                deck.set_error(error);
+            }
             return;
         }
         if reply.op == "page_text" {
@@ -724,6 +765,9 @@ impl GitDoc {
                 ui.separator();
                 ui.label(&self.workspace);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if self.deck.is_some() {
+                        return;
+                    }
                     if ui.button("＋ 문서 등록").clicked() {
                         self.register_form(None);
                     }
@@ -765,6 +809,9 @@ impl GitDoc {
             .default_width(290.0)
             .width_range(220.0..=425.0)
             .show(ctx, |ui| {
+                if self.deck.is_some() {
+                    ui.disable();
+                }
                 ui.heading("문서함");
                 let search =
                     ui.add(TextEdit::singleline(&mut self.query).hint_text("제목 또는 파일명"));
@@ -992,7 +1039,8 @@ impl GitDoc {
                     "pages":self.selection.pages, "open_tab":open_web}));
             }
             let edit_label = match extension.as_str() {
-                "hwp" | "hwpx" | "docx" | "pptx" => Some("텍스트 수정"),
+                "pptx" => Some("슬라이드 편집"),
+                "hwp" | "hwpx" | "docx" => Some("텍스트 수정"),
                 "xlsx" => Some("셀 수정"),
                 "pdf" => Some("페이지 도구"),
                 _ => None,
@@ -1186,7 +1234,11 @@ impl GitDoc {
             && self.pane.indexed_through < pages
             && self.pane.previews.values().all(Option::is_some)
         {
+            let before = self.pane.indexed_through;
             self.request_index();
+            if self.pane.indexed_through != before {
+                ui.ctx().request_repaint();
+            }
         }
     }
 
@@ -1452,6 +1504,18 @@ impl GitDoc {
 
     fn request_index(&mut self) {
         if self.pane.indexing {
+            return;
+        }
+        let total = count(&self.pane.data["pages"]);
+        while self.pane.indexed_through < total
+            && self.pane.data["reused"][self.pane.indexed_through] == true
+        {
+            self.pane.indexed_through += 1;
+        }
+        if self.pane.indexed_through == total {
+            if let Some((last, forward)) = self.pane.seek.take() {
+                self.seek_pages(last, forward);
+            }
             return;
         }
         let number = self.pane.indexed_through + 1;
@@ -1773,6 +1837,41 @@ impl GitDoc {
                 });
                 return;
             }
+            if let Some(deck) = &mut self.deck {
+                let title = text(&self.detail["title"]);
+                let version = rows(&self.detail["versions"])
+                    .iter()
+                    .find(|row| id(&row["id"]) == id(&self.detail["branch"]["head_id"]))
+                    .map_or("", |row| text(&row["version_label"]));
+                let version = format!("{}  ·  {version}", self.branch);
+                let command = deck.show(ui, title, &version);
+                match command {
+                    Some(presentation::Command::Close) => {
+                        let page = deck.page;
+                        self.deck = None;
+                        self.request("deck_close", 0, json!({}));
+                        let place = Destination {
+                            page,
+                            ..self.selection.clone()
+                        };
+                        self.open_view(self.ids.clone(), place);
+                    }
+                    Some(cmd) => {
+                        let (operation, args) = match cmd {
+                            presentation::Command::Page(args) => ("deck_page", args),
+                            presentation::Command::Save(args) => ("deck_save", args),
+                            presentation::Command::Close => unreachable!(),
+                        };
+                        if !self.request(operation, self.epoch, args)
+                            && let Some(deck) = &mut self.deck
+                        {
+                            deck.set_error(self.notice.clone());
+                        }
+                    }
+                    None => {}
+                }
+                return;
+            }
             self.right_header(ui);
             ui.horizontal(|ui| {
                 if self.pane.data["workbook"] == true {
@@ -1974,17 +2073,25 @@ impl GitDoc {
                 }
                 let required_reason = matches!(
                     form.action,
-                    Action::Edit | Action::Submit | Action::Merge | Action::Restore
+                    Action::Submit | Action::Merge | Action::Restore
                 );
                 let required_name = matches!(form.action, Action::Register | Action::Branch);
-                if required_reason || matches!(form.action, Action::Approve | Action::Reject) {
+                let mut submit_from_reason = false;
+                if required_reason || matches!(form.action, Action::Edit | Action::Approve | Action::Reject) {
                     let label = ui.label(if required_reason {
                         "변경 사유"
+                    } else if form.action == Action::Edit {
+                        "변경 사유 (선택)"
                     } else {
                         "검토 의견"
                     });
-                    ui.text_edit_multiline(&mut form.reason)
-                        .labelled_by(label.id);
+                    if form.action == Action::Edit {
+                        let response = ui.add(TextEdit::singleline(&mut form.reason).char_limit(500))
+                            .labelled_by(label.id);
+                        submit_from_reason = response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+                    } else {
+                        ui.text_edit_multiline(&mut form.reason).labelled_by(label.id);
+                    }
                 }
                 let valid = (!form.needs_file() || form.file.is_some())
                     && (!required_reason || !form.reason.trim().is_empty())
@@ -1996,7 +2103,7 @@ impl GitDoc {
                     save = ui.add_enabled(valid, Button::new(match form.action {
                         Action::Edit => "수정안 저장",
                         _ => "확인",
-                    })).clicked();
+                    })).clicked() || valid && submit_from_reason;
                     cancel = ui.button("취소").clicked();
                 });
             });
@@ -2093,6 +2200,7 @@ impl eframe::App for GitDoc {
             self.receive(ctx, frame, reply);
         }
         if self.form.is_none()
+            && self.deck.is_none()
             && let Some(path) = ctx.input(|i| {
                 i.raw
                     .dropped_files

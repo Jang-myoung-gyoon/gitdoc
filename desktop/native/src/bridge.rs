@@ -155,7 +155,12 @@ fn render(
         return Ok(json!({"count":0, "footer_only":false}));
     }
     let mut rendered = Vec::new();
-    for (path, page) in paths.iter().zip(physical_pages) {
+    let reused = params["reused"] == true && paths.len() == 2;
+    for (path, page) in paths
+        .iter()
+        .zip(physical_pages)
+        .take(if reused { 1 } else { paths.len() })
+    {
         rendered.push(path.as_str().zip(page.as_u64()).and_then(|(path, number)| {
             renderer.image(
                 path,
@@ -174,12 +179,17 @@ fn render(
             )
         }));
     }
+    if reused {
+        rendered.push(rendered[0].clone());
+    }
     let failed = rendered
         .iter()
         .zip(physical_pages)
         .any(|(image, p)| image.is_none() && !p.is_null());
     let regions = match rendered.as_slice() {
-        [before, after] if !failed && (request.op == "changes" || params["comparable"] == true) => {
+        [before, after]
+            if !failed && !reused && (request.op == "changes" || params["comparable"] == true) =>
+        {
             pages::regions(before.as_ref(), after.as_ref())
         }
         _ => vec![],
