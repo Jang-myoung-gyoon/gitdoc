@@ -27,12 +27,19 @@ class PreviewError(Exception):
 
 def executable(name, env_name, alternative):
     path = os.environ.get(env_name) or shutil.which(name)
-    if not path and alternative.is_file():
-        path = str(alternative)
+    if not path:
+        bundled = alternative.with_suffix(".exe") if os.name == "nt" else alternative
+        if bundled.is_file():
+            path = str(bundled)
     if not path:
         options = [Path("/opt/homebrew/bin") / name, Path("/usr/local/bin") / name]
         if name == "soffice":
             options.append(Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"))
+            if os.name == "nt":
+                for key in ("ProgramFiles", "ProgramFiles(x86)"):
+                    if os.environ.get(key):
+                        program = Path(os.environ[key]) / "LibreOffice/program"
+                        options.extend([program / "soffice.com", program / "soffice.exe"])
         path = next((str(option) for option in options if os.access(option, os.X_OK)), None)
     if not path:
         raise PreviewError(f"미리보기 도구 {name}을 찾을 수 없습니다.")

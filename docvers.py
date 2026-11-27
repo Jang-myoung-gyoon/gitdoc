@@ -1,12 +1,11 @@
 import argparse
 import hashlib
-import http.client
 import json
 import os
+import shutil
 import sys
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 from desktop_link import desktop_url, document_path
@@ -176,53 +175,29 @@ def commit(args):
 
 
 
-def desktop_service_store(port):
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
-    try:
-        connection.request("GET", "/healthz")
-        response = connection.getresponse()
-        if response.status == 200:
-            value = json.loads(response.read(1024))
-            if isinstance(value, dict) and isinstance(value.get("store"), str):
-                return value["store"]
-        return ""
-    except ConnectionRefusedError:
-        return None
-    except (OSError, http.client.HTTPException, ValueError):
-        return ""
-    finally:
-        connection.close()
-
-
-def start_desktop_service():
-    try:
-        port = int(os.environ.get("DOCVERS_PORT", "8796"))
-        if not 1 <= port <= 65535:
-            raise ValueError
-    except ValueError:
-        raise ValueError("DOCVERS_PORT는 1~65535 사이의 숫자여야 합니다.") from None
-    expected = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
-    connected = desktop_service_store(port)
-    if connected == expected:
-        return
-    if connected is not None:
-        raise ValueError("이 포트를 사용하는 앱이나 다른 GitDoc 저장소를 먼저 종료하세요.")
-    log_path = DATABASE.parent / "desktop-server.log"
-    with log_path.open("ab") as log:
-        process = subprocess.Popen([sys.executable, str(ROOT / "app.py")], cwd=ROOT,
-                                   env=dict(os.environ, DOCVERS_DB=str(DATABASE)),
-                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                   start_new_session=True)
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if desktop_service_store(port) == expected:
-            return
-        if process.poll() is not None:
-            break
-        time.sleep(0.15)
-    if process.poll() is None:
-        process.terminate()
-    raise ValueError(f"로컬 서버를 시작하지 못했습니다. {log_path}에서 오류를 확인하세요.")
+def native_executable():
+    filename = "gitdoc-desktop.exe" if os.name == "nt" else "gitdoc-desktop"
+    project = ROOT / "desktop" / "native"
+    target = Path(os.environ.get("CARGO_TARGET_DIR", str(project / "target")))
+    if not target.is_absolute():
+        target = ROOT / target
+    override = os.environ.get("DOCVERS_NATIVE")
+    if override:
+        executable = Path(override).expanduser()
+        if not executable.is_file():
+            raise ValueError("DOCVERS_NATIVE에 지정된 실행 파일을 찾을 수 없습니다.")
+        return executable.resolve()
+    executable = target / "debug" / filename
+    if not executable.is_file():
+        cargo = shutil.which("cargo")
+        if not cargo:
+            candidate = Path.home() / ".cargo" / "bin" / ("cargo.exe" if os.name == "nt" else "cargo")
+            cargo = str(candidate) if candidate.is_file() else None
+        if not cargo:
+            raise ValueError("Rust의 Cargo를 설치한 뒤 다시 실행하세요.")
+        subprocess.run([cargo, "build", "--locked", "--manifest-path", str(project / "Cargo.toml")],
+                       cwd=ROOT, check=True)
+    return executable
 
 
 def open_desktop(args):
@@ -253,17 +228,13 @@ def open_desktop(args):
     if args.url:
         print(link)
         return
-    if sys.platform != "darwin":
-        raise ValueError("데스크톱 앱은 macOS에서 사용할 수 있습니다.")
-    bundle = ROOT / ".build" / "GitDoc.app"
-    if not (bundle / "Contents/MacOS/GitDoc").is_file():
-        subprocess.run([str(ROOT / "desktop/build.sh")], check=True)
-    start_desktop_service()
-    environment = ["--env", f"DOCVERS_DB={DATABASE}"] if "DOCVERS_DB" in os.environ else []
-    for key in ("DOCVERS_PORT", "DOCVERS_RHWP", "DOCVERS_SOFFICE", "DOCVERS_PDFTOPPM"):
-        if key in os.environ:
-            environment.extend(["--env", f"{key}={os.environ[key]}"])
-    subprocess.run(["/usr/bin/open", *environment, "-a", str(bundle), "-u", link], check=True)
+    executable = native_executable()
+    environment = dict(os.environ, DOCVERS_ROOT=str(ROOT), DOCVERS_DB=str(DATABASE),
+                       DOCVERS_PYTHON=sys.executable)
+    DATABASE.parent.mkdir(parents=True, exist_ok=True)
+    with (DATABASE.parent / "desktop-native.log").open("ab") as log:
+        subprocess.Popen([str(executable), link], cwd=ROOT, env=environment, stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log, start_new_session=True)
     print(link)
 
 
