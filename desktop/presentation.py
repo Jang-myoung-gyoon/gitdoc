@@ -296,10 +296,15 @@ def duplicate_slide(source, target):
             target_notes.text = original.text
 
 
-def move_layer(node, forward):
-    sibling = node.getnext() if forward else node.getprevious()
-    if sibling is None or sibling.tag in (qn("p:nvGrpSpPr"), qn("p:grpSpPr"), qn("p:extLst")):
+def move_layer(node, forward, extreme=False):
+    step = type(node).getnext if forward else type(node).getprevious
+    reserved = {qn("p:nvGrpSpPr"), qn("p:grpSpPr"), qn("p:extLst")}
+    sibling = step(node)
+    if sibling is None or sibling.tag in reserved:
         return
+    if extreme:
+        while (next_node := step(sibling)) is not None and next_node.tag not in reserved:
+            sibling = next_node
     if forward:
         sibling.addnext(node)
     else:
@@ -525,8 +530,8 @@ class Deck:
         shape = find_shape(shapes, target["id"]) if target else None
         if shape is None:
             raise ValueError("슬라이드 개체를 먼저 선택하세요.")
-        if operation in ("forward", "backward"):
-            move_layer(shape._element, operation == "forward")
+        if operation in ("forward", "backward", "front", "back"):
+            move_layer(shape._element, operation in ("forward", "front"), operation in ("front", "back"))
         elif operation == "ungroup" and shape.shape_type == MSO_SHAPE_TYPE.GROUP:
             ungroup(shape)
             return index, None

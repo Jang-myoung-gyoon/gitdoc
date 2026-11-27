@@ -65,6 +65,16 @@ class PresentationEditorTests(unittest.TestCase):
         self.assertEqual(copied.shapes[0].text, "다른 슬라이드")
         self.assertEqual(original.shapes[1].image.blob, copied.shapes[1].image.blob)
 
+    def test_move_object_to_front_and_back(self):
+        middle = self.deck.page(1, "shape", value="triangle")["selected"]["id"]
+        last = self.deck.page(1, "shape", value="rectangle")["selected"]["id"]
+        self.deck.page(1, "front", target=self.target)
+        self.assertEqual([shape.shape_id for shape in self.read().slides[0].shapes],
+                         [middle, last, self.target["id"]])
+        self.deck.page(1, "back", target=self.target)
+        self.assertEqual([shape.shape_id for shape in self.read().slides[0].shapes],
+                         [self.target["id"], middle, last])
+
     def test_group_ungroup_and_table_cell_edit(self):
         box = self.deck.page(1, "shape", value="triangle")["selected"]
         group = self.deck.page(1, "group", ids=[self.target["id"], box["id"]])["selected"]

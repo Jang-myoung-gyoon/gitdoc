@@ -1,3 +1,5 @@
+mod workspace;
+
 use crate::editor_fonts::{Fonts, Span, change_bounds};
 use eframe::egui::*;
 use serde_json::{Value, json};
@@ -114,6 +116,8 @@ pub struct Editor {
     redo: bool,
     dirty: bool,
     zoom: f32,
+    show_navigator: bool,
+    reveal: Option<Target>,
     font: String,
     font_size: i32,
     color: Color32,
@@ -154,6 +158,8 @@ impl Editor {
             redo: false,
             dirty: false,
             zoom: 100.0,
+            show_navigator: true,
+            reveal: None,
             font: "Aptos".into(),
             font_size: 24,
             color: Color32::from_rgb(30, 89, 181),
@@ -355,6 +361,16 @@ impl Editor {
             return Some(Command::Page(
                 json!({"number":self.page,"text_edit":self.text_edit()}),
             ));
+        }
+        if !multi
+            && self
+                .text
+                .as_ref()
+                .is_some_and(|edit| Some(edit.target) == item)
+        {
+            self.focus_text(ctx);
+            ctx.request_repaint();
+            return None;
         }
         self.text = None;
         if multi && self.format == Format::Slides {
@@ -676,6 +692,17 @@ impl Editor {
                     "Shift+클릭으로 개체를 여러 개 선택",
                     || action = Some(("group", Value::Null)),
                 );
+                ui.add_enabled_ui(object, |ui| {
+                    ui.menu_button("맨 앞·맨 뒤", |ui| {
+                        for (label, operation) in [("맨 앞으로", "front"), ("맨 뒤로", "back")]
+                        {
+                            if ui.button(label).clicked() {
+                                action = Some((operation, Value::Null));
+                                ui.close();
+                            }
+                        }
+                    });
+                });
                 button(
                     ui,
                     group,
@@ -689,120 +716,7 @@ impl Editor {
     }
 
     pub fn show(&mut self, ui: &mut Ui, title: &str, version: &str) -> Option<Command> {
-        ui.heading(title);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(version);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(!self.waiting, Button::new("편집 종료"))
-                    .clicked()
-                {
-                    self.closing = true;
-                }
-                if ui
-                    .add_enabled(
-                        !self.waiting && self.changed(),
-                        Button::new(RichText::new("수정안 저장").color(Color32::WHITE))
-                            .fill(Color32::from_rgb(27, 101, 210)),
-                    )
-                    .clicked()
-                {
-                    self.saving = true;
-                    self.focus_reason = true;
-                }
-                if self.waiting {
-                    ui.spinner();
-                }
-            });
-        });
-        ui.add_space(5.0);
-        let mut action = Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-            .corner_radius(6)
-            .inner_margin(Margin::symmetric(9, 6))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing = vec2(4.0, 5.0);
-                ui.spacing_mut().button_padding = vec2(5.0, 2.0);
-                self.tool(ui)
-            })
-            .inner;
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            button(
-                ui,
-                !self.waiting && self.page > 1,
-                "◀ 이전 쪽",
-                "Page Up",
-                || action = Some(("page", json!(self.page - 1))),
-            );
-            let mut position = self.page;
-            if ui
-                .add_enabled(
-                    !self.waiting && self.count > 0,
-                    DragValue::new(&mut position).range(1..=self.count.max(1)),
-                )
-                .changed()
-            {
-                action = Some(("page", json!(position)));
-            }
-            ui.label(format!("/ {}", self.count.max(1)));
-            button(
-                ui,
-                !self.waiting && self.page < self.count,
-                "다음 쪽 ▶",
-                "Page Down",
-                || action = Some(("page", json!(self.page + 1))),
-            );
-            ui.separator();
-            ui.add(
-                Slider::new(&mut self.zoom, 50.0..=200.0)
-                    .suffix("%")
-                    .text("확대"),
-            );
-            ui.weak(if self.format == Format::Slides {
-                "글자를 클릭해 편집 · Shift+클릭으로 개체 선택"
-            } else {
-                "본문 글자를 클릭해 편집"
-            });
-            ui.menu_button(
-                if self.format == Format::Slides {
-                    "개체 선택"
-                } else {
-                    "문단 선택"
-                },
-                |ui| {
-                    ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                        for object in self.objects.iter().filter(|o| o.target.cell.is_none()) {
-                            if ui
-                                .selectable_label(
-                                    Some(object.target) == self.selected,
-                                    &object.name,
-                                )
-                                .clicked()
-                            {
-                                action = Some(("select", object.target.json()));
-                                ui.close();
-                            }
-                        }
-                    });
-                },
-            );
-        });
-        if let Some(error) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-        let mut command = None;
-        ScrollArea::both()
-            .id_salt(("edit-slides", self.page))
-            .scroll_source(
-                scroll_area::ScrollSource::MOUSE_WHEEL | scroll_area::ScrollSource::SCROLL_BAR,
-            )
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                command = self.canvas(ui);
-            });
+        let (mut action, command) = self.workspace(ui, title, version);
 
         if self.waiting {
             return command;
@@ -815,7 +729,11 @@ impl Editor {
         }
         action = action.or_else(|| self.shortcuts(ui.ctx()));
         match action {
-            Some(("select", value)) => self.select(ui.ctx(), Target::read(&value), false, None),
+            Some(("select", value)) => {
+                let target = Target::read(&value);
+                self.reveal = target;
+                self.select(ui.ctx(), target, false, None)
+            }
             Some((operation @ ("copy" | "cut" | "paste" | "undo_tool" | "redo_tool"), _)) => {
                 if operation == "paste" {
                     ui.ctx().send_viewport_cmd(ViewportCommand::RequestPaste);
@@ -996,8 +914,21 @@ impl Editor {
         let width = (ui.available_width() - 24.0).clamp(180.0, limit) * self.zoom / 100.0;
         let left = ((ui.available_width() - width) / 2.0).max(0.0);
         let size = vec2(width, width * self.height / self.width);
+        if self.format == Format::Word {
+            ui.add_space(21.0);
+        }
         let (_, space) = ui.allocate_space(vec2(left + size.x, size.y));
         let canvas = Rect::from_min_size(space.min + vec2(left, 0.0), size);
+        self.ruler(ui, canvas);
+        if !self.waiting
+            && let Some(target) = self.reveal.take()
+            && let Some(object) = self.objects.iter().find(|item| item.target == target)
+        {
+            let position = project(canvas, object.ink.unwrap_or(object.bounds));
+            if !ui.clip_rect().contains_rect(position) {
+                ui.scroll_to_rect(position, Some(Align::Center));
+            }
+        }
         ui.painter().rect_filled(
             canvas.translate(vec2(1.0, 3.0)).expand(1.0),
             3.0,

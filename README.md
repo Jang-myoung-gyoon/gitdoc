@@ -108,6 +108,10 @@ Open **텍스트 수정** from an approved version to change its text beside the
 
 Enable **설정 → 수정안 검토 사용** in the desktop app to save new desktop edits and submissions as pending drafts. A yellow background in the version history identifies pending drafts, which can be approved or rejected. Review is off by default, so new desktop versions are approved immediately. Existing pending drafts keep their status. MCP and CLI draft tools continue to create pending revisions.
 
+[PPTX design](assets/editor-designs/pptx.png) · [DOC design](assets/editor-designs/doc.png) · [HWP design](assets/editor-designs/hwp.png)
+
+PPTX opens with slide navigation and slide and object tools. DOC opens with page navigation, a ruler in centimeters, and text formatting tools. HWP opens with a list of editable paragraphs on the current page. Page and zoom controls stay along the bottom. The current page's thumbnail uses the existing render.
+
 | Format | In-app edits |
 | --- | --- |
 | HWP | Type directly in body paragraphs that fit on one page, or find and replace text in the body and tables |
