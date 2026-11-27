@@ -14,6 +14,28 @@
 
 GitDoc은 Rust의 [eframe](https://github.com/emilk/egui/tree/main/crates/eframe)으로 macOS와 Windows에서 네이티브 창을 엽니다. Python 문서 엔진을 자식 프로세스로 시작해 표준 입출력으로 연결합니다. 데스크톱 앱과 MCP가 이 엔진과 SQLite 저장소를 공유합니다.
 
+### 다운로드
+
+[Releases 페이지](../../releases)의 각 릴리스에 실험용 패키지가 첨부됩니다. Python 엔진과 PDFium이 들어 있어 Python이나 Rust를 설치하지 않아도 됩니다.
+
+| 시스템 | 파일 |
+| --- | --- |
+| macOS 13 이상, Apple Silicon | `GitDoc-<버전>-macos-arm64.dmg` |
+| Windows 10 이상, x64 | `GitDoc-<버전>-windows-x64-setup.exe` |
+
+Intel Mac용 패키지는 없습니다. 패키지에 서명이 없어 처음 실행할 때 시스템이 확인을 요청합니다.
+
+- **macOS**: 디스크 이미지를 열고 GitDoc을 Applications로 끌어 놓습니다. 한 번 실행한 뒤 **시스템 설정 ▸ 개인정보 보호 및 보안 ▸ 그래도 열기**를 선택하거나 `xattr -dr com.apple.quarantine /Applications/GitDoc.app`을 실행합니다.
+- **Windows**: 설치 파일을 실행합니다. SmartScreen 화면에서 **추가 정보 ▸ 실행**을 선택합니다. 관리자 권한 없이 현재 사용자에게 설치하고 `gitdoc://` 링크를 등록합니다. 제거하면 앱과 링크 등록이 함께 지워집니다.
+
+패키지 앱은 저장소, 미리보기 캐시, 로그를 macOS에서는 `~/Library/Application Support/GitDoc`, Windows에서는 `%APPDATA%\GitDoc`에 둡니다. 앱을 제거하거나 교체해도 이 폴더는 남습니다. `DOCVERS_DB`로 다른 저장소 파일을 지정할 수 있습니다.
+
+LibreOffice, Poppler, rhwp, Tesseract는 포함하지 않습니다. 필요한 도구는 [버전 관리와 비교](#버전-관리와-비교)의 안내대로 설치합니다. 패키지 앱은 데이터 폴더의 `tools/rhwp/rhwp`(Windows는 `rhwp.exe`)에서도 rhwp를 찾습니다.
+
+포함된 Python으로 같은 저장소에 CLI와 MCP 서버를 실행할 수 있습니다. macOS에서는 `/Applications/GitDoc.app/Contents/Resources/python/bin/python3`로 `/Applications/GitDoc.app/Contents/Resources/app/docvers.py` 또는 `mcp_server.py`를 실행합니다. Windows에서는 `%LOCALAPPDATA%\Programs\GitDoc`의 `python\python.exe`와 `app\docvers.py` 또는 `app\mcp_server.py`를 사용합니다.
+
+### 소스에서 실행
+
 Python 3.12와 최신 안정 Rust/Cargo가 필요합니다. macOS는 12 이상 및 Xcode Command Line Tools, Windows는 MSVC Rust 도구 체인 및 Visual Studio Build Tools의 C++ 데스크톱 개발 도구가 필요합니다.
 
 **macOS**
@@ -35,6 +57,16 @@ py -3.12 -m venv .venv
 `docvers.py open`은 실행 파일이 없으면 Cargo로 빌드합니다. 소스를 갱신한 후에는 `cargo build --locked --manifest-path desktop/native/Cargo.toml`로 다시 빌드합니다. macOS에서 Finder로 실행하려면 `./desktop/build.sh`로 `.build/GitDoc.app`을 빌드합니다.
 
 기본 저장소는 `data/documents.sqlite3`입니다. `DOCVERS_DB`로 경로를 바꾸고 데스크톱 앱, CLI, MCP에 같은 값을 지정합니다.
+
+### 릴리스 만들기
+
+[릴리스 워크플로](.github/workflows/release.yml)는 `packaging/macos.sh`와 `packaging/windows.ps1`로 두 패키지를 빌드하고, 깨끗한 러너에 각각 설치한 뒤 `packaging/smoke.py`로 확인합니다. 앱이나 패키징을 바꾸는 풀 리퀘스트, 수동 실행, 버전 태그에서 실행됩니다.
+
+1. `desktop/native/Cargo.toml`의 `version`을 새 버전으로 바꾸고 `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`으로 `Cargo.lock`을 갱신한 뒤 병합합니다. 패키지 버전은 이 파일에서 가져옵니다.
+2. 그 커밋에 `vX.Y.Z` 태그를 붙여 푸시합니다. `git tag v0.2.0 && git push origin v0.2.0`
+3. 워크플로가 태그와 버전이 일치하는지 확인한 뒤 디스크 이미지와 설치 파일을 첨부한 GitHub Release를 게시합니다.
+
+로컬에서는 Apple Silicon Mac에서 `sh packaging/macos.sh`, Inno Setup 6을 설치한 PowerShell 7에서 `./packaging/windows.ps1`을 실행합니다. 결과물은 `dist/`에 생깁니다. macOS 번들은 ad-hoc 서명됩니다. 인증서로 서명하려면 `CODESIGN_IDENTITY`를 지정합니다.
 
 ## 브라우저 뷰어
 

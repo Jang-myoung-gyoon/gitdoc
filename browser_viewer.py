@@ -9,7 +9,7 @@ import sys
 import time
 import webbrowser
 
-from store import DATABASE, ROOT
+from store import DATABASE, DEFAULT_DATABASE, ROOT
 
 HOST = "127.0.0.1"
 STORE_ID = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
@@ -17,8 +17,7 @@ WORKSPACE_PREFIX = f"/workspace/{STORE_ID}"
 
 
 def workspace_info():
-    default = (ROOT / "data" / "documents.sqlite3").resolve()
-    name = "기본 문서함" if DATABASE == default else DATABASE.stem
+    name = "기본 문서함" if DATABASE == DEFAULT_DATABASE else DATABASE.stem
     return {"workspace_id": STORE_ID, "workspace_name": name}
 
 

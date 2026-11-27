@@ -94,6 +94,20 @@ fn root() -> PathBuf {
         return path.into();
     }
     if let Ok(binary) = env::current_exe() {
+        // Release packages keep the engine beside the executable.
+        let folder = binary.parent();
+        let packaged = if cfg!(target_os = "macos") {
+            folder
+                .and_then(Path::parent)
+                .map(|contents| contents.join("Resources").join("app"))
+        } else {
+            folder.map(|folder| folder.join("app"))
+        };
+        if let Some(packaged) = packaged
+            && packaged.join("desktop").join("bridge.py").is_file()
+        {
+            return packaged;
+        }
         for candidate in binary.ancestors() {
             if candidate.join("desktop/bridge.py").is_file() {
                 return candidate.to_owned();
@@ -107,13 +121,26 @@ fn python(root: &Path) -> OsString {
     if let Some(path) = env::var_os("DOCVERS_PYTHON") {
         return path;
     }
-    let bundled = root.join(if cfg!(windows) {
+    let local = root.join(if cfg!(windows) {
         ".venv/Scripts/python.exe"
     } else {
         ".venv/bin/python"
     });
-    if bundled.is_file() {
-        return bundled.into_os_string();
+    if local.is_file() {
+        return local.into_os_string();
+    }
+    // Release packages ship their own runtime next to the engine folder.
+    if root.join("PACKAGED").is_file()
+        && let Some(runtime) = root.parent().map(|folder| folder.join("python"))
+    {
+        let bundled = if cfg!(windows) {
+            runtime.join("python.exe")
+        } else {
+            runtime.join("bin").join("python3")
+        };
+        if bundled.is_file() {
+            return bundled.into_os_string();
+        }
     }
     OsString::from(if cfg!(windows) { "python" } else { "python3" })
 }
@@ -214,6 +241,14 @@ fn configure(ctx: &egui::Context) {
 fn main() -> eframe::Result {
     let root = root();
     let python = python(&root);
+    // Lets a package check confirm what an installed app would start, without opening a window.
+    if env::args().nth(1).as_deref() == Some("--print-paths") {
+        println!(
+            "{}",
+            serde_json::json!({"root": root.to_string_lossy(), "python": python.to_string_lossy()})
+        );
+        return Ok(());
+    }
     let setup = env::args()
         .nth(1)
         .map_or_else(|| Ok(Destination::default()), |arg| destination(&arg));

@@ -15,8 +15,8 @@ from desktop_link import checked_document_path, desktop_url
 from font_policy import family_key, installed_fonts, resolve_missing, substitutions, substitutions_path
 from uploads import MAX_FILE, prepare_upload
 from store import (
-    DATABASE, ROOT, VERSION_FIELDS, append_version, branch_list, create_document, database, find_branch,
-    find_document, find_version, initialize, new_branch, search_documents, text_diff,
+    DATABASE, PACKAGED, ROOT, VERSION_FIELDS, append_version, branch_list, create_document, database, find_branch,
+    find_document, find_version, initialize, new_branch, packaged_tool, search_documents, text_diff,
 )
 
 TRACKING = ".docvers.json"
@@ -216,6 +216,11 @@ def native_executable():
         if not executable.is_file():
             raise ValueError("DOCVERS_NATIVE에 지정된 실행 파일을 찾을 수 없습니다.")
         return executable.resolve()
+    if PACKAGED:
+        executable = packaged_tool("gitdoc-desktop")
+        if executable is None:
+            raise ValueError("GitDoc 실행 파일을 찾을 수 없습니다. GitDoc을 다시 설치하세요.")
+        return executable
     executable = target / "debug" / filename
     if not executable.is_file():
         cargo = shutil.which("cargo")

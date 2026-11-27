@@ -27,7 +27,9 @@ final class Launcher: NSObject, NSApplicationDelegate {
     private func launch() {
         guard !started else { return }
         started = true
-        let root = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        let packaged = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/app")
+        let root = FileManager.default.fileExists(atPath: packaged.appendingPathComponent("desktop/bridge.py").path)
+            ? packaged : Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
         let runner = Process()
         runner.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/gitdoc-desktop")
         runner.arguments = [link ?? "gitdoc://open/"]

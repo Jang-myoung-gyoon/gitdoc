@@ -1,13 +1,35 @@
 import difflib
 import os
 import sqlite3
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
 from versioning import classify_change, next_label
 
 ROOT = Path(__file__).resolve().parent
-DATABASE = Path(os.environ.get("DOCVERS_DB", str(ROOT / "data" / "documents.sqlite3"))).resolve()
+# Release packages mark their engine folder so user data stays outside the installed app.
+PACKAGED = (ROOT / "PACKAGED").is_file()
+
+
+def user_data():
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming") / "GitDoc"
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Application Support/GitDoc"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "GitDoc"
+
+
+def packaged_tool(name):
+    if not PACKAGED:
+        return None
+    path = ROOT.parent / f"{name}.exe" if os.name == "nt" else ROOT.parents[1] / "MacOS" / name
+    return path if path.is_file() else None
+
+
+DATA = user_data() if PACKAGED else ROOT / "data"
+DEFAULT_DATABASE = (DATA / "documents.sqlite3").resolve()
+DATABASE = Path(os.environ.get("DOCVERS_DB") or DEFAULT_DATABASE).resolve()
 VERSION_FIELDS = """
     id, document_id, number, version_label, change_scale, change_basis, filename, extension, size, sha256, reason, status,
     base_id, restored_from, created_at, review_note, reviewed_at, extraction_note,
