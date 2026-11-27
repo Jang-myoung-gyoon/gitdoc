@@ -10,7 +10,9 @@ from werkzeug.exceptions import SecurityError
 from browser_viewer import HOST, STORE_ID, browser_port
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from editing import MODES, read_pdf_notes
+from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
+from page_alignment import aligned_pages
 from preview import PreviewError, page_dimensions, preview_path, preview_png
 from workbook import read_workbook
 from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
@@ -171,7 +173,7 @@ def compare_branches(document_id):
         (f"공통 조상 → {target['name']}", ancestor, a),
         (f"공통 조상 → {source['name']}", ancestor, b),
     ]
-    panels = [(title, before, after, *text_diff(before["extracted"], after["extracted"]))
+    panels = [(title, before, after, *text_diff(comparison_text(before), comparison_text(after)))
               for title, before, after in changes]
     return render_template("branches.html", doc=doc, target=target, source=source,
                            ancestor=ancestor, a=a, b=b, state=state, panels=panels,
@@ -270,7 +272,7 @@ def compare(document_id):
         )
         branches = branch_list(db, document_id)
         versions = comparison_history(db, active, original, updated)
-        left, right = original["extracted"], updated["extracted"]
+        left, right = comparison_text(original), comparison_text(updated)
         row_key = request.args.get("row_key")
         if row_key is not None:
             try:
@@ -374,10 +376,7 @@ def workbook(document_id, version_id):
     return jsonify(sheets=sheets)
 
 
-@app.get("/documents/<int:document_id>/versions/<int:version_id>/preview")
-@app.get("/documents/<int:document_id>/versions/<int:version_id>/preview/<int:page>.png", endpoint="preview_page")
-@app.get("/documents/<int:document_id>/versions/<int:version_id>/preview/export.pdf", endpoint="preview_pdf", defaults={"export_pdf": True})
-def visual_preview(document_id, version_id, page=None, export_pdf=False):
+def document_preview(document_id, version_id):
     with database() as db:
         item = version(db, document_id, version_id, "filename, extension, sha256")
 
@@ -385,8 +384,28 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
         with database() as db:
             return version(db, document_id, version_id, "content")["content"]
 
+    return item, preview_path(item["extension"], item["sha256"], original_content)
+
+
+@app.get("/documents/<int:document_id>/page-alignment")
+def page_alignment(document_id):
+    ids = [request.args.get(key, type=int) for key in ("base", "target")]
+    if not all(ids):
+        abort(400)
     try:
-        path = preview_path(item["extension"], item["sha256"], original_content)
+        paths = [document_preview(document_id, number)[1] for number in ids]
+        counts = [len(page_dimensions(path)) for path in paths]
+    except PreviewError as error:
+        return jsonify(error=str(error)), 422
+    return jsonify(pairs=aligned_pages(paths, counts))
+
+
+@app.get("/documents/<int:document_id>/versions/<int:version_id>/preview")
+@app.get("/documents/<int:document_id>/versions/<int:version_id>/preview/<int:page>.png", endpoint="preview_page")
+@app.get("/documents/<int:document_id>/versions/<int:version_id>/preview/export.pdf", endpoint="preview_pdf", defaults={"export_pdf": True})
+def visual_preview(document_id, version_id, page=None, export_pdf=False):
+    try:
+        item, path = document_preview(document_id, version_id)
         dimensions = page_dimensions(path)
         count = len(dimensions)
         if export_pdf:

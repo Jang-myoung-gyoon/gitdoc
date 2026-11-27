@@ -122,6 +122,9 @@ body:has(.document-dialog[open]) { overflow: hidden; }
 .paper-row:last-child { margin-bottom: 0; }
 .paper-page { min-width: 0; }
 .paper-page-heading { display: block; margin-bottom: 5px; color: var(--muted); font-size: 13px; text-align: center; }
+.paper-page-badge { border-radius: 5px; padding: 2px 5px; }
+.paper-page-badge.inserted { color: #166139; background: #e5f5eb; }
+.paper-page-badge.removed { color: #94283a; background: #f8e8ea; }
 .paper-page .viewer-placeholder { padding: 12px; margin: 0; text-align: center; }
 .paper-page .viewer-sheet:empty::before { content: '페이지 준비 중'; display: block; padding: 12px; color: var(--muted); text-align: center; }
 .paper-page .viewer-sheet img { position: absolute; inset: 0; height: 100%; object-fit: fill; }

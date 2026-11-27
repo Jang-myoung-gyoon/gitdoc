@@ -9,12 +9,18 @@ pub struct PaperRow {
     pub heights: [Option<f32>; 2],
 }
 
-pub fn layout(ratios: &[Vec<f32>], pages: usize, width: f32) -> Vec<PaperRow> {
+pub fn layout(ratios: &[Vec<f32>], pages: &[Vec<Option<usize>>], width: f32) -> Vec<PaperRow> {
     let mut top = 0.0;
-    (0..pages)
-        .map(|index| {
-            let heights =
-                std::array::from_fn(|side| ratios.get(side)?.get(index).map(|ratio| ratio * width));
+    pages
+        .iter()
+        .map(|pair| {
+            let heights = std::array::from_fn(|side| {
+                let page = (*pair.get(side)?)?;
+                ratios
+                    .get(side)?
+                    .get(page.checked_sub(1)?)
+                    .map(|ratio| ratio * width)
+            });
             let height = heights
                 .into_iter()
                 .flatten()
@@ -43,7 +49,12 @@ mod tests {
 
     #[test]
     fn stacks_mixed_paper_sizes_and_aligns_missing_comparison_pages() {
-        let rows = layout(&[vec![1.4, 0.5], vec![0.5, 1.0, 2.0]], 3, 100.0);
+        let pairs = vec![
+            vec![Some(1), Some(1)],
+            vec![Some(2), Some(2)],
+            vec![None, Some(3)],
+        ];
+        let rows = layout(&[vec![1.4, 0.5], vec![0.5, 1.0, 2.0]], &pairs, 100.0);
         assert_eq!(rows[0].heights, [Some(140.0), Some(50.0)]);
         assert_eq!(rows[1].top, 190.0);
         assert_eq!(rows[1].bottom, 320.0);

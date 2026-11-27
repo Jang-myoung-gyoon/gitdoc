@@ -97,6 +97,7 @@ struct PagePreview {
 struct Pane {
     data: Value,
     ratios: Vec<Vec<f32>>,
+    page_pairs: Vec<Vec<Option<usize>>>,
     previews: HashMap<usize, Option<PagePreview>>,
     index: Vec<(usize, usize)>,
     indexed_through: usize,
@@ -242,6 +243,11 @@ impl GitDoc {
 
     fn display(&mut self, version: i64, base: Option<i64>) {
         self.comparison = Value::Null;
+        let page = if base.is_none() && self.ids.len() == 2 {
+            self.target_page()
+        } else {
+            self.pane.page
+        };
         let ids = match base {
             Some(base) => vec![base, version],
             None => vec![version],
@@ -250,11 +256,21 @@ impl GitDoc {
             ids,
             Destination {
                 pages: self.selection.pages,
-                page: self.pane.page,
+                page,
                 row_key: self.selection.row_key.clone(),
                 ..Default::default()
             },
         );
+    }
+
+    fn target_page(&self) -> usize {
+        let side = self.ids.len().saturating_sub(1);
+        let prior = self.pane.page.min(self.pane.page_pairs.len());
+        self.pane.page_pairs[..prior]
+            .iter()
+            .rev()
+            .find_map(|pair| pair.get(side).copied().flatten())
+            .unwrap_or(1)
     }
 
     fn select_version(&mut self, version: i64, pending: bool) {
@@ -307,6 +323,7 @@ impl GitDoc {
             "page",
             self.epoch,
             json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable,
+                "pages":self.pane.page_pairs.get(page - 1),
                 "paths":self.pane.data["paths"],"pdfium_directory":self.pane.data["pdfium_directory"],
                 "pdf_notes":self.pane.data["pdf_notes"]}),
         );
@@ -316,6 +333,7 @@ impl GitDoc {
         self.form = Some(Form::new(action, title, values));
     }
     fn edit_form(&mut self) {
+        let page = self.target_page();
         let extension = self
             .record(self.head())
             .map(|row| text(&row["extension"]))
@@ -341,7 +359,7 @@ impl GitDoc {
                 .cloned()
                 .unwrap_or_default();
             form.cell = self.pane.cell.clone();
-            form.page = self.pane.page.max(1);
+            form.page = page;
         }
     }
     fn register_form(&mut self, path: Option<PathBuf>) {
@@ -466,6 +484,8 @@ impl GitDoc {
                 } else if count(&self.pane.data["pages"]) > 0 {
                     self.pane.ratios = serde_json::from_value(self.pane.data["ratios"].clone())
                         .unwrap_or_default();
+                    self.pane.page_pairs =
+                        serde_json::from_value(self.pane.data["pairs"].clone()).unwrap_or_default();
                     self.go_to_page(self.selection.page.max(1), self.selection.change);
                 } else if let Some(fault) = rows(&self.pane.data["faults"]).first() {
                     self.notify(text(fault).to_owned(), true);
@@ -920,7 +940,11 @@ impl GitDoc {
             if ui.add(DragValue::new(&mut page).range(1..=pages)).changed() {
                 self.go_to_page(page, None);
             }
-            ui.label(format!("/ {pages}"));
+            ui.label(if self.ids.len() == 2 {
+                format!("/ {pages} · 비교 위치")
+            } else {
+                format!("/ {pages}")
+            });
             if ui
                 .add_enabled(page < pages, Button::new("다음 쪽 ▶"))
                 .clicked()
@@ -979,7 +1003,7 @@ impl GitDoc {
                             if ui
                                 .selectable_label(
                                     current == (p, Some(delta)),
-                                    format!("{p}쪽 · 변경 {}", delta + 1),
+                                    self.change_label(p, delta),
                                 )
                                 .clicked()
                             {
@@ -1008,7 +1032,7 @@ impl GitDoc {
             * self.zoom
             / 100.0;
         let span = width * side_count as f32 + gap * (side_count - 1) as f32;
-        let paper = paper::layout(&self.pane.ratios, pages, width);
+        let paper = paper::layout(&self.pane.ratios, &self.pane.page_pairs, width);
         let height = paper[pages - 1].bottom;
         let left = ((available - span) / 2.0).max(0.0);
         let jump = self.pane.page_jump.take();
@@ -1110,6 +1134,8 @@ impl GitDoc {
         gap: f32,
     ) {
         let preview = self.pane.previews.get(&number).and_then(Option::as_ref);
+        let pair = &self.pane.page_pairs[number - 1];
+        let gap_label = self.page_gap(number);
         for side in 0..self.ids.len() {
             let start = origin + vec2(side as f32 * (width + gap), row.top);
             let header = Rect::from_min_size(start, vec2(width, paper::HEADER));
@@ -1119,10 +1145,15 @@ impl GitDoc {
                     .max_rect(header),
                 |ui| {
                     ui.horizontal(|ui| {
-                        ui.strong(format!(
-                            "{} · {number}쪽",
-                            text(&self.pane.data["versions"][side])
-                        ));
+                        let version = text(&self.pane.data["versions"][side]);
+                        if let Some(page) = pair[side] {
+                            ui.strong(format!("{version} · {page}쪽"));
+                            if let Some(label) = gap_label {
+                                ui.strong(label);
+                            }
+                        } else {
+                            ui.strong(version);
+                        }
                         if side == 0
                             && let Some(preview) = preview.filter(|page| !page.notes.is_empty())
                         {
@@ -1183,6 +1214,32 @@ impl GitDoc {
         }
     }
 
+    fn page_gap(&self, number: usize) -> Option<&'static str> {
+        let pair = self.pane.page_pairs.get(number - 1)?;
+        if self.ids.len() != 2 || !rows(&self.pane.data["counts"]).iter().all(|n| count(n) > 0) {
+            return None;
+        }
+        match pair.as_slice() {
+            [None, Some(_)] => Some("삽입된 페이지"),
+            [Some(_), None] => Some("삭제된 페이지"),
+            _ => None,
+        }
+    }
+
+    fn change_label(&self, number: usize, delta: usize) -> String {
+        let page = self.pane.page_pairs[number - 1]
+            .iter()
+            .rev()
+            .flatten()
+            .next()
+            .copied()
+            .unwrap_or(number);
+        match self.page_gap(number) {
+            Some(label) => format!("{page}쪽 · {label}"),
+            None => format!("{page}쪽 · 변경 {}", delta + 1),
+        }
+    }
+
     fn request_index(&mut self) {
         if self.pane.indexing {
             return;
@@ -1191,7 +1248,7 @@ impl GitDoc {
         self.pane.indexing = self.request(
             "changes",
             self.epoch,
-            json!({"number":number, "counts":self.pane.data["counts"], "paths":self.pane.data["paths"],
+            json!({"number":number, "pages":self.pane.page_pairs.get(number - 1), "paths":self.pane.data["paths"],
                 "pdfium_directory":self.pane.data["pdfium_directory"]}),
         );
     }

@@ -136,53 +136,50 @@ fn render(
     let paths = params["paths"]
         .as_array()
         .ok_or("문서 미리보기 경로를 읽을 수 없습니다.")?;
-    if request.op == "page" {
-        let number = params["number"].as_u64().unwrap_or(0) as usize;
-        images.extend(
-            paths
-                .iter()
-                .map(|path| renderer.image(path.as_str(), number)),
-        );
-        let regions = match images.as_slice() {
-            [before, after] if params["comparable"] == true => {
-                pages::regions(before.as_ref(), after.as_ref())
-            }
-            _ => vec![],
-        };
-        let notes = if params["pdf_notes"] == true {
-            call(
-                "page_notes",
-                &json!({
-                    "doc": params["doc"], "version": params["ids"][0], "number": number,
-                }),
-            )
-            .unwrap_or_else(|_| json!([]))
-        } else {
-            json!([])
-        };
-        return Ok(json!({"regions": regions, "notes": notes}));
-    }
-
-    let (Some(left), Some(right)) = (
-        paths.first().and_then(Value::as_str),
-        paths.get(1).and_then(Value::as_str),
-    ) else {
-        return Ok(json!([]));
-    };
-    let left_count = params["counts"][0].as_u64().unwrap_or(0) as usize;
-    let right_count = params["counts"][1].as_u64().unwrap_or(0) as usize;
-    let number = params["number"].as_u64().unwrap_or(0) as usize;
-    if left == right {
+    let physical_pages = params["pages"]
+        .as_array()
+        .ok_or("비교 페이지를 찾을 수 없습니다.")?;
+    if request.op == "changes"
+        && paths.first() == paths.get(1)
+        && physical_pages.first() == physical_pages.get(1)
+    {
         return Ok(json!(0));
     }
-    let before = (number <= left_count)
-        .then(|| renderer.image(Some(left), number))
-        .flatten();
-    let after = (number <= right_count)
-        .then(|| renderer.image(Some(right), number))
-        .flatten();
-    if (number <= left_count && before.is_none()) || (number <= right_count && after.is_none()) {
-        return Ok(Value::Null);
+    let mut rendered = Vec::new();
+    for (path, page) in paths.iter().zip(physical_pages) {
+        rendered.push(
+            page.as_u64()
+                .and_then(|page| renderer.image(path.as_str(), page as usize)),
+        );
     }
-    Ok(json!(pages::regions(before.as_ref(), after.as_ref()).len()))
+    let failed = rendered
+        .iter()
+        .zip(physical_pages)
+        .any(|(image, p)| image.is_none() && !p.is_null());
+    let regions = match rendered.as_slice() {
+        [before, after] if !failed && (request.op == "changes" || params["comparable"] == true) => {
+            pages::regions(before.as_ref(), after.as_ref())
+        }
+        _ => vec![],
+    };
+    if request.op == "changes" {
+        return Ok(if failed {
+            Value::Null
+        } else {
+            json!(regions.len())
+        });
+    }
+    images.extend(rendered);
+    let notes = if params["pdf_notes"] == true {
+        call(
+            "page_notes",
+            &json!({
+                "doc": params["doc"], "version": params["ids"][0], "number": physical_pages[0],
+            }),
+        )
+        .unwrap_or_else(|_| json!([]))
+    } else {
+        json!([])
+    };
+    Ok(json!({"regions": regions, "notes": notes}))
 }

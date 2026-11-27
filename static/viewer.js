@@ -123,7 +123,19 @@ async function mountViewer(root) {
       return { error: '문서 미리보기를 열 수 없습니다.' };
     }
   }));
-  const total = Math.max(...infos.map(info => info.pages || 0));
+  const comparable = comparing && infos.every(info => info.pages);
+  const maxPages = Math.max(...infos.map(info => info.pages || 0));
+  let pairs = Array.from({ length: maxPages }, (_, index) =>
+    infos.map(info => index < info.pages ? index + 1 : null));
+  if (comparable) {
+    try {
+      const response = await fetch(root.dataset.pageAlignment);
+      if (response.ok) ({ pairs } = await response.json());
+    } catch {
+      // Keep the existing positional preview available if alignment cannot be loaded.
+    }
+  }
+  const total = pairs.length;
   if (!total) {
     const errors = [...new Set(infos.map(info => info.error).filter(Boolean))];
     status.textContent = errors.join(' ') || '미리보기를 열 수 없습니다. 원본을 다운로드해 확인할 수 있습니다.';
@@ -131,7 +143,6 @@ async function mountViewer(root) {
     return;
   }
 
-  const comparable = comparing && infos.every(info => info.pages);
   const resident = new Map();
   const scanned = new Map();
   let pageNumber = 0;
@@ -141,38 +152,47 @@ async function mountViewer(root) {
   let scrollFrame = 0;
   let noteRequest = 0;
 
-  const rows = Array.from({ length: total }, (_, index) => {
+  const rows = pairs.map((pair, index) => {
     const number = index + 1;
     const element = document.createElement('div');
     element.className = 'viewer-grid paper-row' + (comparing ? '' : ' viewer-single');
     element.dataset.pageNumber = number;
+    const change = comparable && !pair[0] ? '삽입된 페이지'
+      : comparable && !pair[1] ? '삭제된 페이지' : '';
     const cells = infos.map((info, side) => {
+      const physicalPage = pair[side];
       const cell = document.createElement('section');
       cell.className = 'paper-page';
       const heading = document.createElement('strong');
       heading.className = 'paper-page-heading';
       const label = comparing ? (side === 0 ? '기준 버전' : '비교 버전') : '문서';
-      heading.textContent = `${label} ${number}쪽`;
+      heading.textContent = physicalPage ? `${label} ${physicalPage}쪽` : label;
       cell.append(heading);
-      if (!info.pages || number > info.pages) {
+      if (!physicalPage) {
         const placeholder = document.createElement('p');
         placeholder.className = 'viewer-placeholder';
-        placeholder.textContent = info.error || '이 버전에는 해당 페이지가 없습니다.';
+        placeholder.textContent = info.error || (change ? '대응하는 페이지가 없습니다.' : '이 버전에는 해당 페이지가 없습니다.');
         cell.append(placeholder);
         element.append(cell);
         return null;
       }
       const sheet = document.createElement('div');
       sheet.className = 'viewer-sheet';
-      const [width, height] = info.dimensions?.[index] || [];
+      if (change) {
+        const badge = document.createElement('span');
+        badge.className = side === 0 ? 'paper-page-badge removed' : 'paper-page-badge inserted';
+        badge.textContent = change;
+        heading.append(' · ', badge);
+      }
+      const [width, height] = info.dimensions?.[physicalPage - 1] || [];
       if (width > 0 && height > 0 && Number.isFinite(width / height)) {
         sheet.style.setProperty('--paper-ratio', width / height);
       }
       cell.append(sheet);
       element.append(cell);
-      return { sheet, label: heading.textContent, points: info.sheet_widths?.[index] };
+      return { sheet, label: `${label} ${physicalPage}쪽`, physicalPage, points: info.sheet_widths?.[physicalPage - 1] };
     });
-    return { element, cells };
+    return { element, cells, change };
   });
   stack.append(...rows.map(row => row.element));
   page.max = total;
@@ -207,7 +227,7 @@ async function mountViewer(root) {
     else if (state.error) status.textContent = '페이지 이미지를 열 수 없습니다.';
     else if (!comparing) status.textContent = '';
     else if (!comparable) status.textContent = '양쪽에서 문서를 열 수 있을 때 시각적 차이를 표시합니다.';
-    else if (state.rendered.length < 2) status.textContent = '한 버전에만 있는 페이지입니다.';
+    else if (rows[pageNumber - 1].change) status.textContent = rows[pageNumber - 1].change;
     else if (!state.pixels) status.textContent = '페이지 크기가 달라 변경 위치를 겹쳐 표시할 수 없습니다.';
     else status.textContent = state.regions.length ? '분홍색은 기준본, 초록색은 수정본의 달라진 영역입니다.'
       : '이 페이지에서 눈에 띄는 시각적 차이가 없습니다.';
@@ -243,7 +263,9 @@ async function mountViewer(root) {
     sides.forEach(({ viewLink }, index) => {
       if (!viewLink || !infos[index].pages) return;
       const url = new URL(viewLink.href);
-      url.searchParams.set('page', String(Math.min(infos[index].pages, number)));
+      const paired = pairs[number - 1][index];
+      const nearest = paired || pairs.slice(0, number).reverse().find(pair => pair[index])?.[index] || 1;
+      url.searchParams.set('page', String(nearest));
       viewLink.href = url;
     });
     if (comparing) items.querySelector('[aria-current]')?.removeAttribute('aria-current');
@@ -273,7 +295,7 @@ async function mountViewer(root) {
     const state = { done: false, controller: new AbortController(), rendered: [], regions: [] };
     resident.set(number, state);
     const cells = rows[number - 1].cells;
-    state.promise = Promise.allSettled(cells.map((cell, side) => cell && imageFor(side, number, state.controller.signal)))
+    state.promise = Promise.allSettled(cells.map((cell, side) => cell && imageFor(side, cell.physicalPage, state.controller.signal)))
       .then(results => {
         if (resident.get(number) !== state) return;
         state.done = true;
@@ -397,10 +419,11 @@ async function mountViewer(root) {
   function scan(number) {
     if (!scanned.has(number)) {
       scanned.set(number, (async () => {
-        if (infos.some(info => number > info.pages)) return [null];
+        const row = rows[number - 1];
+        if (row.change) return [null];
         const state = resident.get(number);
         if (state?.done && !state.error) return state.regions;
-        const images = await Promise.all(sides.map((_, index) => imageFor(index, number)));
+        const images = await Promise.all(row.cells.map((cell, index) => imageFor(index, cell.physicalPage)));
         const result = comparePixels(...images);
         return result ? changeRegions(result) : [null];
       })());
@@ -446,7 +469,9 @@ async function mountViewer(root) {
       button.type = 'button';
       button.className = 'secondary';
       button.dataset.location = `${number}:${index}`;
-      button.textContent = region ? `${number}쪽 · 변경 ${index + 1}` : `${number}쪽 · 페이지 변경`;
+      const row = rows[number - 1];
+      const shownPage = row.cells[1]?.physicalPage ?? row.cells[0]?.physicalPage;
+      button.textContent = `${shownPage}쪽 · ${row.change || (region ? `변경 ${index + 1}` : '페이지 변경')}`;
       if (number === pageNumber && index === activeRegion) button.setAttribute('aria-current', 'true');
       button.addEventListener('click', () => focusRegion(number, index));
       item.append(button);

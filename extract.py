@@ -140,6 +140,16 @@ def odf_lines(data):
                 yield "".join(node.itertext())
 
 
+def comparison_text(version):
+    text = version["extracted"]
+    extension = version["extension"]
+    tag = "페이지" if extension == "pdf" else "슬라이드" if extension in ("pptx", "pptm") else None
+    if tag is None:
+        return text
+    marker = re.compile(rf"\[{tag} \d+\]")
+    return "\n".join(line for line in text.splitlines() if not marker.fullmatch(line))
+
+
 def extract(extension, data):
     if extension in ZIP_MARKERS:
         yield from office_lines(extension, data)

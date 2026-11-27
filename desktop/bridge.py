@@ -12,7 +12,9 @@ from delimited import aligned_rows, key_columns, lines as table_lines, sheet as 
 from desktop_link import document_path
 from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
+from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
+from page_alignment import aligned_pages
 from preview import page_dimensions, page_sizes, preview_path
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
@@ -73,7 +75,7 @@ def page_path(record):
 def view(doc, ids, mode="auto", row_key=None):
     records = versions(doc, ids, text=True)
     before, selected = records[0], records[-1]
-    left, right = before["extracted"], selected["extracted"]
+    left, right = comparison_text(before), comparison_text(selected)
     result = {"versions": [row["version_label"] for row in records], "filename": selected["filename"],
               "save_as": export_formats(selected["extension"]),
               "workbook": selected["extension"] in WORKBOOK_EXTENSIONS}
@@ -106,7 +108,8 @@ def view(doc, ids, mode="auto", row_key=None):
     else:
         previews = [inspect_preview(record) for record in records]
     counts, faults, paths, ratios = map(list, zip(*previews))
-    return dict(result, pages=max(counts, default=0), counts=counts, faults=faults, paths=paths, ratios=ratios,
+    pairs = aligned_pages(paths, counts)
+    return dict(result, pages=len(pairs), pairs=pairs, counts=counts, faults=faults, paths=paths, ratios=ratios,
                 pdfium_directory=str(Path(pypdfium2_raw.__file__).resolve().parent),
                 pdf_notes=len(records) == 1 and records[0]["extension"] == "pdf")
 

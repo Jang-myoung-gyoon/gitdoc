@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from browser_viewer import viewer_url
 from delimited import aligned_rows, key_columns, lines as table_lines, table_rows
 from desktop_link import checked_document_path, desktop_url, document_path
+from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch, find_document, initialize, new_branch,
@@ -41,7 +42,7 @@ def metadata(row):
 
 
 def difference(before, after, row_key=None):
-    left, right = before["extracted"], after["extracted"]
+    left, right = comparison_text(before), comparison_text(after)
     if row_key is not None:
         if before["extension"] not in DELIMITED_EXTENSIONS or after["extension"] not in DELIMITED_EXTENSIONS:
             raise ValueError("행 기준 열은 CSV/TSV에서만 사용할 수 있습니다.")
