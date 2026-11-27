@@ -1,3 +1,4 @@
+use crate::editor_fonts::{Fonts, Span};
 use eframe::egui::*;
 use serde_json::{Value, json};
 use std::{
@@ -40,6 +41,8 @@ struct Object {
     text: Option<String>,
     name: String,
     align: Vec<String>,
+    fonts: Vec<Span>,
+    font_reference: String,
 }
 
 impl Object {
@@ -55,6 +58,8 @@ impl Object {
             text: value["text"].as_str().map(str::to_owned),
             name: value["name"].as_str().unwrap_or("").to_owned(),
             align: serde_json::from_value(value["align"].clone()).unwrap_or_default(),
+            fonts: serde_json::from_value(value["fonts"].clone()).unwrap_or_default(),
+            font_reference: value["text"].as_str().unwrap_or("").into(),
         })
     }
 }
@@ -94,6 +99,7 @@ pub struct Editor {
     selected: Option<Target>,
     multiple: BTreeSet<u64>,
     patched: HashSet<Target>,
+    typefaces: Fonts,
     text: Option<Text>,
     next_text: Option<Target>,
     pending_target: Option<Target>,
@@ -133,6 +139,7 @@ impl Editor {
             selected: None,
             multiple: BTreeSet::new(),
             patched: HashSet::new(),
+            typefaces: Fonts::default(),
             text: None,
             next_text: None,
             pending_target: None,
@@ -182,6 +189,7 @@ impl Editor {
             return Ok(());
         }
         self.patched.clear();
+        self.typefaces.update(ctx, &result["fonts"]);
         let path = result["image"]
             .as_str()
             .ok_or("슬라이드 이미지를 찾을 수 없습니다.")?;
@@ -225,6 +233,10 @@ impl Editor {
         self.waiting = false;
         self.error = None;
         Ok(())
+    }
+
+    pub fn release_fonts(&mut self, ctx: &Context) {
+        self.typefaces.reset(ctx);
     }
 
     pub fn set_error(&mut self, error: String) {
@@ -295,14 +307,19 @@ impl Editor {
     }
 
     fn start_text(&mut self, target: Target, cursor: Option<usize>) {
-        let Some(value) = self
-            .objects
-            .iter()
-            .find(|item| item.target == target)
-            .and_then(|item| item.text.as_ref())
-        else {
+        let Some(object) = self.objects.iter().find(|item| item.target == target) else {
             return;
         };
+        let Some(value) = &object.text else { return };
+        if let Some(Span(_, name, size, _)) = object.fonts.first() {
+            let label = self.typefaces.label(name);
+            if !label.is_empty() {
+                self.font = label.to_owned();
+            }
+            if size.is_finite() && *size > 0.0 {
+                self.font_size = size.round() as i32;
+            }
+        }
         let value = value.replace('\u{000b}', "\n");
         self.selected = Some(target);
         self.text = Some(Text {
@@ -1117,13 +1134,15 @@ impl Editor {
                 let (area, ink, size) = editing_rect(canvas, object, self.width, true);
                 let background = backdrop(pixels, canvas, ink);
                 ui.painter().rect_filled(ink, 0.0, background);
-                let galley = aligned_text(
+                let galley = object.text_layout(
+                    &self.typefaces,
                     ui,
                     text,
-                    &object.align,
                     FontId::proportional(size),
                     contrast(background),
                     area.width(),
+                    canvas.width() / self.width,
+                    true,
                 );
                 ui.painter().with_clip_rect(area).galley(
                     area.left_top(),
@@ -1167,14 +1186,18 @@ impl Editor {
             if let Some(event) = self.pending_event.take() {
                 ctx.input_mut(|input| input.events.push(event));
             }
+            let scale = canvas.width() / self.width;
+            let typefaces = &self.typefaces;
             let mut layout = |ui: &Ui, text: &dyn TextBuffer, wrap: f32| {
-                aligned_text(
+                object.text_layout(
+                    typefaces,
                     ui,
                     text.as_str(),
-                    &object.align,
                     FontId::proportional(font_size),
                     foreground,
                     wrap,
+                    scale,
+                    localized,
                 )
             };
             ui.scope_builder(UiBuilder::new().max_rect(edit_box), |ui| {
@@ -1189,7 +1212,7 @@ impl Editor {
                     .text_color(foreground)
                     .char_limit(20000)
                     .interactive(!self.waiting);
-                if localized {
+                if localized || !object.fonts.is_empty() {
                     widget = widget.layouter(&mut layout);
                 }
                 ui.put(edit_box, widget);
@@ -1301,17 +1324,40 @@ fn contrast(color: Color32) -> Color32 {
     }
 }
 
-fn aligned_text(
-    ui: &Ui,
-    text: &str,
+impl Object {
+    fn text_layout(
+        &self,
+        fonts: &Fonts,
+        ui: &Ui,
+        value: &str,
+        fallback: FontId,
+        color: Color32,
+        width: f32,
+        scale: f32,
+        aligned: bool,
+    ) -> std::sync::Arc<Galley> {
+        let alignment = if aligned { self.align.as_slice() } else { &[] };
+        let justify = !alignment.is_empty() && alignment.iter().all(|value| value == "justify");
+        let galley = fonts.layout(
+            ui,
+            value,
+            &self.font_reference,
+            &self.fonts,
+            scale,
+            fallback,
+            color,
+            width,
+            justify,
+        );
+        align_galley(galley, alignment, width)
+    }
+}
+
+fn align_galley(
+    galley: std::sync::Arc<Galley>,
     alignment: &[String],
-    font: FontId,
-    color: Color32,
     width: f32,
 ) -> std::sync::Arc<Galley> {
-    let mut job = text::LayoutJob::simple(text.to_owned(), font, color, width);
-    job.justify = !alignment.is_empty() && alignment.iter().all(|value| value == "justify");
-    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     if !alignment
         .iter()
         .any(|align| matches!(align.as_str(), "center" | "right"))

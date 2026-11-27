@@ -1,6 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod bridge;
+mod editor_fonts;
 mod office_editor;
 mod pages;
 mod paper;
@@ -198,6 +199,7 @@ fn configure(ctx: &egui::Context) {
         .entry(egui::FontFamily::Monospace)
         .or_default()
         .extend(system_fonts);
+    editor_fonts::remember_base(ctx, &fonts);
     ctx.set_fonts(fonts);
     ctx.set_visuals(egui::Visuals::light());
     ctx.style_mut(|style| {

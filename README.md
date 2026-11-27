@@ -123,7 +123,7 @@ Open **슬라이드 편집** from the current approved PPTX version and click te
 
 Save with **수정안 저장**, **Cmd+S** on macOS, or **Ctrl+S** on Windows. The change reason is optional. Press **Enter** in the reason field to save. Changing text-box alignment redraws only that box on the editing canvas. When the slide order stays the same at save time, GitDoc renders the changed slides and reuses the verified unchanged pages for the comparison preview.
 
-Open **본문 편집** to click and type in DOC and HWP body paragraphs. The new version keeps the original extension. DOC uses a LibreOffice round trip through DOCX, which may change some layout or formatting. Direct HWP editing uses rhwp and requires a body paragraph whose source position can be verified.
+Open **본문 편집** to click and type in DOC and HWP body paragraphs. The new version keeps the original extension. DOC uses a LibreOffice round trip through DOCX, which may change some layout or formatting. Direct HWP editing uses rhwp and requires a body paragraph whose source position can be verified. When you type directly on the PPTX, DOC, or HWP canvas, the editor uses the font, size, and color from the preview. Unavailable fonts follow the document font substitution rules.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. Password-protected and signed originals cannot be edited.
 

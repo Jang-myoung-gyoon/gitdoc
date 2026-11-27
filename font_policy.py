@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -72,12 +73,12 @@ def faces(path):
         else:
             font = TTFont(path, lazy=True)
             fonts = [font]
-        for item in fonts:
+        for index, item in enumerate(fonts):
             try:
                 names = item["name"]
                 family = names.getBestFamilyName()
                 if family:
-                    yield family, [record.toUnicode() for record in names.names if record.nameID in (1, 4, 6, 16, 21)]
+                    yield family, [record.toUnicode() for record in names.names if record.nameID in (1, 4, 6, 16, 21)], index
             except (KeyError, UnicodeError, TTLibError, ValueError):
                 continue
     except (TTLibError, OSError, ValueError):
@@ -110,12 +111,22 @@ def scan_fonts(directories, _refresh):
 def inventory(manifest):
     names = {}
     families = set()
-    for path, _ in manifest:
-        for family, aliases in faces(path):
-            families.add(family)
-            for alias in [family, *aliases]:
-                names.setdefault(family_key(alias), family)
+    for key, entry in face_index(manifest).items():
+        names[key] = entry["family"]
+        families.add(entry["family"])
     return names, tuple(sorted(families, key=str.casefold)), manifest
+
+
+@lru_cache(maxsize=3)
+def face_index(manifest):
+    result = {}
+    for path, stats in manifest:
+        for family, aliases, index in faces(path):
+            entry = {"family": family, "path": str(path), "index": index, "size": stats[1]}
+            for alias in (family, *aliases):
+                result.setdefault(family_key(alias), entry)
+    return result
+
 
 
 def installed_fonts():
@@ -156,6 +167,27 @@ def resolve_missing(name, installed, rules, east_asian=False):
     choices = (configured.get(key, ""), *match, *(KOREAN.get(category, ()) if east_asian else ()), *GENERIC[category])
     return next((installed[family_key(choice)] for choice in choices if family_key(choice) in installed), None)
 
+
+
+def editor_font_files(requests):
+    names, _, manifest = installed_fonts()
+    sources = face_index(manifest)
+    rules = substitutions()
+    result = {}
+    for font, east_asian in requests.items():
+        if not font:
+            continue
+        name = font.split("+", 1)[-1] if len(font) > 7 and font[6] == "+" and font[:6].isupper() else font
+        key = family_key(name)
+        options = [key, family_key(re.sub(r"[- ](?:Regular|Book|Roman|MT)$", "", name))]
+        candidates = [sources[option] for option in options if option in sources]
+        if not candidates:
+            fallback = resolve_missing(name, names, rules, east_asian)
+            if fallback is not None and family_key(fallback) in sources:
+                candidates.append(sources[family_key(fallback)])
+        if candidates:
+            result[font] = {**candidates[0], "label": candidates[0]["family"] if key in sources else name}
+    return result
 
 def office_font_requests(source):
     requests, embedded = {}, set()

@@ -495,6 +495,7 @@ impl GitDoc {
                             page: deck.page,
                             ..Default::default()
                         };
+                        deck.release_fonts(ctx);
                         self.deck = None;
                         self.refresh();
                         self.open_doc(self.doc, place);
@@ -1914,6 +1915,7 @@ impl GitDoc {
                 match command {
                     Some(presentation::Command::Close) => {
                         let page = deck.page;
+                        deck.release_fonts(ctx);
                         self.deck = None;
                         self.request("deck_close", 0, json!({}));
                         let place = Destination {

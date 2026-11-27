@@ -19,6 +19,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.util import Pt
 
+from desktop.editor_fonts import use_rendered_fonts
 from editing import SLIDE, format_block, open_package, replace_run_span, valid_text, XML_SPACE
 from page_text import embedded_text
 from preview import (CACHE, PreviewError, convert, page_dimensions, preview_cache_path, preview_path,
@@ -392,8 +393,9 @@ class Deck:
             text_hits(items, pdf, page)
         except (OSError, ValueError, RuntimeError):
             pass
+        fonts = use_rendered_fonts(items, pdf, page, Path(self.directory.name) / "fonts")
         return {"page": index+1, "count": len(slides), "width": width/EMU, "height": height/EMU,
-                "objects": items, "image": str(png)}
+                "objects": items, "image": str(png), "fonts": fonts}
 
     def prime_preview(self, digest):
         if self.base_preview is None:

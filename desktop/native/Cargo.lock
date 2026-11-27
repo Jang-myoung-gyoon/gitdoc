@@ -1398,6 +1398,7 @@ dependencies = [
  "pdfium-render",
  "raw-window-handle",
  "rfd",
+ "serde",
  "serde_json",
  "ttf-parser",
  "url",

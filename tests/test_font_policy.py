@@ -5,7 +5,8 @@ from unittest.mock import patch
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
-from font_policy import family_key, font_environment, office_replacements, policy_key, resolve_missing
+from desktop.editor_fonts import font_spans
+from font_policy import editor_font_files, family_key, font_environment, office_replacements, policy_key, resolve_missing
 from preview import office_profile
 
 
@@ -35,6 +36,24 @@ class FontPolicyTests(unittest.TestCase):
             self.assertIn("MacroSecurityLevel", content)
             self.assertIn("FontPairs", content)
             self.assertIn("Apple SD Gothic Neo", content)
+
+    def test_editor_resolves_rendered_font_face_and_installed_fallback(self):
+        regular = {"family": "Arial", "path": "/fonts/arial.ttc", "index": 0, "size": 20}
+        bold = dict(regular, index=2)
+        courier = {"family": "Courier New", "path": "/fonts/courier.ttf", "index": 0, "size": 25}
+        faces = {"arial": regular, "arialbold": bold, "couriernew": courier}
+        with patch("font_policy.installed_fonts", return_value=(self.installed, (), ())), \
+                patch("font_policy.face_index", return_value=faces), \
+                patch("font_policy.substitutions", return_value={"Missing Face": "Courier New"}):
+            chosen = editor_font_files({"ABCDEF+Arial-Bold": False, "Missing Face": False})
+        self.assertEqual(chosen["ABCDEF+Arial-Bold"]["index"], 2)
+        self.assertEqual(chosen["Missing Face"]["path"], courier["path"])
+
+    def test_editor_retains_mixed_font_spans_across_spaces(self):
+        korean = ("HCR Batang", 15, (32, 32, 32))
+        latin = ("Arial", 12, (200, 20, 20))
+        self.assertEqual(font_spans("한글 A", [korean, korean, latin]),
+                         [[0, *korean], [3, *latin]])
 
     def test_fontconfig_and_cache_key_change_with_user_rules(self):
         with tempfile.TemporaryDirectory() as folder, patch("font_policy.installed_fonts", return_value=(self.installed, (), ())), \

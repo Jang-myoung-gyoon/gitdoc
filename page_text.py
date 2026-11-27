@@ -4,7 +4,7 @@ import csv
 import json
 import os
 import tempfile
-from ctypes import c_int
+from ctypes import c_int, c_uint, create_string_buffer
 from functools import lru_cache
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -26,15 +26,18 @@ def bounds(line):
 
 
 def printable_lines(lines):
-    return [line for line in lines if any(value.strip() for value, _ in line)]
+    return [line for line in lines if any(glyph[0].strip() for glyph in line)]
 
 
-def embedded_text(path, number):
+def embedded_text(path, number, *, styled=False):
     with PDFIUM_LOCK, PdfDocument(path) as document:
         page = document[number - 1]
         text = page.get_textpage()
         lines, line = [], []
         x, y = c_int(), c_int()
+        flags = c_int()
+        color = (c_uint(), c_uint(), c_uint(), c_uint())
+        font_buffer = create_string_buffer(512)
 
         def to_device(left, bottom, right, top):
             coords = []
@@ -62,10 +65,17 @@ def embedded_text(path, number):
                 box = to_device(*text.get_charbox(index, loose=True))
             except PdfiumError:
                 box = None
+            if box is None and value.isspace() and line:
+                box = line[-1][1]
             if box is not None:
-                line.append([value, box])
-            elif value.isspace() and line:
-                line.append([value, line[-1][1]])
+                glyph = [value, box]
+                if styled:
+                    size = round(raw.FPDFText_GetFontSize(text, index), 2)
+                    length = raw.FPDFText_GetFontInfo(text, index, font_buffer, len(font_buffer), flags)
+                    font = font_buffer.value.decode("utf-8", errors="replace") if 1 < length <= len(font_buffer) else ""
+                    rgb = tuple(int(channel.value) for channel in color[:3]) if raw.FPDFText_GetFillColor(text, index, *color) else None
+                    glyph.append((font, size, rgb))
+                line.append(glyph)
         lines.append(line)
     return printable_lines(lines)
 

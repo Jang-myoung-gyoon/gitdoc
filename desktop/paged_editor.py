@@ -12,6 +12,7 @@ from pathlib import Path
 
 import olefile
 
+from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
 from page_text import embedded_text
@@ -221,8 +222,9 @@ class PagedEditor:
         self.current_key = key
         png = Path(self.directory.name)/"document.png"
         png.write_bytes(preview_png(pdf, number, prefer_pdfium=True))
+        fonts = use_rendered_fonts(objects, pdf, number, Path(self.directory.name) / "fonts")
         return {"page": number, "count": count, "width": width, "height": height,
-                "objects": objects, "image": str(png)}
+                "objects": objects, "image": str(png), "fonts": fonts}
 
     def page(self, number, operation=None, text_edit=None, target=None, value=None, **_):
         index = self.position
