@@ -164,8 +164,11 @@ function showMarks(sides, result, regions, highlight, selected) {
 async function mountViewer(root) {
   const sides = Array.from(root.querySelectorAll('[data-preview]'), node => ({
     url: node.dataset.preview,
-    viewLink: node.querySelector('[data-view-link]')
+    viewLink: node.querySelector('[data-view-link]'),
+    version: versionLocation(node)
   }));
+  const parameters = new URLSearchParams(location.search);
+  const setEditLocation = editLocationControl(root);
   const scroll = root.querySelector('[data-paper-scroll]');
   const stack = root.querySelector('[data-paper-stack]');
   const page = root.querySelector('[data-page]');
@@ -221,10 +224,17 @@ async function mountViewer(root) {
   textMeasure.font = '100px sans-serif';
   const textLayers = new Map();
   let visibleText = new Set();
+  let followedLocation = false;
   const textResize = new ResizeObserver(entries => {
     for (const { target, contentRect } of entries) {
       const spans = textLayers.get(target);
-      if (spans) positionText(spans, contentRect.width, contentRect.height);
+      if (!spans || !contentRect.width || !contentRect.height) continue;
+      positionText(spans, contentRect.width, contentRect.height);
+      const marked = target.querySelector('[data-location-start]');
+      if (!followedLocation && marked && target.closest('.paper-row').dataset.pageNumber === String(pageNumber)) {
+        followedLocation = true;
+        setOffset(topOf(marked) - 36);
+      }
     }
   });
   let pageNumber = 0;
@@ -345,7 +355,7 @@ async function mountViewer(root) {
     activeRegion = -1;
     drawMarks(old, resident.get(old));
     page.value = number;
-    root.dispatchEvent(new CustomEvent('gitdoc:page', { detail: { number, total } }));
+    if (old !== number) setEditLocation(null);
     sides.forEach(({ viewLink }, index) => {
       if (!viewLink || !infos[index].pages) return;
       const url = new URL(viewLink.href);
@@ -402,9 +412,18 @@ async function mountViewer(root) {
       if (state.controller.signal.aborted || !lines.length) return;
       const layer = document.createElement('div');
       layer.className = 'viewer-text';
-      const spans = lines.map(line => {
+      layer.dataset.side = side;
+      layer.dataset.physicalPage = cell.physicalPage;
+      const markStart = Number(parameters.get('text_line'));
+      const markEnd = Number(parameters.get('text_end_line'));
+      const markHere = markStart > 0 && markEnd >= markStart &&
+        parameters.get('text_side') === String(side) &&
+        parameters.get('page') === cell.sheet.closest('.paper-row').dataset.pageNumber;
+      const spans = lines.map((line, index) => {
         const span = document.createElement('span');
         span.dir = 'auto';
+        span.dataset.line = index + 1;
+        if (markHere && index + 1 === markStart) span.dataset.locationStart = '';
         span.textContent = line.map(([value]) => value).join('');
         const box = line.reduce(([x0, y0, x1, y1], [, b]) =>
           [Math.min(x0, b[0]), Math.min(y0, b[1]), Math.max(x1, b[2]), Math.max(y1, b[3])],
@@ -415,11 +434,81 @@ async function mountViewer(root) {
       });
       textLayers.set(cell.sheet, spans);
       cell.sheet.append(layer);
+      if (markHere) markTextLocation(spans, markStart, markEnd);
       textResize.observe(cell.sheet);
     } catch {
       // The raster preview remains available if extracting selectable text fails.
     }
   }
+
+  function markTextLocation(spans, start, end) {
+    const first = spans[start - 1]?.span;
+    const last = spans[end - 1]?.span;
+    if (!first || !last || !Number.isInteger(start) || !Number.isInteger(end)) return;
+    const from = Number(parameters.get('text_offset') ?? 0);
+    const to = Number(parameters.get('text_end_offset') ?? last.textContent.length);
+    if (globalThis.CSS?.highlights && typeof Highlight === 'function' &&
+      Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to >= 0 &&
+      from <= first.textContent.length && to <= last.textContent.length &&
+      (first !== last || from < to)) {
+      const range = document.createRange();
+      range.setStart(first.firstChild, from);
+      range.setEnd(last.firstChild, to);
+      CSS.highlights.set('gitdoc-edit-location', new Highlight(range));
+    } else {
+      for (const { span } of spans.slice(start - 1, end)) span.classList.add('edit-location-mark');
+    }
+  }
+
+  function selectedLine(node) {
+    return (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)
+      ?.closest('.viewer-text > span');
+  }
+
+  function offsetIn(line, node, offset) {
+    const prefix = document.createRange();
+    prefix.selectNodeContents(line);
+    prefix.setEnd(node, offset);
+    return prefix.toString().length;
+  }
+
+  scroll.addEventListener('pointerdown', () => setEditLocation(null));
+  document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0);
+    const first = selectedLine(range.startContainer);
+    const last = selectedLine(range.endContainer);
+    if (!first || !root.contains(first)) return;
+    const layer = first.parentElement;
+    if (!last || last.parentElement !== layer || !selection.toString().trim()) {
+      setEditLocation(null);
+      return;
+    }
+    const side = Number(layer.dataset.side);
+    const position = Number(layer.closest('.paper-row').dataset.pageNumber);
+    const physicalPage = Number(layer.dataset.physicalPage);
+    const start = { line: Number(first.dataset.line),
+      offset_utf16: offsetIn(first, range.startContainer, range.startOffset) };
+    const end = { line: Number(last.dataset.line),
+      offset_utf16: offsetIn(last, range.endContainer, range.endOffset) };
+    const sheet = layer.getBoundingClientRect();
+    const region = range.getBoundingClientRect();
+    const fraction = value => Math.round(Math.max(0, Math.min(1, value)) * 10000) / 10000;
+    const box = [
+      fraction((region.left - sheet.left) / sheet.width),
+      fraction((region.top - sheet.top) / sheet.height),
+      fraction((region.right - sheet.left) / sheet.width),
+      fraction((region.bottom - sheet.top) / sheet.height)
+    ];
+    setEditLocation({
+      kind: 'page_text', ...sides[side].version, page: physicalPage,
+      ...(comparing ? { comparison_position: position, comparison_side: side === 0 ? 'base' : 'target' } : {}),
+      selected_text: selection.toString(), start, end, box_normalized: box
+    }, { page: position, text_side: side, text_line: start.line, text_offset: start.offset_utf16,
+      text_end_line: end.line, text_end_offset: end.offset_utf16,
+      ...(root.dataset.printLayout === 'true' ? { view: 'pages' } : {}) });
+  });
 
   function loadVisibleText(number, state) {
     if (!visibleText.has(number) || !state?.done || state.requestedText) return;
@@ -481,6 +570,7 @@ async function mountViewer(root) {
     resident.delete(number);
     rows[number - 1].cells.forEach(cell => {
       if (!cell) return;
+      if (cell.sheet.querySelector('[data-location-start]')) globalThis.CSS?.highlights?.delete('gitdoc-edit-location');
       textResize.unobserve(cell.sheet);
       textLayers.delete(cell.sheet);
       cell.sheet.replaceChildren();
@@ -684,14 +774,13 @@ async function mountViewer(root) {
     list.addEventListener('toggle', () => { if (listed === 0) updateList(); });
     list.querySelector('[data-more-changes]').addEventListener('click', updateList);
   }
-  const params = new URLSearchParams(location.search);
   setZoom();
-  const initialPage = Number(root.closest('[data-document-editor]')?.dataset.page || params.get('page') || 1);
+  const initialPage = Number(parameters.get('page') || 1);
   jump(Number.isInteger(initialPage) ? initialPage : 1);
   const resize = new ResizeObserver(renderViewport);
   resize.observe(scroll);
   resize.observe(stack);
-  const initialChange = Number(params.get('change'));
+  const initialChange = Number(parameters.get('change'));
   if (comparable && Number.isInteger(initialChange) && initialChange > 0) {
     await focusRegion(pageNumber, initialChange - 1);
   }

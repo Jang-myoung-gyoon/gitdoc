@@ -9,9 +9,6 @@
 <body>
   <header class="top"><div class="wrap"><a class="brand" href="{{ url_for('index') }}"><span class="mark" aria-hidden="true">▤</span> 문서 버전 관리</a><span class="subtle" title="로컬 작업 공간">{{ workspace.workspace_name }} · {{ workspace.workspace_id[:8] }}</span></div></header>
   <main class="wrap {% block main_class %}{% endblock %}">
-    {% for category, message in get_flashed_messages(with_categories=true) %}
-    <p role="{{ 'alert' if category == 'error' else 'status' }}" class="notice {{ category }}">{{ message }}</p>
-    {% endfor %}
     {% block main %}{% endblock %}
   </main>
 </body>

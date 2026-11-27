@@ -2,15 +2,15 @@
 {% from "file.html" import links %}
 {% from "diff.html" import diff %}
 {% from "viewer.html" import viewer %}
-{% from "document_actions.html" import toolbar, dialog %}
+{% from "document_actions.html" import toolbar %}
 {% block main_class %}comparison-wrap{% endblock %}
 {% block title %}버전 비교 · {{ doc.title }}{% endblock %}
 {% block main %}
   <nav class="breadcrumb" aria-label="현재 위치"><a href="{{ url_for('index') }}">문서함</a><span aria-hidden="true">/</span><a href="{{ url_for('detail', document_id=doc.id, branch=active.name) }}">{{ doc.title }}</a></nav>
   <div class="page-heading"><h1>버전 비교</h1><p>{{ original.branch_name }} {{ original.version_label }} → {{ updated.branch_name }} {{ updated.version_label }}</p></div>
-  {{ toolbar(doc, active, current, branches, versions, before=original, after=updated, extra=('review', '수정안 검토') if updated.status == 'pending' else none) }}
+  {{ toolbar(doc, active, current, branches, versions, before=original, after=updated) }}
   <div class="comparison-body">
-    {{ viewer(doc.id, original, updated) }}
+    {{ viewer(doc.id, original, updated, branch=active.name) }}
   <div class="compare-cards">
     {% for item in (original, updated) %}
     <section class="panel">
@@ -26,23 +26,5 @@
     <h2 id="changes-title">추출된 내용 차이</h2>
     {{ diff(original, updated, changes, truncated) }}
   </section>
-  {% if updated.status == 'pending' %}
-  {% call dialog('review', review_branch.name ~ ' 수정안 검토') %}
-    {% if updated.base_id != review_branch.head_id %}
-    <p class="notice error">확정본이 변경되었습니다. 이 수정안을 승인하려면 새 확정본을 기준으로 다시 제출하세요.</p>
-    {% elif original.id != updated.base_id %}
-    <p><a href="{{ url_for('compare', document_id=doc.id, target=updated.id) }}">이 수정안의 기준본으로 비교</a></p>
-    {% endif %}
-    <form method="post" action="{{ url_for('review', document_id=doc.id, version_id=updated.id) }}" class="stack">
-      <input type="hidden" name="base" value="{{ original.id }}">
-      <label for="note">검토 의견 <span class="subtle small">선택</span></label>
-      <textarea name="note" id="note" rows="3" maxlength="500"></textarea>
-      <div class="actions">
-        <button name="action" value="approve" {% if updated.base_id != review_branch.head_id or original.id != updated.base_id %}disabled{% endif %}>승인하여 확정</button>
-        <button class="secondary" name="action" value="reject">반려</button>
-      </div>
-    </form>
-  {% endcall %}
-  {% endif %}
   </div>
 {% endblock %}

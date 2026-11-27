@@ -9,6 +9,6 @@
     <h1>{{ doc.title }}</h1>
     <p><span class="status approved">확정본 {{ current.version_label }}</span> <strong>{{ active.name }}</strong> {{ current.filename }}</p>
   </div>
-  {{ toolbar(doc, active, current, branches, versions, opened=opened, edit_mode=edit_mode) }}
-  {{ viewer(doc.id, opened) }}
+  {{ toolbar(doc, active, current, branches, versions, opened=opened) }}
+  {{ viewer(doc.id, opened, branch=active.name) }}
 {% endblock %}

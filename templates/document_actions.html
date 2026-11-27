@@ -10,17 +10,10 @@
 </dialog>
 {% endmacro %}
 
-{% macro toolbar(doc, active, current, branches, versions, opened=none, before=none, after=none, extra=none, edit_mode=none) %}
-<nav class="document-actions" aria-label="문서 작업">
+{% macro toolbar(doc, active, current, branches, versions, opened=none, before=none, after=none) %}
+<nav class="document-actions" aria-label="문서 탐색">
   <button class="secondary" type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="branches-dialog">브랜치 <small>{{ active.name }}</small></button>
   <button class="secondary" type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="history-dialog">버전 이력</button>
-  <button type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="propose-dialog">수정안 제출</button>
-  {% if extra %}
-  <button class="secondary" type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="{{ extra[0] }}-dialog">{{ extra[1] }}</button>
-  {% endif %}
-  {% if opened and edit_mode %}
-  <a class="edit-link" href="{{ url_for('edit_document', document_id=doc.id, branch=active.name) }}">문서 편집</a>
-  {% endif %}
   {% if opened and opened.id != current.id %}
   <a href="{{ url_for('detail', document_id=doc.id, branch=active.name) }}">최신 확정본 보기</a>
   {% endif %}
@@ -34,20 +27,11 @@
   </nav>
   {% if branches|length > 1 %}
   <form class="selection branch-compare" action="{{ url_for('compare_branches', document_id=doc.id) }}">
-    <label>병합 대상<select name="target">{% for item in branches %}<option value="{{ item.name }}" {% if item.name == active.name %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
-    <label>가져올 브랜치<select name="source">{% for item in branches %}<option value="{{ item.name }}" {% if loop.index == (2 if active.name == branches[0].name else 1) %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+    <label>기준 브랜치<select name="target">{% for item in branches %}<option value="{{ item.name }}" {% if item.name == active.name %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+    <label>비교 브랜치<select name="source">{% for item in branches %}<option value="{{ item.name }}" {% if loop.index == (2 if active.name == branches[0].name else 1) %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
     <button class="secondary">브랜치 대조</button>
   </form>
   {% endif %}
-  <details>
-    <summary>새 브랜치 만들기</summary>
-    <form class="selection restore" method="post" action="{{ url_for('create_branch', document_id=doc.id) }}">
-      <input type="hidden" name="branch" value="{{ active.name }}">
-      <label>이름<input name="name" maxlength="50" required placeholder="예시: budget-review"></label>
-      <label>시작 버전<select name="start">{% for v in versions if v.status == 'approved' %}<option value="{{ v.id }}" {% if v.id == current.id %}selected{% endif %}>{{ v.version_label }}</option>{% endfor %}</select></label>
-      <button class="secondary">브랜치 만들기</button>
-    </form>
-  </details>
 {% endcall %}
 
 {% call dialog('history', '버전 이력') %}
@@ -78,33 +62,12 @@
       {% if v.merge_parent_id %}<p class="subtle small">병합 버전 · <a href="{{ url_for('compare', document_id=doc.id, branch=active.name, base=v.merge_parent_id, target=v.id) }}">가져온 버전과 대조</a></p>{% endif %}
       <div class="file-links">
         {{ links(doc.id, v, active.name, not opened or v.id != opened.id) }}
-        {% if v.base_id %}<a href="{{ url_for('compare', document_id=doc.id, branch=active.name, target=v.id) }}">{{ '수정안 검토' if v.status == 'pending' else '기준본과 비교' }}<span class="sr-only"> {{ v.version_label }}</span></a>{% endif %}
+        {% if v.base_id %}<a href="{{ url_for('compare', document_id=doc.id, branch=active.name, target=v.id) }}">기준본과 비교<span class="sr-only"> {{ v.version_label }}</span></a>{% endif %}
       </div>
-      {% if v.status == 'approved' and current.id != v.id %}
-      <details>
-        <summary>이 버전을 복원</summary>
-        <form class="stack restore" method="post" action="{{ url_for('restore', document_id=doc.id, version_id=v.id) }}">
-          <input type="hidden" name="base" value="{{ current.id }}">
-          <input type="hidden" name="branch" value="{{ active.name }}">
-          <label for="restore-{{ v.id }}">복원 사유</label><input id="restore-{{ v.id }}" name="reason" required maxlength="500">
-          <button class="secondary">{{ v.version_label }}을 새 확정본으로 복원</button>
-        </form>
-      </details>
-      {% endif %}
     </article>
   {% endfor %}
   </div>
 {% endcall %}
 
-{% call dialog('propose', '수정안 제출') %}
-  <p class="subtle small">{{ active.name }}의 확정본 {{ current.version_label }}에서 변경한 {{ current.extension|upper }} 파일을 제출하세요.</p>
-  <form method="post" action="{{ url_for('propose', document_id=doc.id) }}" enctype="multipart/form-data" class="stack">
-    <input type="hidden" name="base" value="{{ current.id }}">
-    <input type="hidden" name="branch" value="{{ active.name }}">
-    <label for="draft">수정 파일</label><input id="draft" type="file" name="file" accept=".{{ current.extension }}" required>
-    <label for="reason">변경 사유</label><textarea id="reason" name="reason" required maxlength="500" rows="4" placeholder="바뀐 내용과 검토할 부분을 입력하세요."></textarea>
-    <button>검토 요청</button>
-  </form>
-{% endcall %}
 <script src="{{ url_for('static', filename='document_actions.js') }}" defer></script>
 {% endmacro %}

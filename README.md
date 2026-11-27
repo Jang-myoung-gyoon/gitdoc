@@ -36,7 +36,7 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 
 ## Browser viewer
 
-The desktop app and local web viewer read and update the same document workspace. Check the workspace label and ID in both headers. Select **브라우저에서 보기** to open the current version or comparison in your default browser. To open it in Codex's built-in browser, paste the address from **웹 링크 복사**. Use **웹 문서함 링크 복사** to open the workspace library instead. Document links carry over the branch, versions, page or changed region, and spreadsheet position. Reload the browser or use **새로 고침** in the desktop app to see changes made in the other view.
+The desktop app and read-only web viewer share the same document workspace. Check the workspace label and ID in both headers. Select **브라우저에서 보기** to open the current version or comparison in your default browser. To open it in Codex's built-in browser, paste the address from **웹 링크 복사**. Use **웹 문서함 링크 복사** to open the workspace library instead. Document links carry over the branch, versions, page or changed region, and spreadsheet position. Reload the browser to see changes saved from the desktop app or command-line tools.
 
 Use `python docvers.py open --browser` to open the local library. For Codex's built-in browser, use the MCP tool `open_browser_view` or add `--url` to start the local viewer and print its URL without opening the default browser.
 
@@ -49,9 +49,11 @@ The viewer listens on loopback, normally `127.0.0.1:8796`. Open its URL in a bro
 
 ## Version history and comparison
 
-Use the desktop sidebar or the browser's pinned document toolbar to switch branches, inspect version history, and submit a proposal while reading. In the browser, opening and closing an action dialog keeps your place in the preview.
+Use the browser's pinned toolbar to switch branches or inspect version history without losing your place. Use the desktop sidebar to submit a proposal.
 
-1. Register an original file to create `v1.0.0` on `main`. Open a document or pick a specific version to read it in the app. **Save original** exports the stored file. GitDoc stores the original bytes of supported files up to 30 MiB each by default. Set `DOCVERS_MAX_FILE_MIB` to an integer from 1 to 100 before starting the desktop app, web app, CLI, or MCP server to change the upload limit.
+In the browser, select text on a rendered page or click a spreadsheet cell, then select **수정 위치 복사**. Paste the JSON into an agent conversation. It contains the exact document and version, selected text and rendered page coordinates, or the sheet and source cell address. The included link reopens the location.
+
+1. Register an original file to create `v1.0.0` on `main`. Open a document or pick a specific version to read it in the app. **Save original** exports the stored file. GitDoc stores the original bytes of supported files up to 30 MiB each by default. Set `DOCVERS_MAX_FILE_MIB` to an integer from 1 to 100 before starting the desktop app, CLI, or MCP server to change the upload limit.
 2. Create branches or submit draft revisions. Review each proposed change, then approve or reject it. In **Compare two versions**, choose a different revision from the history to change the target while keeping the chosen base. Select **View one version** to leave comparison.
 3. Compare branch heads and their common ancestor. To resolve a conflict, submit a merged file of the same format. Restoring an older version records a new version.
 4. In the desktop app or browser, scroll through successive pages or use the page buttons to jump. The page number follows scrolling. The viewer prioritizes visible pages and pre-renders one page above and below them. Comparisons align pages by content and show each version’s original page number. Below the page controls, use **Previous change** and **Next change** to jump between visual changes. Nearby highlights are merged into at most seven boxes per page. If they cover at least 80% of the page, the viewer highlights the entire page as one change. The total appears after scanning finishes. GitDoc matches spreadsheets by sheet name, so a reordered sheet keeps its identity. You can open a specific sheet and cell address.
@@ -100,12 +102,12 @@ Spreadsheet units are cell values and extracted formulas keyed by sheet and addr
 
 In the desktop version history, right-click a commit to rewind the current branch to that version or to remove that commit and the newer commits from the branch. GitDoc asks for confirmation and creates a `recovery-…` branch at the old head. A regular restore instead records the old contents as a new version. The rewind is also available through `reset_document_branch`.
 
-Open **Edit document** from an approved version and enter changes beside the preview. Saving as a draft opens the comparison for review. Approval advances the branch head. If the head changes while editing, start again from the latest version.
+Open **텍스트 수정** from an approved version to change its text beside the preview. Saving as a draft opens the comparison for review. Approval advances the branch head. If the head changes while editing, start again from the latest version.
 
 | Format | In-app edits |
 | --- | --- |
 | HWP, HWPX | Replace text in body and table content with an rhwp 0.9 build that provides text editing |
-| DOCX, PPTX | Edit Word text blocks or PowerPoint slide text directly. Change font, size, color, alignment, bold, italics, and underline, or use find and replace. |
+| DOCX, PPTX | Edit Word text blocks or PowerPoint slide text directly, or use find and replace. Existing formatting is preserved outside the replaced text. |
 | XLSX | Double-click a cell on the current version to edit its value or formula, or clear the value. Excel recalculates formulas based on workbook settings. |
 | PDF | Rotate or delete a page, add a note annotation, or insert a blank page or pages from another PDF. |
 
@@ -113,8 +115,6 @@ To insert pages, enter the page number they should go before. Enter the current 
 | DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
 
 [office_oxide](https://github.com/yfedoseev/office_oxide) handles compatible Word and PowerPoint find-and-replace edits. GitDoc edits the document XML directly for individual text blocks, formatting, and spreadsheet cells. Save several text block changes together as one draft, then review the rendered comparison. The equivalent MCP workflow is `list_editable_blocks` followed by `edit_revision` with `operation: edit_blocks`.
-
-For editing shapes, charts, or page layout, use **전문 편집기로 열기**. GitDoc opens a local working copy in the installed application associated with the file type. Save in the original format, return to GitDoc, and choose **저장한 파일 가져오기** to submit the working copy for review.
 
 ## Exporting versions
 

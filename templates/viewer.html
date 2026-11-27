@@ -1,9 +1,26 @@
-{% macro viewer(document_id, before, after=none) %}
+{% macro location_button() %}
+<button class="secondary" type="button" data-edit-location disabled
+        title="문구를 선택하거나 셀을 클릭한 뒤 에이전트에게 전달할 위치를 복사하세요.">수정 위치 복사</button>
+<span class="sr-only" data-location-status role="status"></span>
+{% endmacro %}
+
+{% macro version_location(item) %}
+data-version-id="{{ item.id }}" data-version-label="{{ item.version_label }}" data-version-branch="{{ item.branch_name }}"
+{% endmacro %}
+
+{% macro viewer(document_id, before, after=none, branch=none) %}
 {% set comparing = after is not none %}
+{% set row_key = request.args.get('row_key') if comparing else none %}
+{% set destination = url_for('compare', document_id=document_id, base=before.id, target=after.id, branch=branch, row_key=row_key) if comparing else
+                     url_for('detail', document_id=document_id, version=before.id, branch=branch) %}
+<script src="{{ url_for('static', filename='edit_location.js') }}" defer></script>
 {% if before.extension in workbook_extensions and request.args.get('view') != 'pages' %}
-  {{ sheet_viewer(document_id, before, after) }}
+  {{ sheet_viewer(document_id, before, after, destination) }}
 {% else %}
-<section class="panel comparison visual-viewer" data-visual-viewer {% if comparing %}data-page-alignment="{{ url_for('page_alignment', document_id=document_id, base=before.id, target=after.id) }}"{% endif %} aria-labelledby="visual-title">
+<section class="panel comparison visual-viewer" data-visual-viewer data-document-id="{{ document_id }}"
+         data-workspace-id="{{ workspace.workspace_id }}" data-location-url="{{ destination }}"
+         data-print-layout="{{ 'true' if request.args.get('view') == 'pages' else 'false' }}"
+         {% if comparing %}data-page-alignment="{{ url_for('page_alignment', document_id=document_id, base=before.id, target=after.id) }}"{% endif %} aria-labelledby="visual-title">
   <div class="viewer-heading">
     <h2 id="visual-title">{{ "문서 페이지 대조" if comparing else "문서 뷰어" }}</h2>
     {% if before.extension in workbook_extensions %}<a href="?{{ request.args.to_dict()|without_view|urlencode }}">{{ "시트 대조" if comparing else "시트 보기" }}</a>{% endif %}
@@ -16,6 +33,7 @@
       <button class="secondary" type="button" data-next disabled aria-label="다음 페이지">→</button>
     </div>
     <label>확대 <select data-zoom><option value="100">맞춤</option><option value="125">125%</option><option value="150">150%</option><option value="200">200%</option></select></label>
+    {{ location_button() }}
   </div>
   {% if comparing %}
   <div class="viewer-controls">
@@ -35,7 +53,8 @@
   <noscript><p>뷰어를 사용하려면 JavaScript를 활성화하세요. 원본 다운로드도 사용할 수 있습니다.</p></noscript>
   <div class="viewer-grid paper-versions{{ ' viewer-single' if not comparing }}">
     {% for item in ((before, after) if comparing else (before,)) %}
-    <article class="viewer-side" data-preview="{{ url_for('visual_preview', document_id=document_id, version_id=item.id) }}">
+    <article class="viewer-side" data-preview="{{ url_for('visual_preview', document_id=document_id, version_id=item.id) }}"
+             {{ version_location(item) }}>
       <div class="viewer-side-title">
         <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · {{ item.version_label }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
         {% if comparing %}
@@ -72,9 +91,10 @@
 </details>
 {% endmacro %}
 
-{% macro sheet_viewer(document_id, before, after) %}
+{% macro sheet_viewer(document_id, before, after, destination) %}
 {% set comparing = after is not none %}
-<section class="panel comparison visual-viewer" data-workbook-viewer aria-labelledby="visual-title">
+<section class="panel comparison visual-viewer" data-workbook-viewer data-document-id="{{ document_id }}"
+         data-workspace-id="{{ workspace.workspace_id }}" data-location-url="{{ destination }}" aria-labelledby="visual-title">
   <div class="viewer-heading">
     <h2 id="visual-title">{{ '시트 대조' if comparing else '문서 뷰어' }}</h2>
     {% set params = request.args.to_dict()|without_view|urlencode %}
@@ -92,6 +112,7 @@
       <label>셀 주소 <input name="cell" type="text" required maxlength="10" placeholder="A1" autocomplete="off"></label>
       <button class="secondary" disabled>이동</button>
     </form>
+    {{ location_button() }}
   </div>
   {% if comparing %}{{ change_list() }}{% endif %}
   <div class="sheet-tabs" data-sheet-tabs role="group" aria-label="시트"></div>
@@ -99,7 +120,8 @@
   <div class="viewer-grid{{ ' viewer-single' if not comparing }}">
     {% set row_key = request.args.get('row_key') if comparing else none %}
     {% for item in ((before, after) if comparing else (before,)) %}
-    <article class="viewer-side" data-workbook="{{ url_for('workbook', document_id=document_id, version_id=item.id, row_key=row_key, base=before.id if row_key else none, target=after.id if row_key else none) }}">
+    <article class="viewer-side" data-workbook="{{ url_for('workbook', document_id=document_id, version_id=item.id, row_key=row_key, base=before.id if row_key else none, target=after.id if row_key else none) }}"
+             {{ version_location(item) }}>
       <div class="viewer-side-title">
         <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · {{ item.version_label }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
         {% if comparing %}

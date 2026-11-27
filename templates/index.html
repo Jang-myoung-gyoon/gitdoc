@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
   <div class="page-heading"><h1>문서함</h1><p>확정본을 찾고 문서의 수정 이력을 확인하세요.</p></div>
-  <div class="layout">
+  <div class="library-layout">
     <section class="panel" aria-labelledby="documents-title">
       <div class="section-head">
         <h2 id="documents-title">문서 목록</h2>
@@ -23,18 +23,9 @@
         {% endfor %}
       </div>
       {% else %}
-      <p class="empty">{{ '검색 결과가 없습니다.' if query else '등록된 문서가 없습니다. 새 문서를 등록하면 v1.0.0이 확정본으로 저장됩니다.' }}</p>
+      <p class="empty">{{ '검색 결과가 없습니다.' if query else '등록된 문서가 없습니다.' }}</p>
       {% if query %}<a href="{{ url_for('index') }}">전체 문서 보기</a>{% endif %}
       {% endif %}
-    </section>
-    <section class="panel" aria-labelledby="new-title">
-      <h2 id="new-title">새 문서 등록</h2>
-      <form action="{{ url_for('create') }}" method="post" enctype="multipart/form-data" class="stack">
-        <label for="title">문서 제목</label><input id="title" name="title" required maxlength="120" placeholder="예시: 사업 제안서">
-        <label for="file">원본 파일</label><input id="file" type="file" name="file" required accept=".{{ extensions | join(',.') }}" aria-describedby="formats">
-        <p id="formats" class="subtle small">{{ extensions | join(', ') | upper }} · 최대 {{ max_file_mib }}MiB</p>
-        <button>문서 등록</button>
-      </form>
     </section>
   </div>
 {% endblock %}

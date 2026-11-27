@@ -123,8 +123,9 @@ function changesFor(name, left, right) {
 async function mountWorkbook(root) {
   const sides = Array.from(root.querySelectorAll('[data-workbook]'), node => ({
     url: node.dataset.workbook, scroll: node.querySelector('.viewer-scroll'),
-    viewLink: node.querySelector('[data-view-link]'),
+    viewLink: node.querySelector('[data-view-link]'), version: versionLocation(node),
   }));
+  const setEditLocation = editLocationControl(root);
   const status = root.querySelector('[data-status]');
   const position = root.querySelector('[data-change-position]');
   const tabs = root.querySelector('[data-sheet-tabs]');
@@ -142,7 +143,6 @@ async function mountWorkbook(root) {
   const comparing = sides.length === 2;
   const names = Array.from(new Set(books.flatMap(book => Array.from(book.keys()))));
   if (!names.length) throw new Error('표시할 시트가 없습니다.');
-  root.dispatchEvent(new CustomEvent('gitdoc:sheets', { detail: { names } }));
   const sheetChanges = new Map(names.map(name => [
     name, comparing ? changesFor(name, ...books.map(book => book.get(name))) : [],
   ]));
@@ -151,7 +151,26 @@ async function mountWorkbook(root) {
   let activeSheet;
   let current = -1;
 
-  function show(name, address = '', index = -1) {
+  function identifyCell(side, name, displayedAddress) {
+    const sheet = books[side].get(name);
+    const address = parseCell(displayedAddress);
+    if (!sheet || !address) {
+      setEditLocation(null);
+      return;
+    }
+    const sourceRow = sheet.source_rows ? sheet.source_rows[address.row - 1] : address.row;
+    const sourceAddress = sourceRow ? columnName(address.col) + sourceRow : null;
+    const [value = null, formula = null] = sheet.cells[displayedAddress] || [];
+    setEditLocation({
+      kind: 'worksheet_cell', ...sides[side].version, sheet: name, cell: sourceAddress,
+      ...(comparing ? { comparison_side: side === 0 ? 'base' : 'target' } : {}),
+      ...(sheet.source_rows ? { displayed_cell: displayedAddress,
+        row_key: new URL(sides[side].url, location.href).searchParams.get('row_key') } : {}),
+      value, formula
+    }, { sheet: name, cell: displayedAddress, cell_side: side });
+  }
+
+  function show(name, address = '', index = -1, selectedSide = null) {
     activeSheet = name;
     current = index;
     const cell = parseCell(address);
@@ -159,7 +178,8 @@ async function mountWorkbook(root) {
     const col = Math.max(1, (cell?.col || 1) - 2);
     const changed = new Set(sheetChanges.get(name).map(change => change.address));
     sides.forEach(({ scroll }, side) => {
-      scroll.replaceChildren(grid(books[side].get(name), row, col, changed, cell));
+      scroll.replaceChildren(grid(books[side].get(name), row, col, changed,
+        selectedSide === null || selectedSide === side ? cell : null));
       scroll.scrollTo(0, 0);
       scroll.querySelector('.selected-cell')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const link = sides[side].viewLink;
@@ -173,7 +193,7 @@ async function mountWorkbook(root) {
     });
     for (const [sheet, button] of buttons) button.setAttribute('aria-pressed', String(sheet === name));
     form.elements.cell.value = address;
-    root.dispatchEvent(new CustomEvent('gitdoc:sheet', { detail: { name, address } }));
+    identifyCell(selectedSide ?? (books.at(-1).has(name) ? sides.length - 1 : 0), name, address);
     const label = address ? `${name} · ${address}` : name;
     status.textContent = label;
     if (comparing) {
@@ -252,24 +272,29 @@ async function mountWorkbook(root) {
       requestAnimationFrame(() => { synchronizing = false; });
     }, { passive: true }));
   }
-  if (root.closest('[data-document-editor]')) {
-    root.addEventListener('click', event => {
+  sides.forEach(({ scroll }, side) => {
+    scroll.addEventListener('click', event => {
       const target = event.target.closest('td[data-address]');
       if (!target) return;
-      const name = activeSheet;
       const address = target.dataset.address;
-      const [value, formula, , kind] = books[0].get(name)?.cells[address] || [];
-      show(name, address);
-      root.dispatchEvent(new CustomEvent('gitdoc:cell-edit', { detail: { value, formula, kind } }));
+      for (const old of root.querySelectorAll('.selected-cell')) {
+        old.classList.remove('selected-cell');
+        old.removeAttribute('aria-current');
+      }
+      target.classList.add('selected-cell');
+      target.setAttribute('aria-current', 'true');
+      form.elements.cell.value = address;
+      identifyCell(side, activeSheet, address);
     });
-  }
+  });
   const params = new URLSearchParams(location.search);
-  const editor = root.closest('[data-document-editor]');
-  const requestedSheet = editor?.dataset.sheet || params.get('sheet');
+  const requestedSheet = params.get('sheet');
   const sheet = names.includes(requestedSheet) ? requestedSheet : names[0];
-  const address = (editor?.dataset.cell || params.get('cell') || '').toUpperCase();
+  const address = (params.get('cell') || '').toUpperCase();
+  const requestedSide = params.get('cell_side');
+  const side = requestedSide === '0' ? 0 : requestedSide === '1' && comparing ? 1 : null;
   show(sheet, parseCell(address) ? address : '',
-    changes.findIndex(change => change.name === sheet && address && change.address === address));
+    changes.findIndex(change => change.name === sheet && address && change.address === address), side);
 }
 
 for (const root of document.querySelectorAll('[data-workbook-viewer]')) {
