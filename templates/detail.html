@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "file.html" import links %}
+{% from "document_actions.html" import toolbar %}
 {% from "viewer.html" import viewer %}
 {% block main_class %}comparison-wrap reader-wrap{% endblock %}
 {% block title %}{{ doc.title }} · 문서 버전 관리{% endblock %}
@@ -8,92 +8,7 @@
   <div class="page-heading">
     <h1>{{ doc.title }}</h1>
     <p><span class="status approved">확정본 {{ current.version_label }}</span> <strong>{{ active.name }}</strong> {{ current.filename }}</p>
-    <nav class="file-links" aria-label="문서 작업">
-      {% if opened.id == current.id and edit_mode %}
-      <a class="edit-link" href="{{ url_for('edit_document', document_id=doc.id, branch=active.name) }}">문서 편집</a>
-      {% endif %}
-      <a href="#history-title">버전 이력</a>
-      <a href="#propose-title">수정안 제출</a>
-      {% if opened.id != current.id %}<a href="{{ url_for('detail', document_id=doc.id, branch=active.name) }}">최신 확정본 보기</a>{% endif %}
-    </nav>
   </div>
+  {{ toolbar(doc, active, current, branches, versions, opened=opened, edit_mode=edit_mode) }}
   {{ viewer(doc.id, opened) }}
-  <section class="panel branch-tools" aria-labelledby="branches-title">
-    <h2 id="branches-title">브랜치</h2>
-    <nav class="branch-list" aria-label="문서 브랜치">
-      {% for item in branches %}
-      <a class="branch-link" {% if item.name == active.name %}aria-current="page"{% endif %} href="{{ url_for('detail', document_id=doc.id, branch=item.name) }}">{{ item.name }} <span class="small">{{ item.version_label }}{% if item.pending %} · 검토 {{ item.pending }}{% endif %}</span></a>
-      {% endfor %}
-    </nav>
-    {% if branches|length > 1 %}
-    <form class="selection branch-compare" action="{{ url_for('compare_branches', document_id=doc.id) }}">
-      <label>병합 대상<select name="target">{% for item in branches %}<option value="{{ item.name }}" {% if item.name == active.name %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
-      <label>가져올 브랜치<select name="source">{% for item in branches %}<option value="{{ item.name }}" {% if loop.index == (2 if active.name == branches[0].name else 1) %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
-      <button class="secondary">브랜치 대조</button>
-    </form>
-    {% endif %}
-    <details>
-      <summary>새 브랜치 만들기</summary>
-      <form class="selection restore" method="post" action="{{ url_for('create_branch', document_id=doc.id) }}">
-        <input type="hidden" name="branch" value="{{ active.name }}">
-        <label>이름<input name="name" maxlength="50" required placeholder="예시: budget-review"></label>
-        <label>시작 버전<select name="start">{% for v in versions if v.status == 'approved' %}<option value="{{ v.id }}" {% if v.id == current.id %}selected{% endif %}>{{ v.version_label }}</option>{% endfor %}</select></label>
-        <button class="secondary">브랜치 만들기</button>
-      </form>
-    </details>
-  </section>
-  <div class="layout">
-    <section class="panel" aria-labelledby="history-title">
-      <h2 id="history-title">버전 이력</h2>
-      {% if versions|length > 1 %}
-      <form class="selection" action="{{ url_for('compare', document_id=doc.id) }}">
-        <input type="hidden" name="branch" value="{{ active.name }}">
-        <label>기준<select name="base">{% for v in versions %}<option value="{{ v.id }}" {% if v.id == current.id %}selected{% endif %}>{{ v.version_label }}</option>{% endfor %}</select></label>
-        <label>비교<select name="target">{% for v in versions %}<option value="{{ v.id }}" {% if loop.index == (2 if current.id == versions[0].id else 1) %}selected{% endif %}>{{ v.version_label }}</option>{% endfor %}</select></label>
-        <button class="secondary">두 버전 비교</button>
-      </form>
-      {% endif %}
-      <div class="history">
-      {% for v in versions %}
-        <article class="version">
-          <div class="version-heading">
-            <strong>{{ v.version_label }}</strong><span class="status {{ v.status }}">{{ '확정본' if v.id == current.id else {'approved': '이전 확정본', 'pending': '검토 대기', 'rejected': '반려'}[v.status] }}</span>
-            <span class="subtle small">{{ v.branch_name }}</span><time datetime="{{ v.created_at.replace(' ', 'T') }}Z">{{ v.created_at|local_time }}</time>
-          </div>
-          <p class="reason">{{ v.reason }}</p>
-          <p class="subtle small filename">{{ v.filename }}</p>
-          {% if v.review_note %}<p class="small"><strong>검토 의견</strong> {{ v.review_note }}</p>{% endif %}
-          {% if v.restored_from %}<p class="subtle small">{{ v.restored_version_label }}에서 복원</p>{% endif %}
-          {% if v.merge_parent_id %}<p class="subtle small">병합 버전 · <a href="{{ url_for('compare', document_id=doc.id, branch=active.name, base=v.merge_parent_id, target=v.id) }}">가져온 버전과 대조</a></p>{% endif %}
-          <div class="file-links">
-            {{ links(doc.id, v, active.name, v.id != opened.id) }}
-            {% if v.base_id %}<a href="{{ url_for('compare', document_id=doc.id, branch=active.name, target=v.id) }}">{{ '수정안 검토' if v.status == 'pending' else '기준본과 비교' }}<span class="sr-only"> {{ v.version_label }}</span></a>{% endif %}
-          </div>
-          {% if v.status == 'approved' and current.id != v.id %}
-          <details>
-            <summary>이 버전을 복원</summary>
-            <form class="stack restore" method="post" action="{{ url_for('restore', document_id=doc.id, version_id=v.id) }}">
-              <input type="hidden" name="base" value="{{ current.id }}">
-              <input type="hidden" name="branch" value="{{ active.name }}">
-              <label for="restore-{{ v.id }}">복원 사유</label><input id="restore-{{ v.id }}" name="reason" required maxlength="500">
-              <button class="secondary">{{ v.version_label }}을 새 확정본으로 복원</button>
-            </form>
-          </details>
-          {% endif %}
-        </article>
-      {% endfor %}
-      </div>
-    </section>
-    <section class="panel" aria-labelledby="propose-title">
-      <h2 id="propose-title">수정안 제출</h2>
-      <p class="subtle small">확정본 {{ current.version_label }}에서 변경한 {{ current.extension|upper }} 파일을 제출하세요.</p>
-      <form method="post" action="{{ url_for('propose', document_id=doc.id) }}" enctype="multipart/form-data" class="stack">
-        <input type="hidden" name="base" value="{{ current.id }}">
-              <input type="hidden" name="branch" value="{{ active.name }}">
-        <label for="draft">수정 파일</label><input id="draft" type="file" name="file" accept=".{{ current.extension }}" required>
-        <label for="reason">변경 사유</label><textarea id="reason" name="reason" required maxlength="500" rows="4" placeholder="바뀐 내용과 검토할 부분을 입력하세요."></textarea>
-        <button>검토 요청</button>
-      </form>
-    </section>
-  </div>
 {% endblock %}

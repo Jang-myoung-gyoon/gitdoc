@@ -49,6 +49,8 @@ The viewer listens on `127.0.0.1:8796` and uses the local document store. Open i
 
 ## Version history and comparison
 
+Use the desktop sidebar or the browser's pinned document toolbar to switch branches, inspect version history, and submit a proposal while reading. In the browser, opening and closing an action dialog keeps your place in the preview.
+
 1. Register an original file to create `v1.0.0` on `main`. Open a document or pick a specific version to read it in the app. **Save original** exports the stored file. GitDoc stores the original bytes of supported files up to 30 MiB each by default. Set `DOCVERS_MAX_FILE_MIB` to an integer from 1 to 100 before starting the desktop app, web app, CLI, or MCP server to change the upload limit.
 2. Create branches or submit draft revisions. Review each proposed change, then approve or reject it. In **Compare two versions**, choose a different revision from the history to change the target while keeping the chosen base. Select **View one version** to leave comparison.
 3. Compare branch heads and their common ancestor. To resolve a conflict, submit a merged file of the same format. Restoring an older version records a new version.

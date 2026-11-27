@@ -90,12 +90,11 @@ def health():
     return jsonify(store=STORE_ID)
 
 
-def comparison_sidebar(db, document_id, active, original, updated):
-    branches = branch_list(db, document_id)
+def comparison_history(db, active, original, updated):
     rows = {item["id"]: item for item in branch_history(db, active)}
     for item in (original, updated):
         rows[item["id"]] = item
-    return {"branches": branches, "history": sorted(rows.values(), key=lambda v: -v["number"])}
+    return sorted(rows.values(), key=lambda v: -v["number"])
 
 
 @app.get("/")
@@ -165,7 +164,8 @@ def compare_branches(document_id):
         a = version(db, document_id, target["head_id"], fields)
         b = version(db, document_id, source["head_id"], fields)
         ancestor = version(db, document_id, common["id"], fields)
-        sidebar = comparison_sidebar(db, document_id, source, a, b)
+        branches = branch_list(db, document_id)
+        versions = comparison_history(db, target, a, b)
     changes = [
         (f"{target['name']} → {source['name']}", a, b),
         (f"공통 조상 → {target['name']}", ancestor, a),
@@ -174,7 +174,8 @@ def compare_branches(document_id):
     panels = [(title, before, after, *text_diff(before["extracted"], after["extracted"]))
               for title, before, after in changes]
     return render_template("branches.html", doc=doc, target=target, source=source,
-                           ancestor=ancestor, a=a, b=b, state=state, panels=panels, sidebar=sidebar)
+                           ancestor=ancestor, a=a, b=b, state=state, panels=panels,
+                           current=a, branches=branches, versions=versions)
 
 
 @app.post("/documents/<int:document_id>/branches/merge")
@@ -212,11 +213,15 @@ def edit_document(document_id):
         active = branch(db, document_id, name)
         base = request.form.get("base", type=int) if submitted else active["head_id"]
         item = version(db, document_id, base)
+        current = item if base == active["head_id"] else version(db, document_id, active["head_id"])
+        branches = branch_list(db, document_id)
+        versions = branch_history(db, active)
     mode = MODES.get(item["extension"])
     if not mode:
         abort(400, description="이 형식의 내장 편집을 지원하지 않습니다.")
     params = request.form if submitted else request.args
-    context = dict(doc=doc, active=active, item=item, mode=mode, fields=params)
+    context = dict(doc=doc, active=active, item=item, mode=mode, fields=params,
+                   current=current, branches=branches, versions=versions)
     if not submitted:
         return render_template("edit.html", **context)
     if base != active["head_id"]:
@@ -260,7 +265,11 @@ def compare(document_id):
         review_branch = branch(db, document_id, updated["branch_name"])
         base = request.args.get("base", type=int) or updated["base_id"] or active["head_id"]
         original = version(db, document_id, base, VERSION_FIELDS + ", extracted")
-        sidebar = comparison_sidebar(db, document_id, active, original, updated)
+        current = original if base == active["head_id"] else (
+            updated if target == active["head_id"] else version(db, document_id, active["head_id"])
+        )
+        branches = branch_list(db, document_id)
+        versions = comparison_history(db, active, original, updated)
         left, right = original["extracted"], updated["extracted"]
         row_key = request.args.get("row_key")
         if row_key is not None:
@@ -272,7 +281,7 @@ def compare(document_id):
     changes, truncated = text_diff(left, right)
     return render_template("compare.html", doc=doc, original=original, updated=updated,
                            active=active, review_branch=review_branch, changes=changes, truncated=truncated,
-                           sidebar=sidebar)
+                           current=current, branches=branches, versions=versions)
 
 
 @app.post("/documents/<int:document_id>/versions/<int:version_id>/review")

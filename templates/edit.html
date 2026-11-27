@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "viewer.html" import viewer %}
+{% from "document_actions.html" import toolbar %}
 {% block main_class %}comparison-wrap reader-wrap{% endblock %}
 {% block title %}문서 편집 · {{ doc.title }}{% endblock %}
 {% block main %}
@@ -11,6 +12,7 @@
   <h1>문서 편집</h1>
   <p>{{ active.name }} · {{ item.version_label }} · {{ item.filename }}</p>
 </div>
+{{ toolbar(doc, active, current, branches, versions) }}
 <div class="editing-workspace" data-document-editor
      data-page="{{ fields.get('page', '') }}" data-sheet="{{ fields.get('sheet', '') }}" data-cell="{{ fields.get('cell', '') }}">
   <div>{{ viewer(doc.id, item) }}</div>

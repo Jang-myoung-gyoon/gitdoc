@@ -344,28 +344,9 @@ impl GitDoc {
             form.page = self.pane.page.max(1);
         }
     }
-    fn file_form(&mut self, action: Action, path: Option<PathBuf>) {
-        let path = path.or_else(|| {
-            rfd::FileDialog::new()
-                .add_filter(
-                    "문서",
-                    &[
-                        "hwp", "hwpx", "doc", "docx", "docm", "pdf", "csv", "tsv", "ppt", "pptx",
-                        "pptm", "xls", "xlsx", "xlsm", "odt", "ods", "odp",
-                    ],
-                )
-                .pick_file()
-        });
-        if let Some(path) = path {
-            if action == Action::Register {
-                self.open_form(action, "문서 등록", json!({}));
-            } else {
-                self.open_form(
-                    action,
-                    "수정안 제출",
-                    json!({"doc":self.doc,"branch":self.branch,"base":self.head()}),
-                );
-            }
+    fn register_form(&mut self, path: Option<PathBuf>) {
+        if let Some(path) = path.or_else(document_file) {
+            self.open_form(Action::Register, "문서 등록", json!({}));
             if let Some(form) = &mut self.form {
                 form.name = path
                     .file_stem()
@@ -615,7 +596,7 @@ impl GitDoc {
                 ui.label("문서 버전 관리");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("＋ 문서 등록").clicked() {
-                        self.file_form(Action::Register, None);
+                        self.register_form(None);
                     }
                     if ui.button("새로 고침").clicked() {
                         self.refresh();
@@ -674,8 +655,8 @@ impl GitDoc {
                     return;
                 }
                 ui.separator();
-                ui.horizontal(|ui| {
-                    ui.heading("브랜치");
+                ui.heading("브랜치");
+                ui.horizontal_wrapped(|ui| {
                     ComboBox::from_id_salt("branches")
                         .selected_text(&self.branch)
                         .show_ui(ui, |ui| {
@@ -688,7 +669,7 @@ impl GitDoc {
                                 }
                             }
                         });
-                    if ui.button("＋").on_hover_text("브랜치 만들기").clicked() {
+                    if ui.button("＋ 브랜치 만들기").clicked() {
                         let selected = self
                             .ids
                             .last()
@@ -703,8 +684,42 @@ impl GitDoc {
                         );
                     }
                 });
+                if rows(&self.detail["branches"]).len() > 1 {
+                    ui.horizontal_wrapped(|ui| {
+                        ComboBox::from_id_salt("merge-branch")
+                            .selected_text(&self.branch_target)
+                            .show_ui(ui, |ui| {
+                                for b in rows(&self.detail["branches"]) {
+                                    let name = text(&b["name"]);
+                                    if name != self.branch {
+                                        ui.selectable_value(
+                                            &mut self.branch_target,
+                                            name.to_owned(),
+                                            name,
+                                        );
+                                    }
+                                }
+                            });
+                        if !self.branch_target.is_empty() && ui.button("브랜치 대조").clicked() {
+                            self.request(
+                                "branch_compare",
+                                self.epoch,
+                                json!({"doc": self.doc, "target": self.branch, "source": self.branch_target}),
+                            );
+                        }
+                    });
+                }
                 ui.separator();
-                ui.heading("버전 이력");
+                ui.horizontal_wrapped(|ui| {
+                    ui.heading("버전 이력");
+                    if ui.button("수정안 제출").clicked() {
+                        self.open_form(
+                            Action::Submit,
+                            "수정안 제출",
+                            json!({"doc":self.doc,"branch":self.branch,"base":self.head()}),
+                        );
+                    }
+                });
                 ScrollArea::vertical().id_salt("history").show(ui, |ui| {
                     for version in rows(&self.detail["versions"]) {
                         let v = id(&version["id"]);
@@ -803,7 +818,6 @@ impl GitDoc {
                     "page":self.pane.page.max(1), "sheet":sheet, "cell":self.pane.cell,
                     "row_key":self.pane.data["row_key"], "pages":self.selection.pages}));
             }
-            if ui.button("수정안 제출").clicked() { self.file_form(Action::Submit,None); }
             if ui.add_enabled(selected==self.head() && matches!(extension.as_str(),"hwp"|"hwpx"|"docx"|"pptx"|"xlsx"|"pdf"),Button::new("문서 편집")).clicked() {
                 self.edit_form();
             }
@@ -858,25 +872,6 @@ impl GitDoc {
                 self.compare_base = base;
                 self.comparison_anchor = Some(base);
                 self.display(selected, self.comparison_anchor);
-            }
-            if rows(&self.detail["branches"]).len() > 1 {
-                ComboBox::from_id_salt("merge-branch")
-                    .selected_text(&self.branch_target)
-                    .show_ui(ui, |ui| {
-                        for b in rows(&self.detail["branches"]) {
-                            let name = text(&b["name"]);
-                            if name != self.branch {
-                                ui.selectable_value(&mut self.branch_target, name.to_owned(), name);
-                            }
-                        }
-                    });
-                if !self.branch_target.is_empty() && ui.button("브랜치 대조").clicked() {
-                    self.request(
-                        "branch_compare",
-                        self.epoch,
-                        json!({"doc":self.doc,"target":self.branch,"source":self.branch_target}),
-                    );
-                }
             }
         });
         if pending || !self.comparison.is_null() {
@@ -1490,7 +1485,7 @@ impl GitDoc {
                     ui.heading("문서를 선택하세요");
                     ui.weak("문서함에서 원본과 버전 이력을 확인할 수 있습니다.");
                     if ui.button("파일 선택").clicked() {
-                        self.file_form(Action::Register, None);
+                        self.register_form(None);
                     }
                 });
                 return;
@@ -1555,8 +1550,10 @@ impl GitDoc {
                     if let Some(path) = &form.file {
                         ui.label(path.file_name().unwrap_or_default().to_string_lossy());
                     }
-                    if ui.button("파일 선택").clicked() {
-                        form.file = rfd::FileDialog::new().pick_file();
+                    if ui.button("파일 선택").clicked()
+                        && let Some(path) = document_file()
+                    {
+                        form.file = Some(path);
                     }
                 }
                 if matches!(form.action, Action::Branch | Action::Register) {
@@ -1742,7 +1739,7 @@ impl eframe::App for GitDoc {
                     .find_map(|file| file.path.clone())
             })
         {
-            self.file_form(Action::Register, Some(path));
+            self.register_form(Some(path));
         }
         self.title(ctx);
         TopBottomPanel::bottom("status").show(ctx, |ui| {
@@ -1761,6 +1758,18 @@ impl eframe::App for GitDoc {
         self.central(ctx);
         self.edit_dialog(ctx);
     }
+}
+
+fn document_file() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter(
+            "문서",
+            &[
+                "hwp", "hwpx", "doc", "docx", "docm", "pdf", "csv", "tsv", "ppt", "pptx", "pptm",
+                "xls", "xlsx", "xlsm", "odt", "ods", "odp",
+            ],
+        )
+        .pick_file()
 }
 
 fn cell_position(address: &str) -> Option<(usize, usize)> {

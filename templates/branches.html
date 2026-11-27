@@ -2,7 +2,7 @@
 {% from "file.html" import links %}
 {% from "diff.html" import diff %}
 {% from "viewer.html" import viewer %}
-{% from "compare_sidebar.html" import comparison_sidebar %}
+{% from "document_actions.html" import toolbar, dialog %}
 {% block main_class %}comparison-wrap{% endblock %}
 {% block title %}브랜치 대조 · {{ doc.title }}{% endblock %}
 {% block main %}
@@ -11,10 +11,9 @@
     <h1>브랜치 대조</h1>
     <p>{{ source.name }} → {{ target.name }} · 공통 조상 {{ ancestor.version_label }}</p>
   </div>
-  <div class="comparison-workspace">
-    {{ comparison_sidebar(doc, sidebar, source, a, b) }}
-    <div class="comparison-body">
-      {{ viewer(doc.id, a, b) }}
+  {{ toolbar(doc, target, current, branches, versions, before=a, after=b, extra=('merge', '브랜치 병합')) }}
+  <div class="comparison-body">
+    {{ viewer(doc.id, a, b) }}
   <div class="compare-cards">
     {% for label, item, v in [('대상', target, a), ('가져올 브랜치', source, b)] %}
     <section class="panel">
@@ -35,8 +34,7 @@
     {% endfor %}
     <p class="file-links"><a href="{{ url_for('download', document_id=doc.id, version_id=ancestor.id) }}">공통 조상 원본 다운로드</a></p>
   </section>
-  <section class="panel comparison">
-    <h2>{{ target.name }}에 병합</h2>
+  {% call dialog('merge', target.name ~ '에 병합') %}
     {% if state == 'merged' %}
     <p>가져올 버전이 이미 대상 브랜치 이력에 포함되어 있습니다.</p>
     {% else %}
@@ -59,7 +57,6 @@
       <button>병합하여 확정</button>
     </form>
     {% endif %}
-  </section>
-    </div>
+  {% endcall %}
   </div>
 {% endblock %}
