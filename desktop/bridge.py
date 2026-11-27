@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from functools import lru_cache
 from pathlib import Path
@@ -81,16 +82,20 @@ def view(doc, ids, mode="auto"):
         except Exception as error:
             raise ValueError("시트를 읽을 수 없습니다. 인쇄 레이아웃을 확인하세요.") from error
         return dict(result, books=books, pages=0)
-    counts, faults = [], []
-    for record in records:
-        try:
-            count = len(page_sizes(page_path(record)))
-            counts.append(count)
-            faults.append("")
-        except Exception as error:
-            counts.append(0)
-            faults.append(str(error))
+    if len(records) == 2 and records[0]["sha256"] != records[1]["sha256"]:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            previews = list(workers.map(inspect_preview, records))
+    else:
+        previews = [inspect_preview(record) for record in records]
+    counts, faults = map(list, zip(*previews))
     return dict(result, pages=max(counts, default=0), counts=counts, faults=faults)
+
+
+def inspect_preview(record):
+    try:
+        return len(page_sizes(page_path(record))), ""
+    except Exception as error:
+        return 0, str(error)
 
 
 @lru_cache(maxsize=16)
