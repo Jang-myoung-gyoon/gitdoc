@@ -1,6 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod bridge;
+mod bug_report;
 mod editor_fonts;
 mod office_editor;
 mod pages;

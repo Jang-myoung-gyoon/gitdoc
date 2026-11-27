@@ -70,6 +70,14 @@ macOS 서명 및 공증 단계는 원본 저장소의 버전 태그 푸시에서
 
 로컬에서는 Apple Silicon Mac에서 `sh packaging/macos.sh`, Inno Setup 6을 설치한 PowerShell 7에서 `./packaging/windows.ps1`을 실행합니다. 결과물은 `dist/`에 생깁니다. 로컬 macOS 번들은 ad-hoc 서명됩니다.
 
+## 버그 신고
+
+데스크톱 앱 상단에서 **버그 신고**를 누릅니다. 제목, 재현 방법, 기대 결과, 실제 결과를 입력하고 공개될 내용을 미리 본 뒤 확인합니다. GitDoc 버전과 운영체제는 선택 사항입니다. 입력 폼에서 보이는 제목과 본문을 전송합니다.
+
+앱에서 바로 제출할 때는 본인의 GitHub 계정을 사용합니다. 앱 프로세스의 `DOCVERS_GITHUB_APP_CLIENT_ID`에 기기 인증을 켠 GitHub App의 공개 클라이언트 ID를 지정합니다. GitHub App은 GitDoc 저장소에만 설치하고 저장소의 **Issues: Read and write** 권한과 만료되는 사용자 토큰을 설정합니다. 서명 키와 클라이언트 시크릿은 앱 외부에 둡니다. 접근 토큰은 실행 중 메모리에만 보관합니다. GitHub는 사용자와 앱 양쪽의 권한을 확인합니다. 공개 빌드에서 활성화하기 전에 일반 계정으로 테스트 저장소에서 인증과 등록을 확인해야 합니다. [GitHub 기기 인증과 토큰 권한](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app), [이슈 등록 권한](https://docs.github.com/en/rest/issues/issues#create-an-issue).
+
+**GitHub 작성 화면 열기 (직접 등록)**로 브라우저에서 제보를 검토하고 직접 등록할 수 있습니다. 응답이 끊긴 경우 GitDoc은 현재 실행 중 초안을 유지하고 같은 제목과 본문의 재전송을 차단합니다. GitHub 이슈 목록에서 도착 여부를 확인하세요.
+
 ## 브라우저 뷰어
 
 데스크톱 앱에서 **브라우저에서 보기**를 누르면 현재 버전 또는 두 버전 비교가 기본 브라우저에서 열립니다. 보고 있던 페이지나 시트의 선택 셀도 이어서 볼 수 있습니다.

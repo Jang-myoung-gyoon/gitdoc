@@ -1,6 +1,7 @@
 use crate::{
     Destination,
     bridge::{Bridge, Message, Reply},
+    bug_report::{self, BugReport},
     office_editor::Editor,
     paper::{self, PaperRow},
     paper_text::{self, Lines},
@@ -151,6 +152,7 @@ struct Pane {
 
 pub struct GitDoc {
     bridge: Bridge,
+    bug_report: BugReport,
     busy: usize,
     epoch: u64,
     doc: i64,
@@ -181,6 +183,7 @@ impl GitDoc {
     pub fn new(bridge: Bridge, destination: Result<Destination, String>) -> Self {
         let mut app = Self {
             bridge,
+            bug_report: BugReport::default(),
             busy: 0,
             epoch: 0,
             doc: 0,
@@ -232,6 +235,20 @@ impl GitDoc {
         } else {
             self.notify("문서 처리 엔진이 연결되지 않았습니다.", true);
             false
+        }
+    }
+    fn request_bug_report(&mut self, (op, params): bug_report::Request) {
+        if self
+            .bridge
+            .send
+            .send(Message {
+                op,
+                scope: 0,
+                params,
+            })
+            .is_err()
+        {
+            self.bug_report.connection_failed();
         }
     }
     fn refresh(&mut self) {
@@ -397,7 +414,10 @@ impl GitDoc {
 
     fn open_editor_form(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
+        let extension = self
+            .record(self.head())
+            .map(|row| text(&row["extension"]))
+            .unwrap_or("");
         let mode = match extension {
             "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
@@ -478,6 +498,10 @@ impl GitDoc {
     }
 
     fn receive(&mut self, ctx: &Context, frame: &eframe::Frame, reply: Reply) {
+        if reply.op.starts_with("bug_report_") {
+            self.bug_report.receive(reply.op, reply.result);
+            return;
+        }
         if !matches!(reply.op, "page" | "changes" | "page_text") {
             self.busy = self.busy.saturating_sub(1);
         }
@@ -817,6 +841,11 @@ impl GitDoc {
                 ui.separator();
                 ui.label(&self.workspace);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if bug_report::report_button(ui).clicked()
+                        && let Some(request) = self.bug_report.prepare()
+                    {
+                        self.request_bug_report(request);
+                    }
                     if self.deck.is_some() {
                         return;
                     }
@@ -2318,6 +2347,9 @@ impl eframe::App for GitDoc {
         self.sidebar(ctx);
         self.central(ctx);
         self.edit_dialog(ctx);
+        if let Some(request) = self.bug_report.show(ctx) {
+            self.request_bug_report(request);
+        }
     }
 }
 

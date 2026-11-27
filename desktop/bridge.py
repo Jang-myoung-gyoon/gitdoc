@@ -14,6 +14,7 @@ from pypdfium2 import PdfiumError
 from browser_viewer import viewer_url, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from desktop_link import document_path
+from desktop.bug_report import reporter
 from desktop.exporting import convert_format, export_formats, write_export
 from editing import editable_office_blocks, read_pdf_notes
 from extract import comparison_text
@@ -314,6 +315,9 @@ canvas_editor = CanvasSession()
 
 
 OPERATIONS = {
+    "bug_report_status": reporter.status, "bug_report_start": reporter.start,
+    "bug_report_poll": reporter.poll, "bug_report_cancel": reporter.cancel,
+    "bug_report_submit": reporter.submit,
     "workspace": desktop_workspace, "desktop_review": set_desktop_review, "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,

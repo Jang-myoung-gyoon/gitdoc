@@ -70,6 +70,14 @@ The macOS signing and notarization steps run on version-tag pushes in the upstre
 
 To build locally, run `sh packaging/macos.sh` on an Apple Silicon Mac or `./packaging/windows.ps1` in PowerShell 7 with Inno Setup 6 installed. Output goes to `dist/`. The local macOS bundle uses ad-hoc signing.
 
+## Reporting a bug
+
+Select **버그 신고** in the desktop header. Enter a title, reproduction steps, expected result, and actual result. Preview the public text and confirm before submitting. GitDoc version and operating system are optional. The form sends the displayed title and body.
+
+Direct submission uses your GitHub account. To enable it, set `DOCVERS_GITHUB_APP_CLIENT_ID` in the app process environment to the public client ID of a GitHub App with device flow enabled. Install the GitHub App on the GitDoc repository only, with repository **Issues: Read and write**, and enable expiring user access tokens. Keep the signing key and client secret outside the app. Access tokens are held in memory for the current app session. GitHub enforces both the user's and the app's permissions. Verify that a non-collaborator can authorize the app and submit in a test repository before enabling this for a public build. [GitHub device flow and token permissions](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app), [issue creation permissions](https://docs.github.com/en/rest/issues/issues#create-an-issue).
+
+**GitHub 작성 화면 열기 (직접 등록)** opens a filled issue draft in your browser. Review and submit it there. After a lost response, GitDoc preserves the draft in the current app session and blocks repeat transmission of the same body and title. Check the issue list to see whether GitHub received it.
+
 ## Browser viewer
 
 The desktop app and web viewer share the same document workspace. Check the workspace label and ID in both headers. Select **브라우저에서 보기** to open the current version or comparison in your default browser. To open it in Codex's built-in browser, paste the address from **웹 링크 복사**. Use **웹 문서함 링크 복사** to open the workspace library instead. Document links carry over the branch, versions, page or changed region, and spreadsheet position. Reload the browser to see changes saved from the desktop app or command-line tools. Compare a pending draft with the current branch head and choose **검토 및 확정** to approve it in the same workspace.
