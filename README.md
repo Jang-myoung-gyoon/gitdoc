@@ -159,6 +159,8 @@ Save with **수정안 저장**, **Cmd+S** on macOS, or **Ctrl+S** on Windows. Th
 
 Open **본문 편집** in DOC, DOCX, HWP, or HWPX. Use **표** to select 1–12 rows and columns, or **도형** to insert a rectangle, ellipse, triangle, or right arrow. GitDoc inserts the object before the selected body paragraph, or uses a body paragraph on the current page if no paragraph is selected. Use **수정안 저장** to save a new version in the original format, then review the comparison. Some multipage layouts have no verifiable insertion point on the current page.
 
+In HWP and HWPX, click a table or select it from **기존 표**. GitDoc outlines the selection. In DOC and DOCX, use **문서 표** to select a top-level body table by its order, dimensions, and text. **표 전체 삭제** removes the selected table and its contents. Undo is available before saving.
+
 DOC uses LibreOffice to convert to DOCX for editing and back to DOC when saving. HWP and HWPX use rhwp with table and shape insertion support. The HWP right arrow uses an editable HWPX polygon that rhwp then saves back to HWP. Legacy format conversions can change existing layout or formatting. For direct text entry, the canvas uses the font, size, and color from the preview. Unavailable fonts follow the document font substitution rules.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. Password-protected and signed originals cannot be edited.

@@ -68,6 +68,17 @@ impl Object {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct PageTable {
+    address: Vec<u32>,
+    #[serde(rename = "box")]
+    bounds: Option<[f32; 4]>,
+    #[serde(default)]
+    label: String,
+    rows: u32,
+    columns: u32,
+}
+
 struct Text {
     target: Target,
     original: String,
@@ -124,6 +135,10 @@ pub struct Editor {
     color: Color32,
     highlight: Color32,
     table: [u32; 2],
+    page_tables: Vec<PageTable>,
+    edit_digest: String,
+    selected_table: Option<usize>,
+    reveal_table: bool,
     reason: String,
     saving: bool,
     focus_reason: bool,
@@ -167,6 +182,10 @@ impl Editor {
             color: Color32::from_rgb(30, 89, 181),
             highlight: Color32::YELLOW,
             table: [2, 2],
+            page_tables: Vec::new(),
+            edit_digest: String::new(),
+            selected_table: None,
+            reveal_table: false,
             reason: String::new(),
             saving: false,
             focus_reason: false,
@@ -231,6 +250,10 @@ impl Editor {
                 .iter()
                 .any(|item| item.target.id == *id && item.parent.is_none())
         });
+        self.page_tables = serde_json::from_value(result["tables"].clone()).unwrap_or_default();
+        self.edit_digest = result["edit_digest"].as_str().unwrap_or_default().into();
+        self.selected_table = None;
+        self.reveal_table = false;
         self.object_drag = None;
         self.resize_drag = None;
         self.selected = Target::read(&result["selected"])
@@ -313,6 +336,52 @@ impl Editor {
         });
     }
 
+    fn table_tools(&mut self, ui: &mut Ui, action: &mut Option<(&str, Value)>) {
+        if self.page_tables.is_empty() {
+            return;
+        }
+        let menu = if self.format == Format::Word {
+            "문서 표"
+        } else {
+            "기존 표"
+        };
+        ui.menu_button(menu, |ui| {
+            for (index, table) in self.page_tables.iter().enumerate() {
+                let mut label =
+                    format!("표 {} · {}행 × {}열", index + 1, table.rows, table.columns);
+                if !table.label.is_empty() {
+                    label.push_str(" · ");
+                    label.push_str(&table.label);
+                }
+                if ui
+                    .selectable_label(self.selected_table == Some(index), label)
+                    .clicked()
+                {
+                    self.selected_table = Some(index);
+                    self.reveal_table = true;
+                    ui.close();
+                }
+            }
+        });
+        if let Some(table) = self
+            .selected_table
+            .and_then(|index| self.page_tables.get(index))
+        {
+            button(
+                ui,
+                self.text_edit().is_none(),
+                "표 전체 삭제",
+                "표와 셀 내용을 삭제합니다. 입력 중인 본문을 먼저 반영하세요.",
+                || {
+                    *action = Some((
+                        "delete_table",
+                        json!({"address": table.address, "digest": self.edit_digest}),
+                    ));
+                },
+            );
+        }
+    }
+
     fn request(&mut self, ctx: &Context, operation: &str, value: Value) -> Command {
         let target = self.selected.map(Target::json);
         let paged_insertion =
@@ -327,6 +396,7 @@ impl Editor {
                     | "duplicate_slide"
                     | "delete_slide"
                     | "delete_object"
+                    | "delete_table"
                     | "group"
                     | "ungroup"
             );
@@ -615,7 +685,10 @@ impl Editor {
                 });
             });
             if self.format != Format::Slides {
-                ui.horizontal_wrapped(|ui| self.insertion_tools(ui, &mut action));
+                ui.horizontal_wrapped(|ui| {
+                    self.insertion_tools(ui, &mut action);
+                    self.table_tools(ui, &mut action);
+                });
                 return;
             }
             ui.horizontal_wrapped(|ui| {
@@ -963,6 +1036,22 @@ impl Editor {
             ui.ctx().set_cursor_icon(CursorIcon::Text);
         }
         let border = Color32::from_rgb(63, 158, 249);
+        if let Some(bounds) = self
+            .selected_table
+            .and_then(|index| self.page_tables.get(index))
+            .and_then(|table| table.bounds)
+        {
+            let bounds = project(canvas, bounds);
+            if std::mem::take(&mut self.reveal_table) && !ui.clip_rect().contains_rect(bounds) {
+                ui.scroll_to_rect(bounds, Some(Align::Center));
+            }
+            ui.painter().rect_stroke(
+                bounds,
+                0.0,
+                Stroke::new(1.5_f32, border),
+                StrokeKind::Inside,
+            );
+        }
         if !self.waiting
             && self.format == Format::Slides
             && let Some(object) = self
@@ -1208,6 +1297,18 @@ impl Editor {
             return None;
         }
         if response.clicked() && !self.waiting {
+            if self.format == Format::Hangul {
+                self.selected_table = pointer.and_then(|point| {
+                    self.page_tables.iter().position(|table| {
+                        table
+                            .bounds
+                            .is_some_and(|bounds| project(canvas, bounds).contains(point))
+                    })
+                });
+            }
+            if self.selected_table.is_some() && hit.is_none() {
+                return self.select(ui.ctx(), None, false, None);
+            }
             let multi = ui.input(|input| input.modifiers.shift);
             let cursor = hit.zip(pointer).and_then(|(target, position)| {
                 let object = self.objects.iter().find(|item| item.target == target)?;

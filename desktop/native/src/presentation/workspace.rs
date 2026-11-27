@@ -392,7 +392,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::{Object, Target};
+    use crate::presentation::{Object, PageTable, Target};
 
     fn find_text(shapes: &[epaint::ClippedShape], label: &str) -> Pos2 {
         shapes
@@ -515,6 +515,47 @@ mod tests {
             assert!(matches!(click(&ctx, &mut editor, size, arrow),
                              Some(Command::Page(params)) if params["operation"] == "shape"
                                  && params["value"] == "arrow"));
+        }
+    }
+
+    #[test]
+    fn table_toolbar_selects_and_deletes_one_table() {
+        for (format, menu_name, address) in [
+            (Format::Hangul, "기존 표", vec![0, 3, 2]),
+            (Format::Word, "문서 표", vec![1]),
+        ] {
+            let ctx = Context::default();
+            let size = vec2(1080.0, 820.0);
+            let mut editor = fixture(format, &ctx);
+            editor.edit_digest = "snapshot".into();
+            editor.page_tables = vec![
+                PageTable {
+                    address: vec![0],
+                    bounds: None,
+                    label: String::new(),
+                    rows: 2,
+                    columns: 3,
+                },
+                PageTable {
+                    address: address.clone(),
+                    bounds: Some([0.1, 0.4, 0.8, 0.5]),
+                    label: String::new(),
+                    rows: 4,
+                    columns: 2,
+                },
+            ];
+            frame(&ctx, &mut editor, size, vec![]);
+            let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            let tables = find_text(&ui.shapes, menu_name);
+            assert!(click(&ctx, &mut editor, size, tables).is_none());
+            let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
+            let selected = find_text(&menu.shapes, "표 2 · 4행 × 2열");
+            assert!(click(&ctx, &mut editor, size, selected).is_none());
+            let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            let delete = find_text(&ui.shapes, "표 전체 삭제");
+            assert!(matches!(click(&ctx, &mut editor, size, delete),
+                             Some(Command::Page(params)) if params["operation"] == "delete_table"
+                                 && params["value"] == json!({"address": address, "digest": "snapshot"})));
         }
     }
 

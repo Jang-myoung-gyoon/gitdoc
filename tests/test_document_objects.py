@@ -15,6 +15,7 @@ from editing import open_package, parse_part
 from extract import matches_format
 from mcp_server import get_preview_info, register_document, render_document_page
 from preview import BUNDLED_BIN, PreviewError, executable, office_profile, rhwp_command, run_converter
+from workflow import review_revision
 
 
 class DocumentObjectTests(unittest.TestCase):
@@ -108,6 +109,56 @@ class DocumentObjectTests(unittest.TestCase):
         _, image = render_document_page(document_id, result["id"])
         self.assertEqual(image.to_image_content().mimeType, "image/png")
         self.assertTrue(image.data.startswith(b"\x89PNG"))
+
+    def test_delete_selected_existing_table(self):
+        for extension in ("doc", "docx", "hwp", "hwpx"):
+            with self.subTest(extension=extension):
+                path = self.folder / f"sample.{extension}"
+                version = register_document(str(path), f"Existing table {extension}")["version"]
+                document_id, base = version["document_id"], version["id"]
+                session = CanvasSession()
+                self.addCleanup(session.close)
+                session.open(document_id, "main", base, 1)
+                first = session.page(number=1, operation="table", value=[2, 3])
+                stale = {"address": first["tables"][0]["address"], "digest": first["edit_digest"]}
+                session.page(number=1, operation="table", value=[3, 4])
+                added = session.save("Create two tables", 1)["id"]
+                review_revision(document_id, added, "approve", base)
+                existing = session.open(document_id, "main", added, 1)
+                self.assertEqual(len(existing["tables"]), 2)
+                with self.assertRaises(ValueError):
+                    session.page(number=1, operation="delete_table", value=stale)
+                chosen = next(table for table in existing["tables"] if table["rows"] == 2)
+                action = {"address": chosen["address"], "digest": existing["edit_digest"]}
+                before_image = self.image(existing)
+                updated = session.page(number=1, operation="delete_table", value=action)
+                self.assertIsNotNone(ImageChops.difference(self.image(updated), before_image).getbbox())
+                self.assertEqual([(table["rows"], table["columns"]) for table in updated["tables"]], [(3, 4)])
+                self.assertEqual(len(session.page(number=1, operation="undo")["tables"]), 2)
+                self.assertEqual(len(session.page(number=1, operation="redo")["tables"]), 1)
+                result = session.save("Delete the selected table", 1)
+                self.assertEqual(result["status"], "pending")
+                with store.database(readonly=True) as db:
+                    old = store.find_version(db, document_id, added, "content")
+                    new = store.find_version(db, document_id, result["id"], "content, extension")
+                self.assertEqual(new["extension"], extension)
+                self.assertCountEqual(self.table_sizes(extension, old["content"]), [(2, 3), (3, 4)])
+                self.assertEqual(self.table_sizes(extension, new["content"]), [(3, 4)])
+                self.assertEqual(get_preview_info(document_id, result["id"], added)["page_counts"], [1, 1])
+
+    @staticmethod
+    def table_sizes(extension, data):
+        if extension in ("hwp", "hwpx"):
+            hwpx = convert_format("hwp", "hwpx", data) if extension == "hwp" else data
+            with open_package(hwpx) as archive:
+                root = parse_part(archive, "Contents/section0.xml")
+                return [(int(node.get("rowCnt")), int(node.get("colCnt"))) for node in root.iter(HANGUL + "tbl")]
+        docx = convert_format("doc", "docx", data) if extension == "doc" else data
+        with open_package(docx) as archive:
+            root = parse_part(archive, "word/document.xml")
+            return [(len(table.findall(WORD_TAG + "tr")),
+                     len(table.findall(f"{WORD_TAG}tblGrid/{WORD_TAG}gridCol")))
+                    for table in root.iter(WORD_TAG + "tbl")]
 
     @staticmethod
     def image(page):

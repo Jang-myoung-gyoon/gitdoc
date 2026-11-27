@@ -12,7 +12,9 @@ from pathlib import Path
 
 import olefile
 
-from desktop.document_objects import HANGUL_SHAPES, SHAPE_SIZE, arrow_polygon, insert_word_object, insertion_value
+from desktop.document_objects import (
+    HANGUL_SHAPES, SHAPE_SIZE, arrow_polygon, delete_word_table, insert_word_object, insertion_value, word_tables,
+)
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
@@ -100,13 +102,23 @@ def hwp_locations(source, page, placement, text):
     root = json.loads((folder/f"render_tree_{page:03d}.json").read_bytes())
     width, height = root["bbox"]["w"], root["bbox"]["h"]
     body = next((item for item in root["children"] if item["type"] == "Body"), {})
+    layout = {(item["paraIndex"], item["controlIndex"]): item["table"]
+              for column in placement["columns"] for item in column["items"]
+              if item["kind"] == "table" and not item.get("isEndnote")}
     lines = defaultdict(list)
+    tables = []
     for column in body.get("children", []):
-        for line in column.get("children", []):
-            if line["type"] == "TextLine" and "pi" in line:
-                for run in line.get("children", []):
+        for item in column.get("children", []):
+            if item["type"] == "TextLine" and "pi" in item:
+                for run in item.get("children", []):
                     if run["type"] == "TextRun" and run.get("text"):
-                        lines[line["pi"]].append(run)
+                        lines[item["pi"]].append(run)
+            address = (item.get("pi"), item.get("ci"))
+            if item["type"] == "Table" and address in layout:
+                x, y, w, h = (item["bbox"][key] for key in ("x", "y", "w", "h"))
+                table = layout[address]
+                tables.append({"address": [section, *address], "box": [x/width, y/height, (x+w)/width, (y+h)/height],
+                               "rows": table["rowCount"], "columns": table["colCount"]})
     full = {item["paraIndex"] for column in placement["columns"] for item in column["items"]
             if item["kind"] == "fullParagraph" and not item.get("isEndnote")}
     items = []
@@ -134,7 +146,7 @@ def hwp_locations(source, page, placement, text):
             items.append({"id": hwp_id(section, paragraph), "name": value[:60], "text": value,
                           "box": [ink[0], ink[1], max(ink[2], .85), ink[3]], "ink": ink,
                           "size": max(8, min(40, (positions[0][3]-positions[0][1])*height*.75))})
-    return items
+    return items, tables
 
 
 def change_hwp(source, original, value, section, paragraph):
@@ -223,6 +235,7 @@ class PagedEditor:
         self.page_objects = []
         self.page_count = 0
         self.hangul_anchor = None
+        self.tables = []
 
     @property
     def data(self):
@@ -257,10 +270,13 @@ class PagedEditor:
                      if "paraIndex" in item and not item.get("isEndnote")
                      and (section, item["paraIndex"]) in self.texts),
                     (section, 0) if count == 1 and (section, 0) in self.texts else None)
-                objects = hwp_locations(source, number, placement, self.texts)
+                objects, tables = hwp_locations(source, number, placement, self.texts)
             else:
                 if key != self.current_key:
                     self.locations = word_locations(data, pdf, count)
+                    tables = word_tables(data)
+                else:
+                    tables = self.tables
                 objects = self.locations[number-1]
         png = Path(self.directory.name)/"document.png"
         png.write_bytes(preview_png(pdf, number, prefer_pdfium=True))
@@ -268,8 +284,9 @@ class PagedEditor:
         self.current_key = key
         self.page_objects = objects
         self.page_count = count
-        return {"page": number, "count": count, "width": width, "height": height,
-                "objects": objects, "image": str(png), "fonts": fonts}
+        self.tables = tables
+        return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
+                "objects": objects, "tables": tables, "image": str(png), "fonts": fonts}
 
     def page(self, number, operation=None, text_edit=None, target=None, value=None, **_):
         index = self.position
@@ -297,6 +314,23 @@ class PagedEditor:
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
 
     def apply(self, source, operation, text_edit, target, value):
+        if operation == "delete_table":
+            address = value.get("address") if isinstance(value, dict) else None
+            if (text_edit or not isinstance(address, list) or any(type(i) is not int for i in address)
+                    or value.get("digest") != self.current_key
+                    or not any(table["address"] == address for table in self.tables)):
+                raise ValueError("삭제할 표를 다시 선택하세요.")
+            if self.extension not in HANGUL_EXTENSIONS:
+                return delete_word_table(source, address[0])
+            section, paragraph, control = address
+            with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+                folder = Path(work)
+                document = folder/f"document.{self.extension}"
+                output = folder/f"deleted.{self.extension}"
+                document.write_bytes(source)
+                rhwp(["edit", "delete-control", str(document), "--section", str(section),
+                      "--para", str(paragraph), "--ctrl", str(control), "-o", str(output)], folder)
+                return output.read_bytes()
         if operation in ("table", "shape"):
             value = insertion_value(operation, value)
             if text_edit:

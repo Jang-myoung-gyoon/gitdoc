@@ -121,6 +121,39 @@ def insert_word_object(data, operation, value, candidates, single_page, *, legac
         return rewrite_package(archive, {path: root})
 
 
+def word_body_tables(root):
+    body = root.find(WORD_TAG + "body")
+    return [] if body is None else body.findall(WORD_TAG + "tbl")
+
+
+def word_tables(data):
+    with open_package(data) as archive:
+        root = parse_part(archive, "word/document.xml")
+        tables = []
+        for index, table in enumerate(word_body_tables(root)):
+            rows = table.findall(WORD_TAG + "tr")
+            columns = len(table.findall(f"{WORD_TAG}tblGrid/{WORD_TAG}gridCol"))
+            if not columns:
+                columns = max((len(row.findall(WORD_TAG + "tc")) for row in rows), default=0)
+            text = " ".join(node.text for node in table.iter(WORD_TAG + "t") if node.text)
+            tables.append({"address": [index], "rows": len(rows), "columns": columns,
+                           "label": " ".join(text.split())[:36]})
+        return tables
+
+
+def delete_word_table(data, index):
+    path = "word/document.xml"
+    with open_package(data) as archive:
+        office_parts(archive, "docx")
+        root = parse_part(archive, path)
+        tables = word_body_tables(root)
+        if not 0 <= index < len(tables):
+            raise ValueError("삭제할 Word 표를 다시 선택하세요.")
+        table = tables[index]
+        table.getparent().remove(table)
+        return rewrite_package(archive, {path: root})
+
+
 def hangul_polygons(root, paragraph):
     paragraphs = root.findall(HANGUL + "p")
     if not 0 <= paragraph < len(paragraphs):
