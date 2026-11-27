@@ -127,6 +127,7 @@ pub struct GitDoc {
     epoch: u64,
     doc: i64,
     branch: String,
+    workspace: String,
     library: Value,
     detail: Value,
     ids: Vec<i64>,
@@ -153,6 +154,7 @@ impl GitDoc {
             epoch: 0,
             doc: 0,
             branch: "main".into(),
+            workspace: String::new(),
             library: Value::Null,
             detail: Value::Null,
             ids: vec![],
@@ -170,6 +172,7 @@ impl GitDoc {
             branch_target: String::new(),
             comparison: Value::Null,
         };
+        app.request("workspace", 0, json!({}));
         app.refresh();
         match destination {
             Ok(place) => {
@@ -414,6 +417,14 @@ impl GitDoc {
             }
         };
         match reply.op {
+            "workspace" => {
+                let workspace_id = text(&result["workspace_id"]);
+                self.workspace = format!(
+                    "{} · {}",
+                    text(&result["workspace_name"]),
+                    workspace_id.get(..8).unwrap_or(workspace_id)
+                );
+            }
             "library" => self.library = result,
             "detail" => {
                 self.detail = result;
@@ -581,7 +592,14 @@ impl GitDoc {
                 );
                 self.notify("버전 이력을 갱신했습니다.", false);
             }
-            "browser" => self.notify("브라우저에서 문서를 열었습니다.", false),
+            "browser" => {
+                if result["opened"] == true {
+                    self.notify("브라우저에서 문서를 열었습니다.", false);
+                } else {
+                    ctx.copy_text(text(&result["browser_url"]).to_owned());
+                    self.notify("같은 작업 공간의 웹 주소를 복사했습니다.", false);
+                }
+            }
             "print" => {
                 match crate::printing::print(
                     text(&result["path"]),
@@ -608,7 +626,7 @@ impl GitDoc {
             ui.horizontal(|ui| {
                 ui.heading("GitDoc");
                 ui.separator();
-                ui.label("문서 버전 관리");
+                ui.label(&self.workspace);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("＋ 문서 등록").clicked() {
                         self.register_form(None);
@@ -622,10 +640,16 @@ impl GitDoc {
                                     branch: Some(self.branch.clone()),
                                     ids: self.ids.clone(),
                                     page: self.pane.page,
-                                    ..Default::default()
+                                    change: self.pane.selected_region.map(|(_, change)| change),
+                                    sheet: self.pane.sheets.get(self.pane.sheet).cloned(),
+                                    cell: Some(self.pane.cell.clone()),
+                                    ..self.selection.clone()
                                 },
                             );
                         }
+                    }
+                    if ui.button("웹 문서함 링크 복사").clicked() {
+                        self.request("browser", 0, json!({"open_tab":false}));
                     }
                     if self.busy > 0 {
                         ui.spinner();
@@ -834,11 +858,19 @@ impl GitDoc {
                 self.notify("인쇄용 문서를 준비하는 중입니다.", false);
                 self.request("print", 0, json!({"doc":self.doc, "version":selected}));
             }
-            if ui.add_enabled(selected > 0 && self.busy == 0, Button::new("브라우저에서 보기")).clicked() {
+            let can_open_web = selected > 0 && self.busy == 0;
+            let open_web = ui.add_enabled(can_open_web, Button::new("브라우저에서 보기")).clicked();
+            let copy_web = ui.add_enabled(can_open_web, Button::new("웹 링크 복사")).clicked();
+            if open_web || copy_web {
                 let sheet = self.pane.sheets.get(self.pane.sheet);
+                let cell = sheet.and((!self.pane.cell.is_empty()).then_some(&self.pane.cell));
+                let change = self.pane.selected_region.filter(|&(page, _)| {
+                    page == self.pane.page
+                }).map(|(_, change)| change + 1);
                 self.request("browser", 0, json!({"doc":self.doc, "ids":self.ids, "branch":self.branch,
-                    "page":self.pane.page.max(1), "sheet":sheet, "cell":self.pane.cell,
-                    "row_key":self.pane.data["row_key"], "pages":self.selection.pages}));
+                    "page":(self.pane.page > 0).then_some(self.pane.page), "change":change,
+                    "sheet":sheet, "cell":cell, "row_key":self.pane.data["row_key"],
+                    "pages":self.selection.pages, "open_tab":open_web}));
             }
             if ui.add_enabled(selected==self.head() && matches!(extension.as_str(),"hwp"|"hwpx"|"docx"|"pptx"|"xlsx"|"pdf"),Button::new("문서 편집")).clicked() {
                 self.edit_form();

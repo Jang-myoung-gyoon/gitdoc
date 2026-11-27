@@ -5,7 +5,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from browser_viewer import viewer_url
+from browser_viewer import viewer_url, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, table_rows
 from desktop_link import checked_document_path, desktop_url, document_path
 from extract import comparison_text
@@ -137,7 +137,7 @@ def open_browser_view(document_id: int | None = None, version_id: int | None = N
     path = checked_document_path(document_id, version=version_id, base=base_version_id,
                                  target=target_version_id, branch=branch, page=page, change=change,
                                  sheet=sheet, cell=cell, row_key=row_key)
-    return {"browser_url": viewer_url(path)}
+    return {"browser_url": viewer_url(path), **workspace_info()}
 
 
 @server.tool(annotations=read_only, structured_output=True)

@@ -13,6 +13,13 @@ from store import DATABASE, ROOT
 
 HOST = "127.0.0.1"
 STORE_ID = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
+WORKSPACE_PREFIX = f"/workspace/{STORE_ID}"
+
+
+def workspace_info():
+    default = (ROOT / "data" / "documents.sqlite3").resolve()
+    name = "기본 문서함" if DATABASE == default else DATABASE.stem
+    return {"workspace_id": STORE_ID, "workspace_name": name}
 
 
 def browser_port():
@@ -28,7 +35,7 @@ def viewer_status(port):
         connection.request("GET", "/healthz")
         response = connection.getresponse()
         payload = json.loads(response.read(4096)) if response.status == 200 else None
-        if isinstance(payload, dict) and payload.get("store") == STORE_ID:
+        if isinstance(payload, dict) and payload.get("workspace_id") == STORE_ID:
             return True
         return False
     except (ConnectionRefusedError, ConnectionResetError, http.client.RemoteDisconnected):
@@ -39,11 +46,10 @@ def viewer_status(port):
         connection.close()
 
 
-def viewer_url(path, *, open_tab=False):
-    port = browser_port()
-    url = f"http://{HOST}:{port}{path}"
+def ensure_viewer(port):
     status = viewer_status(port)
     if status is None:
+        DATABASE.parent.mkdir(parents=True, exist_ok=True)
         log_path = DATABASE.parent / "browser-viewer.log"
         options = {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS} if os.name == "nt" else {
             "start_new_session": True}
@@ -61,8 +67,35 @@ def viewer_url(path, *, open_tab=False):
             if process.poll() is None:
                 process.terminate()
             raise ValueError(f"브라우저 뷰어를 시작할 수 없습니다. 로그를 확인하세요. ({log_path})")
-    if not status:
-        raise ValueError(f"포트 {port}에서 다른 서비스가 실행 중입니다. DOCVERS_PORT를 변경하세요.")
+    return status
+
+
+def viewer_ports():
+    yield browser_port()
+    if "DOCVERS_PORT" not in os.environ:
+        # Find the same alternate viewer after reopening the workspace.
+        start = int(STORE_ID[:8], 16)
+        for offset in range(8):
+            yield 49152 + (start + offset) % 16384
+
+
+def workspace_port():
+    available = []
+    for port in viewer_ports():
+        status = viewer_status(port)
+        if status is True:
+            return port
+        if status is None:
+            available.append(port)
+    for port in available:
+        if ensure_viewer(port):
+            return port
+    raise ValueError(f"포트 {browser_port()}에서 다른 작업 공간 또는 서비스가 실행 중입니다. DOCVERS_PORT를 변경하세요.")
+
+
+def viewer_url(path, *, open_tab=False):
+    port = workspace_port()
+    url = f"http://{HOST}:{port}{WORKSPACE_PREFIX}{path}"
     if open_tab and not webbrowser.open(url, new=2):
         raise ValueError(f"기본 브라우저를 열 수 없습니다. 이 주소를 직접 여세요. {url}")
     return url

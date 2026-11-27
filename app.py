@@ -7,7 +7,7 @@ from flask import Flask, Response, abort, flash, jsonify, redirect, render_templ
 from pypdf.errors import PyPdfError
 from werkzeug.exceptions import SecurityError
 
-from browser_viewer import HOST, STORE_ID, browser_port
+from browser_viewer import HOST, STORE_ID, WORKSPACE_PREFIX, browser_port, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from editing import MODES, read_pdf_notes
 from extract import comparison_text
@@ -25,9 +25,27 @@ from store import (
 
 app = Flask(__name__)
 app.jinja_env.globals.update(extensions=EXTENSIONS, workbook_extensions=WORKBOOK_EXTENSIONS,
-                            max_file_mib=MAX_FILE_MIB)
+                            max_file_mib=MAX_FILE_MIB, workspace=workspace_info())
 app.config.update(SECRET_KEY=os.urandom(32), MAX_CONTENT_LENGTH=MAX_FILE + 256 * 1024,
                   TRUSTED_HOSTS=["localhost", "127.0.0.1"], SESSION_COOKIE_SAMESITE="Strict")
+
+flask_app = app.wsgi_app
+
+
+def workspace_routes(environ, start_response):
+    path = environ["PATH_INFO"]
+    if path.startswith("/workspace/"):
+        if path != WORKSPACE_PREFIX and not path.startswith(WORKSPACE_PREFIX + "/"):
+            return Response("이 주소의 GitDoc 작업 공간을 찾을 수 없습니다.", status=404,
+                            mimetype="text/plain", headers={"Cache-Control": "no-store"})(environ, start_response)
+        environ["SCRIPT_NAME"] += WORKSPACE_PREFIX
+        environ["PATH_INFO"] = path[len(WORKSPACE_PREFIX):] or "/"
+    return flask_app(environ, start_response)
+
+
+app.wsgi_app = workspace_routes
+
+
 @app.before_request
 def restrict_cross_site_writes():
     if request.method != "POST":
@@ -89,7 +107,7 @@ def local_time(value):
 
 @app.get("/healthz")
 def health():
-    return jsonify(store=STORE_ID)
+    return jsonify(store=STORE_ID, **workspace_info())
 
 
 def comparison_history(db, active, original, updated):

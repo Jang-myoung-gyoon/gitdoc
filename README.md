@@ -36,7 +36,7 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 
 ## Browser viewer
 
-Select **브라우저에서 보기** in the desktop app to open the current version or comparison in your default browser. GitDoc carries over the selected page or spreadsheet cell.
+The desktop app and local web viewer read and update the same document workspace. Check the workspace label and ID in both headers. Select **브라우저에서 보기** to open the current version or comparison in your default browser. To open it in Codex's built-in browser, paste the address from **웹 링크 복사**. Use **웹 문서함 링크 복사** to open the workspace library instead. Document links carry over the branch, versions, page or changed region, and spreadsheet position. Reload the browser or use **새로 고침** in the desktop app to see changes made in the other view.
 
 Use `python docvers.py open --browser` to open the local library. For Codex's built-in browser, use the MCP tool `open_browser_view` or add `--url` to start the local viewer and print its URL without opening the default browser.
 
@@ -45,7 +45,7 @@ python docvers.py open 1 --version 2 --page 3 --browser --url
 python docvers.py open 1 --base 2 --target 3 --browser --url
 ```
 
-The viewer listens on `127.0.0.1:8796` and uses the local document store. Open its URL in a browser on the same computer. Set `DOCVERS_PORT` if the port is already in use. You can also run `python app.py` in the foreground.
+The viewer listens on loopback, normally `127.0.0.1:8796`. Open its URL in a browser on the same computer. If the default port serves another workspace, GitDoc finds a separate port. Set `DOCVERS_PORT` to use a fixed port, or run `python app.py` in the foreground. A workspace link verifies the store before resolving the document ID.
 
 ## Version history and comparison
 

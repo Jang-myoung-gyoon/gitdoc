@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pypdfium2_raw
 
-from browser_viewer import viewer_url
+from browser_viewer import viewer_url, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from desktop_link import document_path
 from desktop.exporting import convert_format, export_formats, write_export
@@ -175,11 +175,13 @@ def print_preview(doc, version):
             "pdfium_directory": str(Path(pypdfium2_raw.__file__).resolve().parent)}
 
 
-def open_browser_view(doc, ids, branch, page=None, sheet=None, cell=None, row_key=None, pages=False):
-    selection = {"base": ids[0], "target": ids[1], "row_key": row_key} if len(ids) == 2 else {"version": ids[0]}
-    path = document_path(doc, branch=branch, page=page, sheet=sheet, cell=cell,
+def open_browser_view(doc=None, ids=(), branch=None, page=None, change=None, sheet=None,
+                      cell=None, row_key=None, pages=False, open_tab=True):
+    selection = {"base": ids[0], "target": ids[1], "row_key": row_key} if len(ids) == 2 else {
+        "version": next(iter(ids), None)}
+    path = document_path(doc, branch=branch, page=page, change=change, sheet=sheet, cell=cell,
                          view="pages" if pages else None, **selection)
-    return viewer_url(path, open_tab=True)
+    return {"browser_url": viewer_url(path, open_tab=open_tab), "opened": open_tab}
 
 
 def save_file(doc, version, path, format):
@@ -214,7 +216,7 @@ def restore(doc, branch, version, base, reason):
 
 
 OPERATIONS = {
-    "library": library, "detail": detail, "branch_compare": branch_comparison,
+    "workspace": workspace_info, "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "review": review,
     "restore": restore, "save": save_file, "print": print_preview, "merge": merge,
