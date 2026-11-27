@@ -12,14 +12,23 @@ from pathlib import Path
 
 import olefile
 
+from desktop.document_objects import (
+    HANGUL_SHAPES, SHAPE_SIZE, close_hangul_polygon, delete_word_table, insert_word_object,
+    insertion_value, word_tables,
+)
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
+from desktop.shape_editor import apply_shape, prepare_legacy_shapes, shape_catalog
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
 from page_text import embedded_text
-from preview import page_dimensions, preview_path, preview_png, rhwp_command, run_converter
+from preview import PreviewError, page_dimensions, preview_path, preview_png, rhwp_command, run_converter
 from uploads import MAX_FILE
 
+HANGUL_EXTENSIONS = ("hwp", "hwpx")
 MAX_HISTORY = 128 * 1024 * 1024
+SHAPE_EDITS = ("delete_shape", "shape_up", "shape_down", "shape_size")
+# HWP 5 FileHeader properties: password, distribution, DRM and certificate flags.
+HWP_READ_ONLY = sum(1 << bit for bit in (1, 2, 4, 7, 8, 9, 10))
 
 
 def normalized(text):
@@ -90,22 +99,31 @@ def rhwp(args, folder):
     return run_converter([rhwp_command(), *args], folder, env=dict(os.environ, RHWP_WEBFONT_OFFLINE="1"))
 
 
-def hwp_locations(source, page, text):
+def hwp_locations(source, page, placement, text):
     folder = source.parent
     number = page - 1
-    placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number), "--json"], folder))["pages"][0]
     section = placement["section"]
     rhwp(["export-render-tree", str(source), "-p", str(number), "-o", str(folder)], folder)
     root = json.loads((folder/f"render_tree_{page:03d}.json").read_bytes())
     width, height = root["bbox"]["w"], root["bbox"]["h"]
     body = next((item for item in root["children"] if item["type"] == "Body"), {})
+    layout = {(item["paraIndex"], item["controlIndex"]): item["table"]
+              for column in placement["columns"] for item in column["items"]
+              if item["kind"] == "table" and not item.get("isEndnote")}
     lines = defaultdict(list)
+    tables = []
     for column in body.get("children", []):
-        for line in column.get("children", []):
-            if line["type"] == "TextLine" and "pi" in line:
-                for run in line.get("children", []):
+        for item in column.get("children", []):
+            if item["type"] == "TextLine" and "pi" in item:
+                for run in item.get("children", []):
                     if run["type"] == "TextRun" and run.get("text"):
-                        lines[line["pi"]].append(run)
+                        lines[item["pi"]].append(run)
+            address = (item.get("pi"), item.get("ci"))
+            if item["type"] == "Table" and address in layout:
+                x, y, w, h = (item["bbox"][key] for key in ("x", "y", "w", "h"))
+                table = layout[address]
+                tables.append({"address": [section, *address], "box": [x/width, y/height, (x+w)/width, (y+h)/height],
+                               "rows": table["rowCount"], "columns": table["colCount"]})
     full = {item["paraIndex"] for column in placement["columns"] for item in column["items"]
             if item["kind"] == "fullParagraph" and not item.get("isEndnote")}
     items = []
@@ -133,7 +151,7 @@ def hwp_locations(source, page, text):
             items.append({"id": hwp_id(section, paragraph), "name": value[:60], "text": value,
                           "box": [ink[0], ink[1], max(ink[2], .85), ink[3]], "ink": ink,
                           "size": max(8, min(40, (positions[0][3]-positions[0][1])*height*.75))})
-    return items
+    return items, tables
 
 
 def change_hwp(source, original, value, section, paragraph):
@@ -160,14 +178,55 @@ def change_hwp(source, original, value, section, paragraph):
     flags = ["--section", str(section), "--para", str(paragraph),
              "--offset", str(address["charOffset"]+left)]
     if before:
-        output = folder/"deleted.hwp"
+        output = folder/f"deleted{source.suffix}"
         rhwp(["edit", "delete-text", str(source), *flags, "--count", str(len(before)), "-o", str(output)], folder)
         source = output
     if after:
-        output = folder/"inserted.hwp"
+        output = folder/f"inserted{source.suffix}"
         rhwp(["edit", "insert-text", str(source), *flags, "--text", after, "-o", str(output)], folder)
         source = output
     return source.read_bytes()
+
+
+def hangul_xml(source):
+    if source.suffix == ".hwpx":
+        return source.read_bytes()
+    target = source.with_suffix(".hwpx")
+    rhwp(["export-hwpx", str(source), str(target)], source.parent)
+    return target.read_bytes()
+
+
+def insert_hangul_object(folder, extension, data, operation, value, section, paragraph):
+    source = folder/f"document.{extension}"
+    source.write_bytes(data)
+    # Insert after the anchor so rhwp keeps any section start on its existing paragraph.
+    if operation == "shape":
+        paragraph += 1
+    coordinates = ["--section", str(section), "--para", str(paragraph)]
+    flags = [*coordinates, "--offset", "0"]
+    if operation == "table":
+        rows, columns = value
+        flags += ["--rows", str(rows), "--cols", str(columns)]
+    else:
+        width, height = SHAPE_SIZE
+        flags += ["--shape", HANGUL_SHAPES[value], "--width", str(width), "--height", str(height), "--treat-as-char"]
+    destination = folder/f"updated.{extension}"
+    if extension == "hwpx":
+        with open_package(data):
+            pass
+    try:
+        if operation == "shape":
+            paragraph_file = folder/f"object-paragraph.{extension}"
+            rhwp(["edit", "insert-paragraph", str(source), *coordinates, "-o", str(paragraph_file)], folder)
+            source = paragraph_file
+        rhwp(["edit", f"insert-{operation}", str(source), *flags, "-o", str(destination)], folder)
+    except PreviewError as error:
+        raise ValueError("한글 개체를 삽입할 수 없습니다. 설치한 rhwp의 삽입 명령과 문서 편집 권한을 확인하세요.") from error
+    if value not in ("triangle", "arrow"):
+        return destination.read_bytes()
+    # rhwp inserts an open triangle. Write a closed, native polygon through HWPX.
+    updated = close_hangul_polygon(hangul_xml(source), hangul_xml(destination), section, paragraph, value)
+    return convert_format("hwpx", "hwp", updated) if extension == "hwp" else updated
 
 
 class PagedEditor:
@@ -186,6 +245,17 @@ class PagedEditor:
         self.current_key = None
         self.texts = {}
         self.locations = []
+        self.page_objects = []
+        self.page_count = 0
+        self.hangul_anchor = None
+        self.tables = []
+        self.shapes = []
+        self.shape_xml = None
+        self.hwp_shapes_allowed = True
+        if extension == "hwp":
+            with olefile.OleFileIO(io.BytesIO(data)) as document:
+                header = document.openstream("FileHeader").read(40)
+                self.hwp_shapes_allowed = len(header) == 40 and not int.from_bytes(header[36:40], "little") & HWP_READ_ONLY
 
     @property
     def data(self):
@@ -205,26 +275,46 @@ class PagedEditor:
         count = len(sizes)
         number = max(1, min(count, number))
         width, height = sizes[number-1]
+        texts, locations, anchor = self.texts, self.locations, self.hangul_anchor
+        shapes, shape_xml = self.shapes, self.shape_xml
+        changed = key != self.current_key
         with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
             folder = Path(work)
-            if extension == "hwp":
-                source = folder/"document.hwp"
+            if extension in HANGUL_EXTENSIONS:
+                source = folder/f"document.{extension}"
                 source.write_bytes(data)
-                if key != self.current_key:
-                    target = folder/"document.hwpx"
-                    rhwp(["export-hwpx", str(source), str(target)], folder)
-                    self.texts = dict(hwp_paragraphs(target.read_bytes()))
-                objects = hwp_locations(source, number, self.texts)
+                if changed:
+                    content = hangul_xml(source)
+                    texts = dict(hwp_paragraphs(content))
+                    shapes = shape_catalog(content, hangul=True) if self.hwp_shapes_allowed else []
+                    shape_xml = content if shapes and extension == "hwp" else None
+                placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number-1), "--json"], folder))["pages"][0]
+                section = placement["section"]
+                anchor = next(
+                    ((section, item["paraIndex"])
+                     for column in placement["columns"] for item in column["items"]
+                     if "paraIndex" in item and not item.get("isEndnote")
+                     and (section, item["paraIndex"]) in texts),
+                    (section, 0) if count == 1 and (section, 0) in texts else None)
+                objects, tables = hwp_locations(source, number, placement, texts)
             else:
-                if key != self.current_key:
-                    self.locations = word_locations(data, pdf, count)
-                objects = self.locations[number-1]
-        self.current_key = key
+                if changed:
+                    locations = word_locations(data, pdf, count)
+                    tables = word_tables(data)
+                    shapes = shape_catalog(data, hangul=False, binary_word=self.extension == "doc")
+                else:
+                    tables = self.tables
+                objects = locations[number-1]
         png = Path(self.directory.name)/"document.png"
         png.write_bytes(preview_png(pdf, number, prefer_pdfium=True))
         fonts = use_rendered_fonts(objects, pdf, number, Path(self.directory.name) / "fonts")
-        return {"page": number, "count": count, "width": width, "height": height,
-                "objects": objects, "image": str(png), "fonts": fonts}
+        self.current_key = key
+        self.page_objects = objects
+        self.page_count = count
+        self.tables, self.shapes, self.shape_xml = tables, shapes, shape_xml
+        self.texts, self.locations, self.hangul_anchor = texts, locations, anchor
+        return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
+                "objects": objects, "tables": tables, "shapes": shapes, "image": str(png), "fonts": fonts}
 
     def page(self, number, operation=None, text_edit=None, target=None, value=None, **_):
         index = self.position
@@ -252,19 +342,69 @@ class PagedEditor:
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
 
     def apply(self, source, operation, text_edit, target, value):
+        if operation in SHAPE_EDITS:
+            address = value.get("address") if isinstance(value, dict) else None
+            if (text_edit or not isinstance(address, list) or len(address) != 2
+                    or any(type(i) is not int for i in address) or value.get("digest") != self.current_key
+                    or not any(shape["address"] == address for shape in self.shapes)):
+                raise ValueError("편집할 도형을 다시 선택하세요.")
+            size = value.get("size")
+            if (operation == "shape_size" and (not isinstance(size, list) or len(size) != 2
+                    or not all(type(number) is int and 2 <= number <= limit for number, limit in zip(size, (180, 250))))):
+                raise ValueError("도형 너비는 2~180 mm, 높이는 2~250 mm로 입력하세요.")
+            changed = apply_shape(self.shape_xml if self.extension == "hwp" else source,
+                                  address, operation, size, hangul=self.extension in HANGUL_EXTENSIONS,
+                                  binary_word=self.extension == "doc")
+            if self.extension == "hwp":
+                return convert_format("hwpx", "hwp", changed)
+            return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
+        if operation == "delete_table":
+            address = value.get("address") if isinstance(value, dict) else None
+            if (text_edit or not isinstance(address, list) or any(type(i) is not int for i in address)
+                    or value.get("digest") != self.current_key
+                    or not any(table["address"] == address for table in self.tables)):
+                raise ValueError("삭제할 표를 다시 선택하세요.")
+            if self.extension not in HANGUL_EXTENSIONS:
+                return delete_word_table(source, address[0])
+            section, paragraph, control = address
+            with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+                folder = Path(work)
+                document = folder/f"document.{self.extension}"
+                output = folder/f"deleted.{self.extension}"
+                document.write_bytes(source)
+                rhwp(["edit", "delete-control", str(document), "--section", str(section),
+                      "--para", str(paragraph), "--ctrl", str(control), "-o", str(output)], folder)
+                return output.read_bytes()
+        if operation in ("table", "shape"):
+            value = insertion_value(operation, value)
+            if text_edit:
+                source = self.apply(source, None, text_edit, None, None)
+            if self.extension in HANGUL_EXTENSIONS:
+                selected = None if target is None else next(
+                    (item["id"] for item in self.page_objects if item["id"] == target.get("id")), None)
+                anchor = (selected >> 32, (selected & 0xffffffff) - 1) if selected else self.hangul_anchor
+                if anchor is None:
+                    raise ValueError("이 페이지에서 삽입 위치를 확인할 수 없습니다. 본문 문단이 있는 페이지를 선택하세요.")
+                with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+                    return insert_hangul_object(Path(work), self.extension, source, operation, value, *anchor)
+            candidates = [item["id"] for item in self.page_objects]
+            if target and target.get("id") in candidates:
+                candidates.insert(0, target["id"])
+            return insert_word_object(source, operation, value, candidates, self.page_count == 1,
+                                      legacy=self.extension == "doc")
         selected = (text_edit or {}).get("target") or target
         if selected is None:
             raise ValueError("편집할 문단을 선택하세요.")
         identity = selected["id"]
         edited = None if not text_edit else valid_text(text_edit["text"].replace("\t", " "), 20000, multiline=True)
-        if self.extension == "hwp":
+        if self.extension in HANGUL_EXTENSIONS:
             section, paragraph = identity >> 32, (identity & 0xffffffff) - 1
             original = self.texts.get((section, paragraph))
             if not original or edited is None:
                 raise ValueError("편집할 한글 문단을 확인하세요.")
             with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
                 folder = Path(work)
-                input_file = folder/"document.hwp"
+                input_file = folder/f"document.{self.extension}"
                 input_file.write_bytes(source)
                 return change_hwp(input_file, original, edited, section, paragraph)
         with open_package(source) as archive:
