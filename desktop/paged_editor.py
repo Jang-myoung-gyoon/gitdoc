@@ -18,6 +18,7 @@ from desktop.document_objects import (
 )
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
+from desktop.hangul_cells import STALE_CELL, cell_catalog, cell_value, replace_cell, verify_cell
 from desktop.hangul_format import OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
 from desktop.shape_editor import apply_shape, prepare_legacy_shapes, shape_catalog
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
@@ -112,6 +113,7 @@ def hwp_locations(source, page, placement, text):
               for column in placement["columns"] for item in column["items"]
               if item["kind"] == "table" and not item.get("isEndnote")}
     lines = defaultdict(list)
+    table_cells = {}
     tables = []
     for column in body.get("children", []):
         for item in column.get("children", []):
@@ -123,7 +125,15 @@ def hwp_locations(source, page, placement, text):
             if item["type"] == "Table" and address in layout:
                 x, y, w, h = (item["bbox"][key] for key in ("x", "y", "w", "h"))
                 table = layout[address]
-                tables.append({"address": [section, *address], "box": [x/width, y/height, (x+w)/width, (y+h)/height],
+                table_address = (section, *address)
+                cells = table_cells.setdefault(table_address, {})
+                for cell in item.get("children", []):
+                    if cell["type"] == "Cell":
+                        coordinate = cell.get("row"), cell.get("col")
+                        left, top, w_cell, h_cell = (cell["bbox"][key] for key in ("x", "y", "w", "h"))
+                        cells[coordinate] = None if coordinate in cells else [
+                            left/width, top/height, (left+w_cell)/width, (top+h_cell)/height]
+                tables.append({"address": list(table_address), "box": [x/width, y/height, (x+w)/width, (y+h)/height],
                                "rows": table["rowCount"], "columns": table["colCount"]})
     full = {item["paraIndex"] for column in placement["columns"] for item in column["items"]
             if item["kind"] == "fullParagraph" and not item.get("isEndnote")}
@@ -152,7 +162,11 @@ def hwp_locations(source, page, placement, text):
             items.append({"id": hwp_id(section, paragraph), "name": value[:60], "text": value,
                           "box": [ink[0], ink[1], max(ink[2], .85), ink[3]], "ink": ink,
                           "size": max(8, min(40, (positions[0][3]-positions[0][1])*height*.75))})
-    return items, tables
+    return items, tables, table_cells
+
+
+def exported_tables(source):
+    return json.loads(rhwp(["export-tables", str(source), "--json"], source.parent))["tables"]
 
 
 def change_hwp(source, original, value, section, paragraph):
@@ -250,6 +264,7 @@ class PagedEditor:
         self.page_count = 0
         self.hangul_anchor = None
         self.tables = []
+        self.cell_catalog = None
         self.shapes = []
         self.shape_xml = None
         self.hangul_formatting = set()
@@ -282,6 +297,7 @@ class PagedEditor:
         shapes, shape_xml = self.shapes, self.shape_xml
         formatting, hangul_fonts = self.hangul_formatting, self.hangul_fonts
         changed = key != self.current_key
+        native_cells = None if changed else self.cell_catalog
         with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
             folder = Path(work)
             if extension in HANGUL_EXTENSIONS:
@@ -301,7 +317,21 @@ class PagedEditor:
                      if "paraIndex" in item and not item.get("isEndnote")
                      and (section, item["paraIndex"]) in texts),
                     (section, 0) if count == 1 and (section, 0) in texts else None)
-                objects, tables = hwp_locations(source, number, placement, texts)
+                objects, tables, page_cells = hwp_locations(source, number, placement, texts)
+                if tables and native_cells is None:
+                    native_cells = {}
+                    if self.hwp_shapes_allowed:
+                        try:
+                            native_cells = cell_catalog(content if changed else hangul_xml(source),
+                                                        exported_tables(source))
+                        except PreviewError:
+                            pass
+                for table in tables:
+                    address = tuple(table["address"])
+                    supported = (native_cells or {}).get(address, {})
+                    table["cells"] = [{"coordinate": list(coordinate), "text": supported[coordinate], "box": box}
+                                      for coordinate, box in sorted(page_cells[address].items())
+                                      if box is not None and coordinate in supported]
                 for item in objects:
                     identity = item["id"]
                     item["hangul_format"] = (identity >> 32, (identity & 0xffffffff) - 1) in formatting
@@ -320,6 +350,7 @@ class PagedEditor:
         self.page_objects = objects
         self.page_count = count
         self.tables, self.shapes, self.shape_xml = tables, shapes, shape_xml
+        self.cell_catalog = native_cells
         self.texts, self.locations, self.hangul_anchor = texts, locations, anchor
         self.hangul_formatting, self.hangul_fonts = formatting, hangul_fonts
         return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
@@ -376,6 +407,36 @@ class PagedEditor:
             if self.extension == "hwp":
                 return convert_format("hwpx", "hwp", changed)
             return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
+        if operation == "edit_table_cell" and self.extension in HANGUL_EXTENSIONS:
+            if not isinstance(value, dict):
+                raise ValueError(STALE_CELL)
+            address, coordinate = value.get("address"), value.get("coordinate")
+            if (text_edit or value.get("digest") != self.current_key or not isinstance(address, list)
+                    or not isinstance(coordinate, list) or any(type(i) is not int for i in address + coordinate)):
+                raise ValueError(STALE_CELL)
+            selected = next((cell for table in self.tables if table["address"] == address
+                             for cell in table.get("cells", []) if cell["coordinate"] == coordinate), None)
+            if selected is None:
+                raise ValueError(STALE_CELL)
+            value = cell_value(value.get("text"))
+            if value == selected["text"]:
+                return source
+            with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+                document = Path(work)/f"document.{self.extension}"
+                document.write_bytes(source)
+                tables = exported_tables(document)
+                native = next(table for table in tables
+                              if [table["section"], table["paragraph"], table["control"]] == address)
+                if self.extension == "hwpx":
+                    return replace_cell(source, native, tuple(coordinate), value)
+                output = Path(work)/"edited.hwp"
+                row, col = coordinate
+                expected = replace_cell(hangul_xml(document), native, tuple(coordinate), value)
+                rhwp(["edit", "set-cell", str(document), "--table", str(native["index"]),
+                      "--row", str(row), "--col", str(col), "--keep-style", "--text", value,
+                      "-o", str(output)], Path(work))
+                verify_cell(expected, hangul_xml(output), native, tuple(coordinate))
+                return output.read_bytes()
         if operation == "delete_table":
             address = value.get("address") if isinstance(value, dict) else None
             if (text_edit or not isinstance(address, list) or any(type(i) is not int for i in address)

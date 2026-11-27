@@ -47,6 +47,7 @@ jobs:
           python -m unittest discover -s tests -p test_document_objects.py -v
           python -m unittest discover -s tests -p test_presentation_edit.py -v
           python -m unittest discover -s tests -p test_hangul_format.py -v
+          python -m unittest discover -s tests -p test_hangul_table_cells.py -v
 
   desktop-toolbar:
     runs-on: macos-15

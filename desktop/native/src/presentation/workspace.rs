@@ -647,6 +647,7 @@ mod tests {
                     label: String::new(),
                     rows: 2,
                     columns: 3,
+                    cells: vec![],
                 },
                 PageTable {
                     address: address.clone(),
@@ -654,6 +655,7 @@ mod tests {
                     label: String::new(),
                     rows: 4,
                     columns: 2,
+                    cells: vec![],
                 },
             ];
             frame(&ctx, &mut editor, size, vec![]);
@@ -670,6 +672,116 @@ mod tests {
                              Some(Command::Page(params)) if params["operation"] == "delete_table"
                                  && params["value"] == json!({"address": address, "digest": "snapshot"})));
         }
+    }
+
+    #[test]
+    fn hangul_cell_edit_uses_exact_row_and_column_from_the_narrow_ribbon() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 2, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 1, "columns": 2, "cells": [
+                {"coordinate": [0, 0], "text": "Same", "box": [0.1, 0.44, 0.45, 0.54]},
+                {"coordinate": [0, 1], "text": "Same", "box": [0.45, 0.44, 0.8, 0.54]}
+            ]
+        }]))
+        .unwrap();
+
+        frame(&ctx, &mut editor, size, vec![]);
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "기존 표")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "표 1 · 1행 × 2열")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "셀 선택")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "1행 2열")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "셀 내용 편집")
+            )
+            .is_none()
+        );
+        assert!(editor.cell_draft.is_some());
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(click(&ctx, &mut editor, size, find_text(&output.shapes, "취소")).is_none());
+        assert!(editor.cell_draft.is_none());
+
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "셀 내용 편집")
+            )
+            .is_none()
+        );
+        frame(&ctx, &mut editor, size, vec![]);
+        let select_all = Event::Key {
+            key: Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        let (output, _) = frame(
+            &ctx,
+            &mut editor,
+            size,
+            vec![select_all, Event::Text("새 값".into())],
+        );
+        assert!(
+            matches!(click(&ctx, &mut editor, size, find_text(&output.shapes, "셀에 적용")),
+            Some(Command::Page(params)) if params["operation"] == "edit_table_cell"
+                && params["value"] == json!({
+                    "address": [0, 2, 1], "coordinate": [0, 1], "text": "새 값", "digest": "snapshot"
+                }))
+        );
+
+        editor.select_table_at(
+            Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)),
+            Some(pos2(25.0, 50.0)),
+        );
+        assert_eq!(editor.selected_cell, Some(0));
     }
 
     #[test]

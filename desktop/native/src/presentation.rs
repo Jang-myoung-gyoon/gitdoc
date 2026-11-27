@@ -1,5 +1,6 @@
 mod hangul_ribbon;
 mod shape_tools;
+mod table_cells;
 mod workspace;
 
 use crate::editor_fonts::{Fonts, Span, change_bounds};
@@ -82,6 +83,8 @@ struct PageTable {
     label: String,
     rows: u32,
     columns: u32,
+    #[serde(default)]
+    cells: Vec<table_cells::PageCell>,
 }
 
 struct Text {
@@ -148,6 +151,8 @@ pub struct Editor {
     hangul_fonts: Vec<String>,
     edit_digest: String,
     selected_table: Option<usize>,
+    selected_cell: Option<usize>,
+    cell_draft: Option<table_cells::CellDraft>,
     reveal_table: bool,
     reason: String,
     saving: bool,
@@ -200,6 +205,8 @@ impl Editor {
             hangul_fonts: Vec::new(),
             edit_digest: String::new(),
             selected_table: None,
+            selected_cell: None,
+            cell_draft: None,
             reveal_table: false,
             reason: String::new(),
             saving: false,
@@ -272,6 +279,8 @@ impl Editor {
         self.selected_shape = None;
         self.edit_digest = result["edit_digest"].as_str().unwrap_or_default().into();
         self.selected_table = None;
+        self.selected_cell = None;
+        self.cell_draft = None;
         self.reveal_table = false;
         self.object_drag = None;
         self.resize_drag = None;
@@ -403,12 +412,14 @@ impl Editor {
                     .clicked()
                 {
                     self.selected_table = Some(index);
+                    self.selected_cell = None;
                     self.selected_shape = None;
                     self.reveal_table = true;
                     ui.close();
                 }
             }
         });
+        self.table_cell_tools(ui);
         if let Some(table) = self
             .selected_table
             .and_then(|index| self.page_tables.get(index))
@@ -443,6 +454,7 @@ impl Editor {
                     | "delete_slide"
                     | "delete_object"
                     | "delete_table"
+                    | "edit_table_cell"
                     | "delete_shape"
                     | "shape_up"
                     | "shape_down"
@@ -862,6 +874,9 @@ impl Editor {
         if self.waiting {
             return command;
         }
+        if self.cell_draft.is_some() {
+            return self.cell_dialog(ui.ctx());
+        }
         if let Some(modal) = self.dialog(ui.ctx()) {
             return Some(modal);
         }
@@ -1101,6 +1116,9 @@ impl Editor {
             .and_then(|table| table.bounds)
         {
             let bounds = project(canvas, bounds);
+            let bounds = self
+                .selected_table_cell()
+                .map_or(bounds, |cell| project(canvas, cell.bounds));
             if std::mem::take(&mut self.reveal_table) && !ui.clip_rect().contains_rect(bounds) {
                 ui.scroll_to_rect(bounds, Some(Align::Center));
             }
@@ -1358,13 +1376,7 @@ impl Editor {
         if response.clicked() && !self.waiting {
             self.selected_shape = None;
             if self.format == Format::Hangul {
-                self.selected_table = pointer.and_then(|point| {
-                    self.page_tables.iter().position(|table| {
-                        table
-                            .bounds
-                            .is_some_and(|bounds| project(canvas, bounds).contains(point))
-                    })
-                });
+                self.select_table_at(canvas, pointer.filter(|_| hit.is_none()));
             }
             if self.selected_table.is_some() && hit.is_none() {
                 return self.select(ui.ctx(), None, false, None);

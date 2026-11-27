@@ -167,6 +167,8 @@ For existing standalone inline shapes, open **도형 선택** under **도형 서
 
 In Hangul documents, **편집**, **서식**, and **입력** give access to clipboard tools, existing object insertion, and paragraph formatting. Select a supported body paragraph and use **서식** for font, size, bold, italic, underline, color, alignment, and line spacing. Formatting applies to the whole paragraph.
 
+For HWP and HWPX, click a supported table cell on the page or choose **기존 표** and the cell coordinates under **표 레이아웃**. Use **셀 내용 편집** and **셀에 적용** to replace or clear a single line of text. Undo remains available until **수정안 저장** creates a new version in the original format. The current cell editor supports unmerged, unprotected cells with one plain text run, including empty cells.
+
 DOC uses LibreOffice to convert to DOCX for editing and back to DOC when saving. HWP and HWPX use rhwp with table and shape insertion support. HWP triangles and right arrows use editable, closed HWPX polygons that rhwp saves back to HWP. Legacy format conversions can change existing layout or formatting. For direct text entry, the canvas uses the font, size, and color from the preview. Unavailable fonts follow the document font substitution rules.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. Password-protected and signed originals cannot be edited.
