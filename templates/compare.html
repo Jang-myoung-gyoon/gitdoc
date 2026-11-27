@@ -8,7 +8,7 @@
 {% block main %}
   <nav class="breadcrumb" aria-label="현재 위치"><a href="{{ url_for('index') }}">문서함</a><span aria-hidden="true">/</span><a href="{{ url_for('detail', document_id=doc.id, branch=active.name) }}">{{ doc.title }}</a></nav>
   <div class="page-heading"><h1>버전 비교</h1><p>{{ original.branch_name }} {{ original.version_label }} → {{ updated.branch_name }} {{ updated.version_label }}</p></div>
-  {{ toolbar(doc, active, current, branches, versions, before=original, after=updated) }}
+  {{ toolbar(doc, active, current, branches, versions, before=original, after=updated, approval=approval) }}
   <div class="comparison-body">
     {{ viewer(doc.id, original, updated, branch=active.name) }}
   <div class="compare-cards">

@@ -1,9 +1,15 @@
+import re
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app import aligned_tables, app
 from browser_viewer import STORE_ID, WORKSPACE_PREFIX, viewer_url, workspace_port
 from desktop.bridge import open_browser_view
+import store
+from uploads import prepare_upload
+from workflow import save_proposal
 
 
 class BrowserWorkspaceTests(unittest.TestCase):
@@ -20,10 +26,41 @@ class BrowserWorkspaceTests(unittest.TestCase):
                 self.assertIn('<form method="get"', library)
                 self.assertNotIn('method="post"', library)
 
-    def test_web_viewer_exposes_no_document_write_routes(self):
-        self.assertTrue(all(rule.methods <= {"GET", "HEAD", "OPTIONS"} for rule in app.url_map.iter_rules()))
+    def test_web_viewer_exposes_approval_as_its_only_write_route(self):
+        self.assertEqual([rule.endpoint for rule in app.url_map.iter_rules() if "POST" in rule.methods], ["approve"])
         with app.test_client() as client:
             self.assertEqual(client.post(f"{WORKSPACE_PREFIX}/documents/1/edit").status_code, 404)
+
+    def test_web_approval_uses_the_same_head_when_desktop_review_is_off(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(store, "DATABASE", Path(folder) / "test.sqlite"):
+            store.initialize()
+            with store.database(write=True) as db:
+                doc = store.create_document(db, "Local document", prepare_upload("sample.csv", b"old,value\n"))
+                base = store.find_document(db, doc)["current_id"]
+                self.assertFalse(store.desktop_review_enabled(db))
+            draft = save_proposal(doc, "main", base, prepare_upload("sample.csv", b"new,value\n"), "change")
+            stale = save_proposal(doc, "main", base, prepare_upload("sample.csv", b"stale,value\n"), "change")
+            with app.test_client() as client:
+                def compare(number):
+                    return client.get(f"{WORKSPACE_PREFIX}/documents/{doc}/compare?base={base}&target={number}").get_data(as_text=True)
+
+                def token(page):
+                    return re.search(r'name="token" value="([0-9a-f]{64})"', page)[1]
+
+                page = compare(draft)
+                self.assertIn("검토 및 확정", page)
+                self.assertIn(f"{WORKSPACE_PREFIX}/documents/{doc}/versions/{draft}/approve", page)
+                endpoint = f"{WORKSPACE_PREFIX}/documents/{doc}/versions/{draft}/approve"
+                payload = {"base": base, "token": token(page)}
+                stale_token = token(compare(stale))
+                self.assertEqual(client.post(endpoint, data={"base": base, "token": "0" * 64}).status_code, 400)
+                self.assertEqual(client.post(endpoint, data=payload, headers={"Origin": "https://other.example"}).status_code, 400)
+                self.assertEqual(client.post(endpoint, data=payload, headers={"Origin": "http://localhost"}).status_code, 303)
+                self.assertEqual(client.post(f"{WORKSPACE_PREFIX}/documents/{doc}/versions/{stale}/approve",
+                                             data={"base": base, "token": stale_token}).status_code, 409)
+            with store.database(readonly=True) as db:
+                self.assertEqual(store.find_document(db, doc)["current_id"], draft)
+                self.assertEqual(store.find_version(db, doc, stale)["status"], "pending")
 
     def test_row_key_comparison_preserves_the_original_cell_row(self):
         left = {"extension": "csv", "content": b"id,value\na,first\nb,second\n"}

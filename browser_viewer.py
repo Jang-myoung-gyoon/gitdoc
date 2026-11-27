@@ -35,7 +35,8 @@ def viewer_status(port):
         connection.request("GET", "/healthz")
         response = connection.getresponse()
         payload = json.loads(response.read(4096)) if response.status == 200 else None
-        if isinstance(payload, dict) and payload.get("workspace_id") == STORE_ID:
+        if (isinstance(payload, dict) and payload.get("workspace_id") == STORE_ID
+                and payload.get("web_approval") is True):
             return True
         return False
     except (ConnectionRefusedError, ConnectionResetError, http.client.RemoteDisconnected):

@@ -1,8 +1,10 @@
+import hmac
 import io
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_file, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file, url_for
 from pypdf.errors import PyPdfError
 from werkzeug.exceptions import SecurityError
 
@@ -20,10 +22,12 @@ from store import (
     find_branch, find_document, find_version, initialize, merge_state,
     search_documents, text_diff,
 )
+from workflow import MissingEntity, review_revision
 
 app = Flask(__name__)
 app.jinja_env.globals.update(workbook_extensions=WORKBOOK_EXTENSIONS, workspace=workspace_info())
 app.config["TRUSTED_HOSTS"] = ["localhost", "127.0.0.1"]
+REVIEW_KEY = secrets.token_bytes(32)
 
 flask_app = app.wsgi_app
 
@@ -85,7 +89,7 @@ def local_time(value):
 
 @app.get("/healthz")
 def health():
-    return jsonify(store=STORE_ID, **workspace_info())
+    return jsonify(store=STORE_ID, web_approval=True, **workspace_info())
 
 
 def comparison_history(db, active, original, updated):
@@ -170,9 +174,37 @@ def compare(document_id):
             except ValueError as error:
                 abort(400, description=str(error))
     changes, truncated = text_diff(left, right)
+    can_approve = (updated["status"] == "pending" and updated["branch_name"] == active["name"] and
+                   original["id"] == updated["base_id"] == active["head_id"])
+    token = approval_token(document_id, target, base) if can_approve else None
     return render_template("compare.html", doc=doc, original=original, updated=updated,
                            active=active, changes=changes, truncated=truncated,
-                           current=current, branches=branches, versions=versions)
+                           current=current, branches=branches, versions=versions, approval=token)
+
+
+def approval_token(document_id, version_id, base):
+    scope = f"{STORE_ID}:{document_id}:{version_id}:{base}".encode()
+    return hmac.digest(REVIEW_KEY, scope, "sha256").hex()
+
+
+@app.post("/documents/<int:document_id>/versions/<int:version_id>/approve")
+def approve(document_id, version_id):
+    base = request.form.get("base", type=int)
+    token = request.form.get("token", "")
+    origin = request.headers.get("Origin")
+    if (base is None or len(token) != 64 or not token.isascii() or
+            (origin is not None and origin != request.host_url.rstrip("/")) or
+            not hmac.compare_digest(token, approval_token(document_id, version_id, base))):
+        abort(400, description="비교 화면에서 다시 확정하세요.")
+    with database(readonly=True) as db:
+        name = version(db, document_id, version_id)["branch_name"]
+    try:
+        review_revision(document_id, version_id, "approve", base, request.form.get("note", ""))
+    except MissingEntity:
+        abort(404)
+    except ValueError as error:
+        return render_template("error.html", message=str(error)), 409
+    return redirect(url_for("compare", document_id=document_id, branch=name, base=base, target=version_id), code=303)
 
 
 @app.get("/documents/<int:document_id>/versions/<int:version_id>/file")

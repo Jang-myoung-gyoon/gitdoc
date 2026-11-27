@@ -10,14 +10,32 @@
 </dialog>
 {% endmacro %}
 
-{% macro toolbar(doc, active, current, branches, versions, opened=none, before=none, after=none) %}
+{% macro toolbar(doc, active, current, branches, versions, opened=none, before=none, after=none, approval=none) %}
 <nav class="document-actions" aria-label="문서 탐색">
   <button class="secondary" type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="branches-dialog">브랜치 <small>{{ active.name }}</small></button>
   <button class="secondary" type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="history-dialog">버전 이력</button>
+  {% if approval %}
+  <button type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="approval-dialog">검토 및 확정</button>
+  {% elif after and after.status == 'pending' and before.id != after.base_id %}
+  <a href="{{ url_for('compare', document_id=doc.id, branch=after.branch_name, base=after.base_id, target=after.id) }}">기준본과 비교</a>
+  {% endif %}
   {% if opened and opened.id != current.id %}
   <a href="{{ url_for('detail', document_id=doc.id, branch=active.name) }}">최신 확정본 보기</a>
   {% endif %}
 </nav>
+
+{% if approval %}
+{% call dialog('approval', '수정안 확정') %}
+  <p>{{ before.version_label }} → <strong>{{ after.version_label }}</strong></p>
+  <p>확정하면 이 수정안이 {{ active.name }} 브랜치의 최신본이 됩니다.</p>
+  <form class="selection" method="post" action="{{ url_for('approve', document_id=doc.id, version_id=after.id) }}">
+    <input type="hidden" name="base" value="{{ before.id }}">
+    <input type="hidden" name="token" value="{{ approval }}">
+    <label>검토 의견 (선택)<input type="text" name="note" maxlength="500"></label>
+    <button type="submit">수정안 확정</button>
+  </form>
+{% endcall %}
+{% endif %}
 
 {% call dialog('branches', '브랜치') %}
   <nav class="branch-list" aria-label="문서 브랜치">
