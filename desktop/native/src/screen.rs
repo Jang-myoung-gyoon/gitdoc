@@ -56,6 +56,8 @@ struct Form {
     find: String,
     replacement: String,
     page: usize,
+    submitting: bool,
+    error: Option<String>,
 }
 
 impl Form {
@@ -74,6 +76,8 @@ impl Form {
             find: String::new(),
             replacement: String::new(),
             page: 1,
+            submitting: false,
+            error: None,
         }
     }
     fn needs_file(&self) -> bool {
@@ -177,11 +181,13 @@ impl GitDoc {
         self.notice = message.into();
         self.error = error;
     }
-    fn request(&mut self, op: &'static str, scope: u64, params: Value) {
+    fn request(&mut self, op: &'static str, scope: u64, params: Value) -> bool {
         if self.bridge.send.send(Message { op, scope, params }).is_ok() {
             self.busy += 1;
+            true
         } else {
             self.notify("문서 처리 엔진이 연결되지 않았습니다.", true);
+            false
         }
     }
     fn refresh(&mut self) {
@@ -395,6 +401,13 @@ impl GitDoc {
                     self.pane.seek = None;
                     self.list_changes = false;
                 }
+                if reply.op == "edit"
+                    && let Some(form) = self.form.as_mut().filter(|form| form.submitting)
+                {
+                    form.submitting = false;
+                    form.error = Some(error);
+                    return;
+                }
                 self.notify(error, true);
                 return;
             }
@@ -532,6 +545,9 @@ impl GitDoc {
                 self.notify("브랜치를 만들었습니다.", false);
             }
             "submit" | "edit" => {
+                if reply.op == "edit" {
+                    self.form = None;
+                }
                 let place = Destination {
                     ids: vec![self.head(), id(&result)],
                     branch: Some(self.branch.clone()),
@@ -1486,14 +1502,10 @@ impl GitDoc {
         };
         let mut save = false;
         let mut cancel = false;
-        let mut open = true;
-        Window::new(form.title)
-            .collapsible(false)
-            .resizable(false)
-            .open(&mut open)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .default_width(390.0)
-            .show(ctx, |ui| {
+        let modal = Modal::new(Id::new(("form", form.title))).show(ctx, |ui| {
+            ui.set_width(390.0);
+            ui.heading(form.title);
+            ui.add_enabled_ui(!form.submitting, |ui| {
                 if form.needs_file() {
                     if let Some(path) = &form.file {
                         ui.label(path.file_name().unwrap_or_default().to_string_lossy());
@@ -1513,10 +1525,12 @@ impl GitDoc {
                 if form.action == Action::Edit {
                     match form.mode.as_str() {
                         "replace" => {
-                            ui.label("찾을 문구");
-                            ui.text_edit_singleline(&mut form.find);
-                            ui.label("바꿀 문구");
-                            ui.text_edit_singleline(&mut form.replacement);
+                            let label = ui.label("찾을 문구");
+                            ui.text_edit_singleline(&mut form.find)
+                                .labelled_by(label.id);
+                            let label = ui.label("바꿀 문구");
+                            ui.text_edit_singleline(&mut form.replacement)
+                                .labelled_by(label.id);
                         }
                         "cell" => {
                             ui.label("시트 이름");
@@ -1579,12 +1593,13 @@ impl GitDoc {
                 );
                 let required_name = matches!(form.action, Action::Register | Action::Branch);
                 if required_reason || matches!(form.action, Action::Approve | Action::Reject) {
-                    ui.label(if required_reason {
+                    let label = ui.label(if required_reason {
                         "변경 사유"
                     } else {
                         "검토 의견"
                     });
-                    ui.text_edit_multiline(&mut form.reason);
+                    ui.text_edit_multiline(&mut form.reason)
+                        .labelled_by(label.id);
                 }
                 let valid = (!form.needs_file() || form.file.is_some())
                     && (!required_reason || !form.reason.trim().is_empty())
@@ -1594,9 +1609,22 @@ impl GitDoc {
                     cancel = ui.button("취소").clicked();
                 });
             });
+            if form.submitting {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("수정안을 저장하는 중…");
+                });
+            }
+            if let Some(error) = &form.error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+        });
+        let escape = !form.submitting
+            && modal.is_top_modal
+            && !modal.any_popup_open
+            && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
         if save {
-            let mut form = self.form.take().expect("open form");
-            let args = &mut form.values;
+            let mut args = form.values.clone();
             let operation = match form.action {
                 Action::Register => {
                     args["title"] = json!(form.name);
@@ -1631,7 +1659,7 @@ impl GitDoc {
                     "merge"
                 }
             };
-            if let Some(file) = form.file {
+            if let Some(file) = &form.file {
                 args["file"] = json!(file);
             }
             if matches!(
@@ -1640,8 +1668,17 @@ impl GitDoc {
             ) {
                 args["reason"] = json!(form.reason);
             }
-            self.request(operation, 0, form.values);
-        } else if cancel || !open {
+            if form.action == Action::Edit {
+                let sent = self.request(operation, 0, args);
+                if let Some(form) = &mut self.form {
+                    form.submitting = sent;
+                    form.error = (!sent).then(|| self.notice.clone());
+                }
+            } else {
+                self.form = None;
+                self.request(operation, 0, args);
+            }
+        } else if cancel || escape {
             self.form = None;
         }
     }
