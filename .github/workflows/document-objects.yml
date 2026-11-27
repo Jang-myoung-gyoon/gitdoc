@@ -1,6 +1,14 @@
 name: Document editor regression
 
 on:
+  push:
+    branches: ["codex/**"]
+    paths:
+      - ".github/workflows/document-objects.yml"
+      - "desktop/**"
+      - "*.py"
+      - "tests/**"
+      - "requirements*.txt"
   pull_request:
     paths:
       - ".github/workflows/document-objects.yml"
