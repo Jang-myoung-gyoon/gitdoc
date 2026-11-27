@@ -5,12 +5,14 @@ import subprocess
 import sys
 import tempfile
 from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from xml.etree import ElementTree as ET
 
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+from pypdfium2 import PdfDocument, PdfiumError, raw
 
 from delimited import SEPARATORS, normalized_table
 from font_policy import font_directories, font_environment, generic_fallback, office_replacements, policy_key
@@ -25,6 +27,7 @@ OFFICE_FILTERS = {
     **dict.fromkeys((*WORKBOOK_EXTENSIONS, "ods"), "calc_pdf_Export"),
 }
 WORKERS = BoundedSemaphore(2)
+PDFIUM_LOCK = Lock()
 MAX_PREVIEW = 100 * 1024 * 1024
 
 
@@ -213,8 +216,8 @@ def unembedded_fonts(path):
     return fonts
 
 
-def preview_png(path, number):
-    return cached_png(path, number, policy_key())
+def preview_png(path, number, *, prefer_pdfium=False):
+    return cached_png(path, number, policy_key(), prefer_pdfium)
 
 
 def poppler_available():
@@ -225,10 +228,40 @@ def poppler_available():
     return True
 
 
+@lru_cache(maxsize=64)
+def requires_poppler(path):
+    if unembedded_fonts(path):
+        return True
+    try:
+        with PDFIUM_LOCK, PdfDocument(path) as document:
+            return document.get_formtype() != raw.FORMTYPE_NONE
+    except (PdfiumError, OSError, ValueError):
+        return True
+
+
+def pdfium_png(path, number):
+    with PDFIUM_LOCK, PdfDocument(path) as document:
+        page = document[number - 1]
+        bitmap = page.render(scale=1650 / max(page.get_size()), rev_byteorder=True,
+                             may_draw_forms=False, draw_annots=True)
+        # Copy the pixels so encoding can run after PDFium releases the document.
+        image = bitmap.to_pil().convert("RGB")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG", compress_level=1)
+    return buffer.getvalue()
+
+
 @lru_cache(maxsize=24)
-def cached_png(path, number, _font_policy):
-    bin_path = executable("pdftoppm", "DOCVERS_PDFTOPPM", BUNDLED_BIN / "pdftoppm")
+def cached_png(path, number, _font_policy, prefer_pdfium):
+    use_pdfium = prefer_pdfium and not requires_poppler(path)
     with WORKERS:
+        if use_pdfium:
+            try:
+                if data := pdfium_png(path, number):
+                    return data
+            except (PdfiumError, ImportError, OSError, ValueError, OverflowError, ZeroDivisionError):
+                pass
+        bin_path = executable("pdftoppm", "DOCVERS_PDFTOPPM", BUNDLED_BIN / "pdftoppm")
         data = run_converter([bin_path, "-f", str(number), "-l", str(number), "-cropbox", "-png",
                               "-scale-to", "1650", "-singlefile", str(path)], path.parent,
                              font_environment(CACHE, unembedded_fonts(path)))

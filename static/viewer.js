@@ -192,6 +192,8 @@ async function mountViewer(root) {
     }
   }));
   const comparable = comparing && infos.every(info => info.pages);
+  // Compare images from the same renderer to avoid differences caused by font rasterization.
+  const renderer = comparable && infos.some(info => info.requires_poppler) ? '?renderer=poppler' : '';
   const maxPages = Math.max(...infos.map(info => info.pages || 0));
   let pairs = Array.from({ length: maxPages }, (_, index) =>
     infos.map(info => index < info.pages ? index + 1 : null));
@@ -350,7 +352,7 @@ async function mountViewer(root) {
 
   async function imageFor(index, number, signal, priority = 'low') {
     // A cancellable fetch releases queued work when the reader scrolls past it.
-    const response = await fetch(`${sides[index].url}/${number}.png`, { signal, priority });
+    const response = await fetch(`${sides[index].url}/${number}.png${renderer}`, { signal, priority });
     if (!response.ok) throw new Error('페이지 이미지를 열 수 없습니다.');
     const url = URL.createObjectURL(await response.blob());
     const image = new Image();

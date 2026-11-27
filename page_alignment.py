@@ -1,16 +1,18 @@
 """Pair pages in order using fingerprints of their rendered content."""
 
+import gzip
+import json
+import tempfile
 from difflib import SequenceMatcher
 from functools import lru_cache
 from hashlib import sha256
 from math import ceil
-from threading import Lock
+from pathlib import Path
 
-from pypdfium2 import PdfDocument, PdfiumError
+from pypdfium2 import PDFIUM_INFO, PdfDocument, PdfiumError
 
+from preview import PDFIUM_LOCK
 from store import ANCESTORS, database, find_version
-
-_pdfium = Lock()
 
 
 def thumbnail(page, width, height):
@@ -24,10 +26,8 @@ def thumbnail(page, width, height):
         bitmap.close()
 
 
-@lru_cache(maxsize=48)
-def fingerprints(path):
-    # PDFium calls in the web process must not run concurrently.
-    with _pdfium, PdfDocument(path) as document:
+def render_fingerprints(path):
+    with PDFIUM_LOCK, PdfDocument(path) as document:
         result = []
         for page in document:
             try:
@@ -47,6 +47,35 @@ def fingerprints(path):
             finally:
                 page.close()
         return tuple(result)
+
+
+def fingerprints(path):
+    return cached_fingerprints(Path(path))
+
+
+@lru_cache(maxsize=48)
+def cached_fingerprints(path):
+    # Preview paths are content-addressed and already include the font policy.
+    cached = path.with_suffix(f".pages-v1-{PDFIUM_INFO.build}.json.gz")
+    try:
+        with gzip.open(cached, "rt", encoding="ascii") as stream:
+            return tuple(((width, height, bytes.fromhex(key)), bytes.fromhex(image))
+                         for width, height, key, image in json.load(stream))
+    except (OSError, EOFError, TypeError, ValueError):
+        pass
+
+    pages = render_fingerprints(path)
+    if all(key is not None for key, _ in pages):
+        try:
+            with tempfile.TemporaryDirectory(dir=cached.parent) as folder:
+                temporary = Path(folder) / cached.name
+                with gzip.open(temporary, "wt", encoding="ascii", compresslevel=1) as stream:
+                    json.dump([(width, height, key.hex(), image.hex())
+                               for (width, height, key), image in pages], stream)
+                temporary.replace(cached)
+        except OSError:
+            pass
+    return pages
 
 
 def positional_pages(counts):
@@ -83,7 +112,13 @@ def near_page_keys(before, after, left, a, right, b):
             if other is None or before_key[:2] != after_key[:2] or len(image) != len(other):
                 continue
             # A small printed page number can move without changing the page's identity.
-            if sum(abs(x - y) for x, y in zip(image, other)) <= len(image) * 0.24:
+            limit = len(image) * 0.24
+            difference = 0
+            for x, y in zip(image, other):
+                difference += abs(x - y)
+                if difference > limit:
+                    break
+            else:
                 candidates[i].append(j)
                 reverse[j].append(i)
     for i, options in enumerate(candidates):

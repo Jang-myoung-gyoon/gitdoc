@@ -13,7 +13,7 @@ from editing import MODES, read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
 from page_alignment import comparison_pages, footer_regions
-from preview import PreviewError, page_dimensions, preview_path, preview_png
+from preview import PreviewError, page_dimensions, preview_path, preview_png, requires_poppler
 from workbook import read_workbook
 from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
 from workflow import MissingEntity, merge_revision, restore_revision, review_revision, save_document_edit, save_proposal
@@ -417,7 +417,8 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
         if page is not None:
             if not 1 <= page <= count:
                 abort(404)
-            return Response(preview_png(path, page), mimetype="image/png")
+            use_pdfium = request.args.get("renderer") != "poppler"
+            return Response(preview_png(path, page, prefer_pdfium=use_pdfium), mimetype="image/png")
     except PreviewError as error:
         if export_pdf:
             return render_template("error.html", message=str(error)), 422
@@ -425,6 +426,7 @@ def visual_preview(document_id, version_id, page=None, export_pdf=False):
     return jsonify(
         pages=count,
         dimensions=dimensions,
+        requires_poppler=requires_poppler(path),
         sheet_widths=[width for width, _ in dimensions] if item["extension"] in WORKBOOK_EXTENSIONS else [],
         pdf=url_for("preview_pdf", document_id=document_id, version_id=version_id),
     )

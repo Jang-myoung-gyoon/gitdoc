@@ -1,12 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject
 
 from extract import comparison_text
-from page_alignment import aligned_pages, match_pages, matching_blocks, recurring_footers
+from page_alignment import aligned_pages, cached_fingerprints, fingerprints, match_pages, matching_blocks, recurring_footers
 
 
 def write_pdf(path, offsets):
@@ -20,6 +21,19 @@ def write_pdf(path, offsets):
 
 
 class PageAlignmentTests(unittest.TestCase):
+    def test_fingerprints_survive_a_fresh_process_cache_and_recover_from_corruption(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "original.pdf"
+            write_pdf(path, [20, 60])
+            expected = fingerprints(path)
+            cached_fingerprints.cache_clear()
+            with patch("page_alignment.render_fingerprints") as render:
+                self.assertEqual(fingerprints(str(path)), expected)
+                render.assert_not_called()
+            next(path.parent.glob("original.pages-*.json.gz")).write_bytes(b"incomplete")
+            cached_fingerprints.cache_clear()
+            self.assertEqual(fingerprints(path), expected)
+
     def test_middle_insertion_and_deletion_use_original_page_numbers(self):
         with tempfile.TemporaryDirectory() as folder:
             original = Path(folder) / "original.pdf"
