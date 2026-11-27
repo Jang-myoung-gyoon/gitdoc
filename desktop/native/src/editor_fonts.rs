@@ -143,7 +143,11 @@ impl Fonts {
                     } else {
                         fallback.size
                     };
-                    let color = ink.map_or(color, |[r, g, b]| Color32::from_rgb(r, g, b));
+                    let color = if color == Color32::TRANSPARENT {
+                        color
+                    } else {
+                        ink.map_or(color, |[r, g, b]| Color32::from_rgb(r, g, b))
+                    };
                     text::TextFormat::simple(FontId::new(size, family), color)
                 })
                 .collect();
@@ -179,7 +183,7 @@ impl Fonts {
     }
 }
 
-fn change_bounds(before: &str, after: &str) -> (usize, usize, usize) {
+pub(crate) fn change_bounds(before: &str, after: &str) -> (usize, usize, usize) {
     let prefix = before
         .chars()
         .zip(after.chars())

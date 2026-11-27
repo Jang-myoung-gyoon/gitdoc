@@ -1,4 +1,4 @@
-use crate::editor_fonts::{Fonts, Span};
+use crate::editor_fonts::{Fonts, Span, change_bounds};
 use eframe::egui::*;
 use serde_json::{Value, json};
 use std::{
@@ -42,6 +42,7 @@ struct Object {
     name: String,
     align: Vec<String>,
     fonts: Vec<Span>,
+    baselines: Vec<(usize, f32, f32)>,
     font_reference: String,
 }
 
@@ -59,6 +60,7 @@ impl Object {
             name: value["name"].as_str().unwrap_or("").to_owned(),
             align: serde_json::from_value(value["align"].clone()).unwrap_or_default(),
             fonts: serde_json::from_value(value["fonts"].clone()).unwrap_or_default(),
+            baselines: serde_json::from_value(value["baselines"].clone()).unwrap_or_default(),
             font_reference: value["text"].as_str().unwrap_or("").into(),
         })
     }
@@ -436,7 +438,11 @@ impl Editor {
                     return;
                 }
                 ui.add_enabled_ui(text, |ui| {
-                    ui.menu_button(self.font.clone(), |ui| {
+                    let font_button = ui.add_sized(
+                        [140.0, ui.spacing().interact_size.y],
+                        Button::new(self.font.clone()).truncate(),
+                    );
+                    Popup::menu(&font_button).show(|ui| {
                         for value in [
                             "Aptos",
                             "Arial",
@@ -452,10 +458,13 @@ impl Editor {
                                 ui.close();
                             }
                         }
-                    })
-                    .response
-                    .on_hover_text("글꼴");
-                    ui.menu_button(self.font_size.to_string(), |ui| {
+                    });
+                    font_button.on_hover_text(format!("글꼴 · {}", self.font));
+                    let size_button = ui.add_sized(
+                        [36.0, ui.spacing().interact_size.y],
+                        Button::new(self.font_size.to_string()).truncate(),
+                    );
+                    Popup::menu(&size_button).show(|ui| {
                         for value in [
                             8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 44, 54, 72, 96, 120,
                         ] {
@@ -465,9 +474,8 @@ impl Editor {
                                 ui.close();
                             }
                         }
-                    })
-                    .response
-                    .on_hover_text("글자 크기");
+                    });
+                    size_button.on_hover_text("글자 크기");
                     for (label, tip, op) in [
                         ("B", "굵게 · Cmd/Ctrl+B", "bold"),
                         ("I", "기울임 · Cmd/Ctrl+I", "italic"),
@@ -1014,40 +1022,6 @@ impl Editor {
             ui.ctx().set_cursor_icon(CursorIcon::Text);
         }
         let border = Color32::from_rgb(63, 158, 249);
-        for object in &self.objects {
-            let bounds = project(canvas, object.bounds);
-            let selected = Some(object.target) == self.selected
-                || (object.target.cell.is_none() && self.multiple.contains(&object.target.id));
-            if selected {
-                ui.painter().rect_stroke(
-                    bounds,
-                    0.0,
-                    Stroke::new(1.5_f32, border),
-                    StrokeKind::Inside,
-                );
-                if self.format == Format::Slides {
-                    for anchor in [
-                        bounds.left_top(),
-                        bounds.right_top(),
-                        bounds.left_bottom(),
-                        bounds.right_bottom(),
-                    ] {
-                        ui.painter().rect_filled(
-                            Rect::from_center_size(anchor, vec2(5.0, 5.0)),
-                            0.0,
-                            border,
-                        );
-                    }
-                }
-            } else if hit == Some(object.target) {
-                ui.painter().rect_stroke(
-                    bounds,
-                    0.0,
-                    Stroke::new(1.0_f32, border),
-                    StrokeKind::Inside,
-                );
-            }
-        }
         if !self.waiting
             && self.format == Format::Slides
             && let Some(object) = self
@@ -1144,7 +1118,8 @@ impl Editor {
                     canvas.width() / self.width,
                     true,
                 );
-                ui.painter().with_clip_rect(area).galley(
+                let galley = object.place_lines(galley, text, canvas, area.min, true);
+                ui.painter().with_clip_rect(area.expand(2.0)).galley(
                     area.left_top(),
                     galley,
                     contrast(background),
@@ -1163,13 +1138,10 @@ impl Editor {
                 .as_ref()
                 .map_or(Color32::WHITE, |image| backdrop(image, canvas, ink_area));
             let foreground = contrast(color);
-            ui.painter().rect_filled(ink_area, 0.0, color);
-            ui.painter().rect_stroke(
-                ink_area,
-                0.0,
-                Stroke::new(1.0_f32, border),
-                StrokeKind::Inside,
-            );
+            // Keep the original raster visible on focus and caret movement.
+            // Reserve the background before the editor so it can be filled in
+            // the same frame as the first actual text change.
+            let background = ui.painter().add(Shape::Noop);
             let ctx = ui.ctx().clone();
             let id = text_id(self.session, self.history_page, edit.target);
             if edit.focus {
@@ -1188,39 +1160,96 @@ impl Editor {
             }
             let scale = canvas.width() / self.width;
             let typefaces = &self.typefaces;
-            let mut layout = |ui: &Ui, text: &dyn TextBuffer, wrap: f32| {
-                object.text_layout(
+            let original = &edit.original;
+            let mut layout = |ui: &Ui, input: &dyn TextBuffer, wrap: f32| {
+                let value = input.as_str();
+                let color = if !localized && value == original {
+                    Color32::TRANSPARENT
+                } else {
+                    foreground
+                };
+                let galley = object.text_layout(
                     typefaces,
                     ui,
-                    text.as_str(),
+                    value,
                     FontId::proportional(font_size),
-                    foreground,
+                    color,
                     wrap,
                     scale,
                     localized,
-                )
+                );
+                object.place_lines(galley, value, canvas, edit_box.min, localized)
             };
-            ui.scope_builder(UiBuilder::new().max_rect(edit_box), |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(edit_box.union(ink_area)));
-                let mut widget = TextEdit::multiline(&mut edit.value)
-                    .id(id)
-                    .font(FontId::proportional(font_size))
-                    .margin(0)
-                    .frame(false)
-                    .desired_width(edit_box.width())
-                    .desired_rows(1)
-                    .text_color(foreground)
-                    .char_limit(20000)
-                    .interactive(!self.waiting);
-                if localized || !object.fonts.is_empty() {
-                    widget = widget.layouter(&mut layout);
-                }
-                ui.put(edit_box, widget);
-            });
+            let mut editor_visible = ui.clip_rect().intersect(canvas);
+            editor_visible.max.x = editor_visible.max.x.min(edit_box.right() + 1.0);
+            editor_visible.min.x = editor_visible.min.x.max(edit_box.left() - 4.0);
+            editor_visible.min.y = editor_visible
+                .min
+                .y
+                .max(edit_box.top().min(ink_area.top()) - 4.0);
+            editor_visible.max.y = editor_visible.max.y.min(edit_box.bottom() + 4.0);
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(edit_box)
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            child.set_clip_rect(editor_visible);
+            TextEdit::multiline(&mut edit.value)
+                .id(id)
+                .font(FontId::proportional(font_size))
+                .margin(0)
+                .frame(false)
+                .desired_width(edit_box.width())
+                .desired_rows(1)
+                .text_color(foreground)
+                .char_limit(20000)
+                .interactive(!self.waiting)
+                .layouter(&mut layout)
+                .show(&mut child);
+            if localized || edit.value != edit.original {
+                ui.painter()
+                    .set(background, Shape::rect_filled(ink_area, 0.0, color));
+            }
             if !self.waiting
                 && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
             {
                 finish = true;
+            }
+        }
+        if self.format == Format::Slides {
+            for object in &self.objects {
+                let bounds = project(canvas, object.bounds);
+                let selected = Some(object.target) == self.selected
+                    || (object.target.cell.is_none() && self.multiple.contains(&object.target.id));
+                let moving = Some(object.target) == self.selected
+                    && (self.object_drag.is_some() || self.resize_drag.is_some());
+                if selected && !moving {
+                    ui.painter().rect_stroke(
+                        bounds,
+                        0.0,
+                        Stroke::new(1.5_f32, border),
+                        StrokeKind::Inside,
+                    );
+                    for anchor in [
+                        bounds.left_top(),
+                        bounds.right_top(),
+                        bounds.left_bottom(),
+                        bounds.right_bottom(),
+                    ] {
+                        ui.painter().rect_filled(
+                            Rect::from_center_size(anchor, vec2(5.0, 5.0)),
+                            0.0,
+                            border,
+                        );
+                    }
+                } else if self.selected.is_none() && hit == Some(object.target) {
+                    ui.painter().rect_stroke(
+                        bounds,
+                        0.0,
+                        Stroke::new(1.0_f32, border),
+                        StrokeKind::Inside,
+                    );
+                }
             }
         }
         if finish {
@@ -1241,10 +1270,21 @@ impl Editor {
             let multi = ui.input(|input| input.modifiers.shift);
             let cursor = hit.zip(pointer).and_then(|(target, position)| {
                 let object = self.objects.iter().find(|item| item.target == target)?;
-                let ink = project(canvas, object.ink?);
-                let fraction = ((position.x - ink.left()) / ink.width()).clamp(0.0, 1.0);
-                let length = object.text.as_ref()?.chars().count();
-                Some((fraction * length as f32).round() as usize)
+                let value = object.text.as_ref()?.replace('\u{000b}', "\n");
+                let localized = self.patched.contains(&target);
+                let (editor, _, size) = editing_rect(canvas, object, self.width, localized);
+                let galley = object.text_layout(
+                    &self.typefaces,
+                    ui,
+                    &value,
+                    FontId::proportional(size),
+                    Color32::TRANSPARENT,
+                    editor.width(),
+                    canvas.width() / self.width,
+                    localized,
+                );
+                let galley = object.place_lines(galley, &value, canvas, editor.min, localized);
+                Some(galley.cursor_from_pos(position - editor.min).index)
             });
             return self.select(ui.ctx(), hit, multi, cursor);
         }
@@ -1297,7 +1337,7 @@ fn editing_rect(canvas: Rect, object: &Object, width: f32, localized: bool) -> (
         object.inset[0] * canvas.width(),
         object.inset[1] * canvas.height(),
     );
-    let mut origin = ink.map_or(outer.min + inset, |r| r.min - vec2(0.0, 2.0));
+    let mut origin = ink.map_or(outer.min + inset, |r| r.min);
     if localized {
         origin.x = outer.left() + inset.x;
     }
@@ -1308,11 +1348,7 @@ fn editing_rect(canvas: Rect, object: &Object, width: f32, localized: bool) -> (
         .max(start + vec2(45.0, size * 1.45))
         .min(canvas.max);
     let editor = Rect::from_min_max(start, end);
-    let erase = if localized {
-        ink.unwrap_or(editor)
-    } else {
-        ink.unwrap_or(editor).union(editor)
-    };
+    let erase = ink.unwrap_or(editor);
     (editor, erase.expand(1.5).intersect(canvas), size)
 }
 
@@ -1350,6 +1386,61 @@ impl Object {
             justify,
         );
         align_galley(galley, alignment, width)
+    }
+
+    fn place_lines(
+        &self,
+        mut galley: std::sync::Arc<Galley>,
+        value: &str,
+        canvas: Rect,
+        origin: Pos2,
+        aligned: bool,
+    ) -> std::sync::Arc<Galley> {
+        if self.baselines.is_empty() {
+            return galley;
+        }
+        let (prefix, old_suffix, new_suffix) = change_bounds(&self.font_reference, value);
+        let moved = std::sync::Arc::make_mut(&mut galley);
+        let mut offset = 0;
+        let mut last_delta = vec2(0.0, 0.0);
+        let mut bounds = Rect::NOTHING;
+        for (row_index, row) in moved.rows.iter_mut().enumerate() {
+            if let Some((column, glyph)) = row
+                .glyphs
+                .iter()
+                .enumerate()
+                .find(|(_, glyph)| !glyph.chr.is_whitespace())
+            {
+                let index = offset + column;
+                let reference_index = if index < prefix {
+                    Some(index)
+                } else if index >= new_suffix {
+                    Some(old_suffix + index - new_suffix)
+                } else {
+                    None
+                };
+                let anchor = if row_index == 0 {
+                    self.baselines.first()
+                } else {
+                    reference_index
+                        .and_then(|index| self.baselines.iter().find(|mark| mark.0 == index))
+                };
+                if let Some(&(_, x, y)) = anchor {
+                    let page_point = canvas.min + vec2(x * canvas.width(), y * canvas.height());
+                    let delta = page_point - (origin + row.pos.to_vec2() + glyph.pos.to_vec2());
+                    // Protect against ambiguous PDF glyph matches or a major reflow.
+                    let limit = row.size.y * 3.0;
+                    if delta.y.abs() <= limit && (aligned || delta.x.abs() <= limit) {
+                        last_delta = vec2(if aligned { 0.0 } else { delta.x }, delta.y);
+                    }
+                }
+            }
+            row.pos += last_delta;
+            bounds = bounds.union(row.visuals.mesh_bounds.translate(row.pos.to_vec2()));
+            offset += row.glyphs.len() + usize::from(row.ends_with_newline);
+        }
+        moved.mesh_bounds = bounds;
+        galley
     }
 }
 

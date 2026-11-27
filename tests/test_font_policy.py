@@ -5,7 +5,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
-from desktop.editor_fonts import font_spans
+from desktop.editor_fonts import baselines, font_spans
 from font_policy import editor_font_files, family_key, font_environment, office_replacements, policy_key, resolve_missing
 from preview import office_profile
 
@@ -54,6 +54,15 @@ class FontPolicyTests(unittest.TestCase):
         latin = ("Arial", 12, (200, 20, 20))
         self.assertEqual(font_spans("한글 A", [korean, korean, latin]),
                          [[0, *korean], [3, *latin]])
+
+    def test_editor_keeps_pdf_baselines_at_source_character_offsets(self):
+        glyphs = [
+            ("한", None, None, (.13, .25), 0),
+            ("글", None, None, (.18, .25), 0),
+            ("A", None, None, (.22, .31), 1),
+        ]
+        self.assertEqual(baselines(" 한글 A", glyphs), [[1, .13, .25], [4, .22, .31]])
+        self.assertEqual(baselines("한글", glyphs), [])
 
     def test_fontconfig_and_cache_key_change_with_user_rules(self):
         with tempfile.TemporaryDirectory() as folder, patch("font_policy.installed_fonts", return_value=(self.installed, (), ())), \

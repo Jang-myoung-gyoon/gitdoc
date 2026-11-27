@@ -4,7 +4,7 @@ import csv
 import json
 import os
 import tempfile
-from ctypes import c_int, c_uint, create_string_buffer
+from ctypes import c_double, c_int, c_uint, create_string_buffer
 from functools import lru_cache
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -35,6 +35,7 @@ def embedded_text(path, number, *, styled=False):
         text = page.get_textpage()
         lines, line = [], []
         x, y = c_int(), c_int()
+        baseline_x, baseline_y = c_double(), c_double()
         flags = c_int()
         color = (c_uint(), c_uint(), c_uint(), c_uint())
         font_buffer = create_string_buffer(512)
@@ -74,7 +75,12 @@ def embedded_text(path, number, *, styled=False):
                     length = raw.FPDFText_GetFontInfo(text, index, font_buffer, len(font_buffer), flags)
                     font = font_buffer.value.decode("utf-8", errors="replace") if 1 < length <= len(font_buffer) else ""
                     rgb = tuple(int(channel.value) for channel in color[:3]) if raw.FPDFText_GetFillColor(text, index, *color) else None
-                    glyph.append((font, size, rgb))
+                    origin = None
+                    if (raw.FPDFText_GetCharOrigin(text, index, baseline_x, baseline_y)
+                            and raw.FPDF_PageToDevice(page, 0, 0, 10000, 10000, 0,
+                                                     baseline_x.value, baseline_y.value, x, y)):
+                        origin = (x.value / 10000, y.value / 10000)
+                    glyph.extend(((font, size, rgb), origin))
                 line.append(glyph)
         lines.append(line)
     return printable_lines(lines)

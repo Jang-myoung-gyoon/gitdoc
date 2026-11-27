@@ -39,9 +39,9 @@ def use_rendered_fonts(objects, pdf, page, directory):
         lines = embedded_text(pdf, page, styled=True)
     except (OSError, ValueError, PdfiumError):
         return {}
-    glyphs = [(letter, box, style) for line in lines for value, box, style in line
-              for letter in compact(value)]
-    letters = "".join(letter for letter, _, _ in glyphs)
+    glyphs = [(letter, box, style, origin, row) for row, line in enumerate(lines)
+              for value, box, style, origin in line for letter in compact(value)]
+    letters = "".join(glyph[0] for glyph in glyphs)
     requested = {}
     for item in objects:
         text = item.get("text", "")
@@ -60,13 +60,15 @@ def use_rendered_fonts(objects, pdf, page, directory):
         start = letters.find(needle)
         while start >= 0:
             candidate = glyphs[start:start+len(needle)]
-            if all(inside(box) for _, box, _ in candidate):
+            if all(inside(glyph[1]) for glyph in candidate):
                 matches.append(candidate)
             start = letters.find(needle, start+len(needle))
         if len(matches) == 1:
-            item["fonts"] = font_spans(text, [style for _, _, style in matches[0]])
+            matched = matches[0]
+            item["fonts"] = font_spans(text, [glyph[2] for glyph in matched])
+            item["baselines"] = baselines(text, matched)
         else:
-            close = Counter(style for _, box, style in glyphs if inside(box))
+            close = Counter(glyph[2] for glyph in glyphs if inside(glyph[1]))
             if close:
                 item["fonts"] = [[0, *close.most_common(1)[0][0]]]
         east_asian = any("\uac00" <= char <= "\ud7a3" for char in text)
@@ -74,6 +76,24 @@ def use_rendered_fonts(objects, pdf, page, directory):
             requested[name] = requested.get(name, False) or east_asian
     return {name: single_face(source, directory) for name, source in editor_font_files(requested).items()}
 
+
+
+def baselines(text, glyphs):
+    if len(glyphs) != sum(len(compact(char)) for char in text):
+        return []
+    starts = []
+    seen = set()
+    offset = 0
+    for index, char in enumerate(text):
+        length = len(compact(char))
+        if not length:
+            continue
+        _, _, _, origin, row = glyphs[offset]
+        offset += length
+        if origin is not None and row not in seen:
+            seen.add(row)
+            starts.append([index, *origin])
+    return starts
 
 def single_face(source, directory):
     path = Path(source["path"])
