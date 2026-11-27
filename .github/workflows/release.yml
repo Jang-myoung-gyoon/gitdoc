@@ -46,7 +46,7 @@ jobs:
           for name in GitDoc gitdoc-desktop gitdoc-pdf gitdoc-ocr; do
             test "$(lipo -archs "$bundle/Contents/MacOS/$name")" = arm64
           done
-          "$bundle/Contents/Resources/python/bin/python3" packaging/smoke.py "$bundle/Contents/Resources/app" "$bundle"
+          "$bundle/Contents/Resources/python/bin/python3" -B packaging/smoke.py "$bundle/Contents/Resources/app" "$bundle"
           codesign --verify --deep --strict "$bundle"
       - uses: actions/upload-artifact@v4
         with:
