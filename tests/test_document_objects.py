@@ -1,7 +1,10 @@
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from PIL import Image, ImageChops
 
 import store
 from desktop.bridge import CanvasSession
@@ -34,12 +37,14 @@ class DocumentObjectTests(unittest.TestCase):
         source = folder / "sample.txt"
         source.write_text("GitDoc object demo\nSecond paragraph\n", encoding="utf-8")
         profile = office_profile(folder)
-        for input_file, target in ((source, "docx"), (folder / "sample.docx", "pdf")):
-            run_converter([soffice, f"-env:UserInstallation={profile.as_uri()}", "--headless",
-                           "--convert-to", target, "--outdir", str(folder), str(input_file)], folder)
+        run_converter([soffice, f"-env:UserInstallation={profile.as_uri()}", "--headless",
+                       "--convert-to", "docx", "--outdir", str(folder), str(source)], folder)
         docx = (folder / "sample.docx").read_bytes()
         (folder / "sample.doc").write_bytes(convert_format("docx", "doc", docx))
-        rhwp(["import-pdf", str(folder / "sample.pdf"), str(folder / "sample.hwp"), "--layout", "editable"], folder)
+        rhwp(["gen-table"], folder)
+        rhwp(["edit", "delete-table", "output/gen_table.hwp", "--table", "0", "-o", "blank.hwp"], folder)
+        rhwp(["edit", "insert-text", "blank.hwp", "--text", "GitDoc object demo",
+              "-o", "sample.hwp"], folder)
         rhwp(["export-hwpx", str(folder / "sample.hwp"), str(folder / "sample.hwpx")], folder)
 
     def test_native_objects_save_reopen_and_render(self):
@@ -55,16 +60,21 @@ class DocumentObjectTests(unittest.TestCase):
         session = CanvasSession()
         self.addCleanup(session.close)
         opened = session.open(document_id, "main", base, 1)
-        initial_image = Path(opened["image"]).read_bytes()
+        initial_image = self.image(opened)
         with self.assertRaises(ValueError):
             session.page(number=1, operation="table", value=[0, 3])
         self.assertEqual(session.working.position, 0)
         inserted = session.page(number=1, operation="table", value=[2, 3])
-        self.assertNotEqual(Path(inserted["image"]).read_bytes(), initial_image)
+        self.assertIsNotNone(ImageChops.difference(self.image(inserted), initial_image).getbbox())
         self.assertFalse(session.page(number=1, operation="undo")["dirty"])
-        self.assertTrue(session.page(number=1, operation="redo")["dirty"])
+        redo = session.page(number=1, operation="redo")
+        self.assertTrue(redo["dirty"])
+        previous_image = self.image(redo)
         for shape in WORD_SHAPES:
-            session.page(number=1, operation="shape", value=shape)
+            edited = session.page(number=1, operation="shape", value=shape)
+            changed_image = self.image(edited)
+            self.assertIsNotNone(ImageChops.difference(previous_image, changed_image).getbbox(), shape)
+            previous_image = changed_image
         result = session.save("Insert native objects", 1)
         self.assertEqual(result["status"], "pending")
         with store.database(readonly=True) as db:
@@ -77,10 +87,14 @@ class DocumentObjectTests(unittest.TestCase):
             self.assertEqual(store.find_branch(db, document_id, "main")["head_id"], base)
         self.check_objects(extension, after["content"])
         preview = get_preview_info(document_id, result["id"], base)
-        self.assertTrue(all(count >= 1 for count in preview["page_counts"]))
+        self.assertEqual(preview["page_counts"], [1, 1])
         _, image = render_document_page(document_id, result["id"])
         self.assertEqual(image.to_image_content().mimeType, "image/png")
         self.assertTrue(image.data.startswith(b"\x89PNG"))
+
+    @staticmethod
+    def image(page):
+        return Image.open(io.BytesIO(Path(page["image"]).read_bytes())).convert("RGB")
 
     def check_objects(self, extension, data):
         if extension in ("doc", "docx"):
