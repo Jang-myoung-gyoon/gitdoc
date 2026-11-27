@@ -2,7 +2,7 @@
 
 from editing import MODES, edit_pdf, modify_document
 from store import (
-    ANCESTORS, UPLOAD_FIELDS, VERSION_FIELDS, append_version, database, find_branch, find_version, first_parent_ids,
+    ANCESTORS, UPLOAD_FIELDS, VERSION_FIELDS, append_version, database, desktop_review_enabled, find_branch, find_version, first_parent_ids,
     merge_state, move_head, new_branch,
 )
 from uploads import MAX_FILE, prepare_upload
@@ -25,7 +25,7 @@ def reason_for(value, kind="변경"):
     return reason
 
 
-def save_proposal(document_id, name, base, upload, reason, *, page_edit=None):
+def save_proposal(document_id, name, base, upload, reason, *, page_edit=None, desktop=False):
     reason = reason_for(reason)
     with database(write=True) as db:
         active = require(find_branch(db, document_id, name), "브랜치")
@@ -36,10 +36,11 @@ def save_proposal(document_id, name, base, upload, reason, *, page_edit=None):
             raise ValueError("확정본과 같은 확장자의 파일을 선택하세요.")
         if current["sha256"] == upload[3]:
             raise ValueError("확정본과 같은 파일입니다.")
-        return append_version(db, active, upload, reason, "pending", page_edit=page_edit)
+        status = "approved" if desktop and not desktop_review_enabled(db) else "pending"
+        return append_version(db, active, upload, reason, status, page_edit=page_edit)
 
 
-def save_document_edit(document_id, name, base, fields, reason, expected_mode=None, *, source=None):
+def save_document_edit(document_id, name, base, fields, reason, expected_mode=None, *, source=None, desktop=False):
     reason = reason_for(reason.strip() or "문서 편집")
     with database() as db:
         active = require(find_branch(db, document_id, name), "브랜치")
@@ -55,14 +56,17 @@ def save_document_edit(document_id, name, base, fields, reason, expected_mode=No
         updated, page_edit = edit_pdf(item["content"], fields, source[-1] if source else None)
     else:
         updated = modify_document(item["extension"], item["content"], fields, MAX_FILE)
-    return save_proposal(document_id, name, base, prepare_upload(item["filename"], updated), reason, page_edit=page_edit)
+    return save_proposal(document_id, name, base, prepare_upload(item["filename"], updated), reason,
+                         page_edit=page_edit, desktop=desktop)
 
 
-def review_revision(document_id, version_id, action, base, note=""):
+def review_revision(document_id, version_id, action, base, note="", *, desktop=False):
     note = note.strip()
     if action not in ("approve", "reject") or len(note) > 500:
         raise ValueError("승인 또는 반려와 함께 500자 이하의 의견을 입력하세요.")
     with database(write=True) as db:
+        if desktop and not desktop_review_enabled(db):
+            raise ValueError("설정에서 수정안 검토를 켜세요.")
         draft = require(find_version(db, document_id, version_id), "버전")
         active = require(find_branch(db, document_id, draft["branch_name"]), "브랜치")
         if draft["status"] != "pending":

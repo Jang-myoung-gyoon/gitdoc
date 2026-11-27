@@ -102,7 +102,9 @@ Spreadsheet units are cell values and extracted formulas keyed by sheet and addr
 
 In the desktop version history, right-click a commit to rewind the current branch to that version or to remove that commit and the newer commits from the branch. GitDoc asks for confirmation and creates a `recovery-…` branch at the old head. A regular restore instead records the old contents as a new version. The rewind is also available through `reset_document_branch`.
 
-Open **텍스트 수정** from an approved version to change its text beside the preview. Saving as a draft opens the comparison for review. Approval advances the branch head. If the head changes while editing, start again from the latest version.
+Open **텍스트 수정** from an approved version to change its text beside the preview. Saving opens the comparison with the previous version. If the head changes while editing, start again from the latest version.
+Enable **설정 → 수정안 검토 사용** in the desktop app to save new desktop edits and submissions as pending drafts. A yellow background in the version history identifies pending drafts, which can be approved or rejected. Review is off by default, so new desktop versions are approved immediately. Existing pending drafts keep their status. MCP and CLI draft tools continue to create pending revisions.
+
 
 | Format | In-app edits |
 | --- | --- |

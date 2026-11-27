@@ -65,6 +65,11 @@ def initialize():
                 UNIQUE (document_id, name)
             )
         """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS workspace_settings (
+                key TEXT PRIMARY KEY, value INTEGER NOT NULL
+            )
+        """)
         columns = {row["name"] for row in db.execute("PRAGMA table_info(versions)")}
         if "branch_id" not in columns:
             db.execute("ALTER TABLE versions ADD COLUMN branch_id INTEGER REFERENCES branches(id)")
@@ -80,6 +85,20 @@ def initialize():
                 db.execute(f"ALTER TABLE versions ADD COLUMN {field} INTEGER")
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS version_label_unique ON versions(document_id, version_label)")
         db.execute("CREATE INDEX IF NOT EXISTS version_branch ON versions(branch_id, status)")
+
+
+def desktop_review_enabled(db):
+    row = db.execute("SELECT value FROM workspace_settings WHERE key = 'desktop_review'").fetchone()
+    return bool(row and row["value"])
+
+
+def set_desktop_review(enabled):
+    if type(enabled) is not bool:
+        raise ValueError("검토 설정 값을 확인하세요.")
+    with database(write=True) as db:
+        db.execute("""INSERT INTO workspace_settings(key, value) VALUES ('desktop_review', ?)
+                      ON CONFLICT(key) DO UPDATE SET value = excluded.value""", (enabled,))
+    return enabled
 
 
 def label_existing_versions(db):

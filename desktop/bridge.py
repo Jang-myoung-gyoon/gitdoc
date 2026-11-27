@@ -22,8 +22,8 @@ from page_alignment import comparison_pages, footer_regions, reused_pages
 from page_text import page_text
 from preview import CACHE, PreviewError, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
-    VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
-    find_document, find_version, first_parent_ids, initialize, merge_state, new_branch, search_documents, text_diff,
+    VERSION_FIELDS, branch_history, branch_list, create_document, database, desktop_review_enabled, find_branch,
+    find_document, find_version, first_parent_ids, initialize, merge_state, new_branch, search_documents, set_desktop_review, text_diff,
 )
 from uploads import load_local_file, prepare_upload
 from workbook import read_workbook
@@ -171,7 +171,7 @@ def create_branch(doc, name, start):
 
 
 def review(doc, version, action, base, note=""):
-    review_revision(doc, version, action, base, note)
+    review_revision(doc, version, action, base, note, desktop=True)
     return version
 
 
@@ -212,11 +212,24 @@ def merge(doc, target, source, base, head, reason, file=None):
 
 
 def submit(doc, branch, base, file, reason):
-    return save_proposal(doc, branch, base, load_local_file(file), reason)
+    version = save_proposal(doc, branch, base, load_local_file(file), reason, desktop=True)
+    return saved_version(doc, version)
 
 
 def edit(doc, branch, base, fields, reason, file=None):
-    return save_document_edit(doc, branch, base, fields, reason, source=load_local_file(file) if file else None)
+    version = save_document_edit(doc, branch, base, fields, reason,
+                                 source=load_local_file(file) if file else None, desktop=True)
+    return saved_version(doc, version)
+
+
+def saved_version(doc, version):
+    with database(readonly=True) as db:
+        return dict(item(db, doc, version, "id, status"))
+
+
+def desktop_workspace():
+    with database(readonly=True) as db:
+        return dict(workspace_info(), desktop_review=desktop_review_enabled(db))
 
 
 def edit_contents(doc, version):
@@ -278,9 +291,10 @@ class PresentationSession:
         except (OSError, PreviewError, PyPdfError, PdfiumError, ValueError):
             # The normal preview path remains available when reuse is impossible.
             pass
-        version = save_proposal(*self.destination, upload, reason.strip() or "슬라이드 편집")
+        version = save_proposal(*self.destination, upload, reason.strip() or "슬라이드 편집", desktop=True)
+        result = saved_version(self.destination[0], version)
         self.close()
-        return version
+        return result
 
     def close(self):
         if self.working is not None:
@@ -292,7 +306,7 @@ presentation = PresentationSession()
 
 
 OPERATIONS = {
-    "workspace": workspace_info, "library": library, "detail": detail, "branch_compare": branch_comparison,
+    "workspace": desktop_workspace, "desktop_review": set_desktop_review, "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,
     "restore": restore, "rewind": rewind, "save": save_file, "print": print_preview, "merge": merge,

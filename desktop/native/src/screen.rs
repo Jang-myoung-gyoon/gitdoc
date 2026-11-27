@@ -33,6 +33,14 @@ fn status(value: &Value) -> &'static str {
     }
 }
 
+fn saved_message(result: &Value) -> &'static str {
+    if result["status"] == "pending" {
+        "수정안을 검토 대기로 저장했습니다."
+    } else {
+        "새 버전을 확정해 저장했습니다."
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Action {
     Register,
@@ -139,6 +147,8 @@ pub struct GitDoc {
     doc: i64,
     branch: String,
     workspace: String,
+    review_enabled: bool,
+    changing_review: bool,
     library: Value,
     detail: Value,
     ids: Vec<i64>,
@@ -167,6 +177,8 @@ impl GitDoc {
             doc: 0,
             branch: "main".into(),
             workspace: String::new(),
+            review_enabled: false,
+            changing_review: false,
             library: Value::Null,
             detail: Value::Null,
             ids: vec![],
@@ -440,6 +452,14 @@ impl GitDoc {
         if !matches!(reply.op, "page" | "changes" | "page_text") {
             self.busy = self.busy.saturating_sub(1);
         }
+        if reply.op == "desktop_review" {
+            self.changing_review = false;
+            match reply.result {
+                Ok(value) => self.review_enabled = value == true,
+                Err(error) => self.notify(error, true),
+            }
+            return;
+        }
         let wanted = match reply.op {
             "page" | "detail" | "view" | "changes" | "page_text" | "branch_compare"
             | "edit_contents" | "deck_open" | "deck_page" | "deck_save" => {
@@ -458,7 +478,7 @@ impl GitDoc {
                 match result {
                     Ok(version) => {
                         let place = Destination {
-                            ids: vec![head, id(&version)],
+                            ids: vec![head, id(&version["id"])],
                             branch: Some(self.branch.clone()),
                             page: deck.page,
                             ..Default::default()
@@ -466,7 +486,7 @@ impl GitDoc {
                         self.deck = None;
                         self.refresh();
                         self.open_doc(self.doc, place);
-                        self.notify("수정안을 검토 대기로 저장했습니다.", false);
+                        self.notify(saved_message(&version), false);
                     }
                     Err(error) => deck.set_error(error),
                 }
@@ -535,6 +555,7 @@ impl GitDoc {
                 }
             }
             "workspace" => {
+                self.review_enabled = result["desktop_review"] == true;
                 let workspace_id = text(&result["workspace_id"]);
                 self.workspace = format!(
                     "{} · {}",
@@ -691,13 +712,13 @@ impl GitDoc {
                     self.form = None;
                 }
                 let place = Destination {
-                    ids: vec![self.head(), id(&result)],
+                    ids: vec![self.head(), id(&result["id"])],
                     branch: Some(self.branch.clone()),
                     ..Default::default()
                 };
                 self.refresh();
                 self.open_doc(self.doc, place);
-                self.notify("수정안을 검토 대기로 저장했습니다.", false);
+                self.notify(saved_message(&result), false);
             }
             "review" | "restore" | "merge" => {
                 self.refresh();
@@ -768,6 +789,18 @@ impl GitDoc {
                     if self.deck.is_some() {
                         return;
                     }
+                    ui.menu_button("설정", |ui| {
+                        let mut review = self.review_enabled;
+                        let response = ui.add_enabled(
+                            !self.changing_review,
+                            Checkbox::new(&mut review, "수정안 검토 사용"),
+                        );
+                        if response.changed() {
+                            self.changing_review =
+                                self.request("desktop_review", 0, json!({"enabled":review}));
+                        }
+                        ui.weak("켜면 새 수정안에 승인 또는 반려가 필요합니다.");
+                    });
                     if ui.button("＋ 문서 등록").clicked() {
                         self.register_form(None);
                     }
@@ -927,7 +960,22 @@ impl GitDoc {
                         if count(&version["page_delete_at"]) > 0 {
                             label.push_str(&format!("\nGitDoc 편집 기록 · {}쪽 삭제", count(&version["page_delete_at"])));
                         }
-                        let response = ui.selectable_label(self.ids.last() == Some(&v), label);
+                        let selected_now = self.ids.last() == Some(&v);
+                        let response = if version["status"] == "pending" {
+                            let (fill, text) = if ui.visuals().dark_mode {
+                                (Color32::from_rgb(81, 58, 24), Color32::from_rgb(255, 225, 156))
+                            } else {
+                                (Color32::from_rgb(255, 240, 200), Color32::from_rgb(93, 56, 12))
+                            };
+                            let stroke = if selected_now {
+                                Stroke::new(1.4_f32, ui.visuals().selection.stroke.color)
+                            } else {
+                                Stroke::NONE
+                            };
+                            ui.add(Button::new(RichText::new(label).color(text)).fill(fill).stroke(stroke).wrap())
+                        } else {
+                            ui.selectable_label(selected_now, label)
+                        };
                         if response.clicked() {
                             selected = Some((v, version["status"] == "pending"));
                         }
@@ -998,7 +1046,7 @@ impl GitDoc {
         let row = self.record(selected);
         let base = row.map_or(0, |v| id(&v["base_id"]));
         let approved = row.is_some_and(|v| v["status"] == "approved");
-        let pending = row.is_some_and(|v| v["status"] == "pending");
+        let pending = self.review_enabled && row.is_some_and(|v| v["status"] == "pending");
         let filename = text(&self.pane.data["filename"]).to_owned();
         let formats = rows(&self.pane.data["save_as"]).to_vec();
         let extension = row.map_or("", |v| text(&v["extension"])).to_owned();
