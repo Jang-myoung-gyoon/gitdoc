@@ -23,10 +23,10 @@ GitDoc은 Rust의 [eframe](https://github.com/emilk/egui/tree/main/crates/eframe
 | macOS 13 이상, Apple Silicon | `GitDoc-<버전>-macos-arm64.dmg` |
 | Windows 10 이상, x64 | `GitDoc-<버전>-windows-x64-setup.exe` |
 
-Intel Mac용 패키지는 없습니다. 패키지에 서명이 없어 처음 실행할 때 시스템이 확인을 요청합니다.
+macOS 패키지는 Apple Silicon용입니다.
 
-- **macOS**: 디스크 이미지를 열고 GitDoc을 Applications로 끌어 놓습니다. 한 번 실행한 뒤 **시스템 설정 ▸ 개인정보 보호 및 보안 ▸ 그래도 열기**를 선택하거나 `xattr -dr com.apple.quarantine /Applications/GitDoc.app`을 실행합니다.
-- **Windows**: 설치 파일을 실행합니다. SmartScreen 화면에서 **추가 정보 ▸ 실행**을 선택합니다. 관리자 권한 없이 현재 사용자에게 설치하고 `gitdoc://` 링크를 등록합니다. 제거하면 앱과 링크 등록이 함께 지워집니다.
+- **macOS**에서 디스크 이미지를 열고 GitDoc을 응용 프로그램 폴더로 끌어 놓은 뒤 실행합니다. v0.1.1부터 공개 앱과 디스크 이미지는 Developer ID로 서명되며, 디스크 이미지에 Apple 공증 티켓이 포함됩니다.
+- **Windows**에서 설치 파일을 실행합니다. 설치 파일에는 서명이 없습니다. SmartScreen 화면이 나타나면 **추가 정보 ▸ 실행**을 선택합니다. 관리자 권한 없이 현재 사용자에게 설치하고 `gitdoc://` 링크를 등록합니다. 제거하면 앱과 링크 등록이 함께 지워집니다.
 
 패키지 앱은 저장소, 미리보기 캐시, 로그를 macOS에서는 `~/Library/Application Support/GitDoc`, Windows에서는 `%APPDATA%\GitDoc`에 둡니다. 앱을 제거하거나 교체해도 이 폴더는 남습니다. `DOCVERS_DB`로 다른 저장소 파일을 지정할 수 있습니다.
 
@@ -64,9 +64,11 @@ py -3.12 -m venv .venv
 
 1. `desktop/native/Cargo.toml`의 `version`을 새 버전으로 바꾸고 `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`으로 `Cargo.lock`을 갱신한 뒤 병합합니다. 패키지 버전은 이 파일에서 가져옵니다.
 2. 그 커밋에 `vX.Y.Z` 태그를 붙여 푸시합니다. `git tag v0.2.0 && git push origin v0.2.0`
-3. 워크플로가 태그와 버전이 일치하는지 확인한 뒤 디스크 이미지와 설치 파일을 첨부한 GitHub Release를 게시합니다.
+3. 워크플로가 태그와 버전이 일치하는지 확인합니다. 양쪽 설치 테스트와 macOS Developer ID 서명, Apple 공증, 공증 티켓 첨부, Gatekeeper 검사를 통과하면 두 설치 파일을 게시합니다.
 
-로컬에서는 Apple Silicon Mac에서 `sh packaging/macos.sh`, Inno Setup 6을 설치한 PowerShell 7에서 `./packaging/windows.ps1`을 실행합니다. 결과물은 `dist/`에 생깁니다. macOS 번들은 ad-hoc 서명됩니다. 인증서로 서명하려면 `CODESIGN_IDENTITY`를 지정합니다.
+macOS 서명 및 공증 단계는 원본 저장소의 버전 태그 푸시에서 실행됩니다. 이 단계에서 Actions Secret `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`를 사용합니다. 풀 리퀘스트와 수동 실행 빌드는 ad-hoc 서명을 사용합니다.
+
+로컬에서는 Apple Silicon Mac에서 `sh packaging/macos.sh`, Inno Setup 6을 설치한 PowerShell 7에서 `./packaging/windows.ps1`을 실행합니다. 결과물은 `dist/`에 생깁니다. 로컬 macOS 번들은 ad-hoc 서명됩니다.
 
 ## 브라우저 뷰어
 

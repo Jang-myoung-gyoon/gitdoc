@@ -23,10 +23,10 @@ Experimental packages are attached to each release on the [Releases page](../../
 | macOS 13 or later, Apple Silicon | `GitDoc-<version>-macos-arm64.dmg` |
 | Windows 10 or later, x64 | `GitDoc-<version>-windows-x64-setup.exe` |
 
-Intel Macs are not packaged. The packages are unsigned, so the system asks before the first launch.
+The macOS package is for Apple Silicon.
 
-- **macOS**: open the disk image and drag GitDoc to Applications. Open it once, then choose **System Settings ▸ Privacy & Security ▸ Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/GitDoc.app`.
-- **Windows**: run the setup file. On the SmartScreen prompt choose **More info ▸ Run anyway**. It installs for the current user without administrator rights and registers `gitdoc://` links. Uninstalling removes the app and the link handler.
+- **macOS**: open the disk image, drag GitDoc to Applications, and launch it from there. Starting with v0.1.1, the public app and disk image use Developer ID signing, and the disk image carries Apple's notarization ticket.
+- **Windows**: run the setup file. The installer is unsigned. If SmartScreen prompts, choose **More info ▸ Run anyway**. It installs for the current user without administrator rights and registers `gitdoc://` links. Uninstalling removes the app and the link handler.
 
 Packaged apps keep the repository, preview cache, and logs in `~/Library/Application Support/GitDoc` on macOS and `%APPDATA%\GitDoc` on Windows. Uninstalling or replacing the app leaves this folder in place. `DOCVERS_DB` still selects a different repository file.
 
@@ -64,9 +64,11 @@ The [release workflow](.github/workflows/release.yml) builds both packages with 
 
 1. Set the new `version` in `desktop/native/Cargo.toml`, refresh `Cargo.lock` with `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`, and merge the change. The packages take their version from this file.
 2. Tag that commit `vX.Y.Z` and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. The workflow verifies that the tag matches the version, then publishes a GitHub Release with the disk image and the installer.
+3. The workflow checks that the tag matches the version. It publishes both installers after the installation tests, macOS Developer ID signing, notarization, stapling, and Gatekeeper assessment succeed.
 
-To build locally, run `sh packaging/macos.sh` on an Apple Silicon Mac or `./packaging/windows.ps1` in PowerShell 7 with Inno Setup 6 installed. Output goes to `dist/`. The macOS bundle is ad-hoc signed. Set `CODESIGN_IDENTITY` to sign it with a certificate.
+The macOS signing and notarization steps run on version-tag pushes in the upstream repository. They use the Actions secrets `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`. Pull requests and manually dispatched builds use ad-hoc signing.
+
+To build locally, run `sh packaging/macos.sh` on an Apple Silicon Mac or `./packaging/windows.ps1` in PowerShell 7 with Inno Setup 6 installed. Output goes to `dist/`. The local macOS bundle uses ad-hoc signing.
 
 ## Browser viewer
 
