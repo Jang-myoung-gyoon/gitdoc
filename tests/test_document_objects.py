@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from lxml import etree
 from PIL import Image, ImageChops
 from pypdfium2 import PdfDocument, raw
 
@@ -166,6 +167,13 @@ class DocumentObjectTests(unittest.TestCase):
         base = session.save("Create a table and three adjacent shapes", 1)["id"]
         review_revision(document, base, "approve", original)
         before = session.open(document, "main", base, 1)
+        if extension == "doc" and len(before["shapes"]) != 3:
+            with open_package(session.working.data) as archive:
+                root = parse_part(archive, "word/document.xml")
+                xml = "".join(etree.tostring(paragraph, encoding="unicode", with_tail=False)
+                              for paragraph in root.findall(f"{WORD_TAG}body/{WORD_TAG}p"))
+            self.fail(f"Expected three existing shapes, got {before['shapes']}. "
+                      f"Converted synthetic DOC body paragraphs: {xml}")
         self.assertEqual(len(before["shapes"]), 3)
         old_image = self.image(before)
         rectangles = [item for item in before["shapes"] if item["kind"] == "rectangle"]
