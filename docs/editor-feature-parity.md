@@ -1,0 +1,77 @@
+# Desktop editor feature parity
+
+Baseline checked on 2026-11-28 against the GitDoc desktop, its repository capabilities, and the product guides below. Each row tracks a saved document behavior. The product guides link to the reference screens and commands.
+
+- **Verified** means a test or recorded check confirms the operation on the original format, including reopening the saved bytes. The evidence column states whether a renderer or second reader checked the result.
+- **In review** means the linked GitDoc change has verification but is still awaiting review.
+- **Needs verification** means the current path is implemented, but this inventory lacks a dedicated original-format round-trip check for the stated operation.
+- **Missing** means GitDoc currently lacks the operation. Registering, viewing, comparing, exporting, or submitting an external edit does not count as an in-app edit.
+- **Format limit** identifies an operation the format cannot carry, or one that needs a different workflow because it is vendor-hosted.
+
+## Reference editors and screens
+
+| Formats | Comparison baseline | Official reference screens and guides |
+| --- | --- | --- |
+| DOCX, DOC, DOCM | Microsoft Word desktop for Microsoft 365 / Word 2024 for Mac. Use Word 97–2003 compatibility and LibreOffice Writer 26.2 for DOC checks. | [Insert Table grid with screenshot](https://support.microsoft.com/en-gb/word/insert-a-table-in-word-for-mac), [grid image](https://support.microsoft.com/en-gb/word/media/wordformac-insert-table.png), [Shapes](https://support.microsoft.com/en-us/powerpoint/add-shapes), [Word feature comparison](https://support.microsoft.com/en-us/word/word-features-comparison-word-for-the-web-vs-desktop), [Review and Track Changes](https://support.microsoft.com/en-gb/word/training/track-changes-in-word) |
+| HWP, HWPX | Hancom Office 2022 Hangul. Use the native HWP 5.0 or HWPX save path to test each separately. | [Edit tab](https://help.hancom.com/hoffice120/ko-KR/Hwp/view/toolbar/menu_edit.htm), [Insert tab](https://help.hancom.com/hoffice120/ko-KR/Hwp/view/toolbar/menu_insert.htm), [Shape tab](https://help.hancom.com/hoffice120/ko-KR/Hwp/toolbox/object_shapeobject.htm), [Table Layout tab](https://help.hancom.com/hoffice120/ko-KR/Hwp/toolbox/object_table_layout.htm), [table and cell properties](https://help.hancom.com/docs/ko-KR/mergedProjects/hoffice_hwp/topics/hancomoffice/hwp/table/tableattribute/tableattribute.htm) |
+| PPTX, PPT, PPTM | PowerPoint desktop for Microsoft 365 / PowerPoint 2024 for Mac. Use PowerPoint 97–2003 compatibility and Impress 26.2 for PPT checks. | [Ribbon and contextual tabs](https://support.microsoft.com/en-us/powerpoint/using-the-ribbon-in-powerpoint-for-mac), [Shapes](https://support.microsoft.com/en-us/powerpoint/add-shapes), [Slide Master screenshots](https://support.microsoft.com/en-us/powerpoint/what-is-a-slide-layout), [Animations screen](https://support.microsoft.com/en-us/powerpoint/training/animate-text-or-objects) |
+| XLSX, XLS, XLSM | Excel desktop for Microsoft 365 / Excel 2024. Use Excel 97–2003 compatibility and Calc 26.2 for XLS checks. | [Format as Table](https://support.microsoft.com/en-us/excel/get-started/create-and-format-tables), [Recommended Charts screenshot](https://support.microsoft.com/en-us/excel/creating-charts-from-start-to-finish), [Calc workspace](https://books.libreoffice.org/en/CG262/CG26201-Introduction.html) |
+| PDF | Adobe Acrobat Pro desktop, continuous track. Verify saved content with a separate parser or renderer. | [Workspace](https://helpx.adobe.com/acrobat/desktop/get-started/learn-the-basics/workspace.html), [Edit pane and text editing](https://helpx.adobe.com/acrobat/desktop/edit-documents/edit-text-in-pdfs/add-text.html) |
+| ODT, ODS, ODP | LibreOffice 26.2 Writer, Calc, and Impress, respectively. | [Writer workspace](https://books.libreoffice.org/en/WG262/WG26201-IntroducingWriter.html), [Calc workspace](https://books.libreoffice.org/en/CG262/CG26201-Introduction.html), [Impress workspace](https://books.libreoffice.org/en/IG262/IG26201-IntroducingImpress.html) |
+| CSV, TSV | Calc 26.2 text import/export. Compare records and fields in the original text format. | [Calc workspace](https://books.libreoffice.org/en/CG262/CG26201-Introduction.html), [CSV field and record rules](https://www.rfc-editor.org/rfc/rfc4180.html) |
+
+Use the [Microsoft format specifications](https://learn.microsoft.com/en-us/openspecs/office_file_formats) and [Office format reference](https://learn.microsoft.com/en-us/office/compatibility/office-file-format-reference) to resolve differences between the modern editor and legacy formats. Reference artwork stays on the vendor sites.
+
+## Word and Hangul documents
+
+| Formats | Reference area | Document operation | Status and evidence |
+| --- | --- | --- | --- |
+| DOCX | Home / editing | Replace text, update text blocks, and apply supported basic character and paragraph formatting | **Verified**, [Office block test](../tests/test_office_blocks.py) reads edited XML and checks adjacent runs. |
+| DOC, HWP | Home / Edit | Type into a mapped body paragraph using the document canvas | **Needs verification** across multipage layouts, empty paragraphs, tables, and office applications. The current implementation is in [the paged editor](../desktop/paged_editor.py). |
+| HWPX | Edit | Find/replace body and table text | **Needs verification** of a dedicated HWPX save and reopen with layout and adjacent text assertions. |
+| DOCX, HWPX | Home / Edit | Type into a mapped body paragraph using the document canvas | **In review** with the [Word and Hangul insertion change](https://github.com/Jang-myoung-gyoon/gitdoc/compare/main...codex/word-hwp-insert-objects). The insertion tests exercise opening and displaying text in the canvas. Direct typing needs its own fixture. |
+| DOC, DOCX, HWP, HWPX | Insert / 입력 > Table | Insert a table with specified rows and columns | **In review**. Regression runs 2×3 insert, undo/redo, save as review draft, read native table structure, and render the saved extension in all four formats. |
+| DOC, DOCX, HWP, HWPX | Insert / 입력 > Shapes | Insert editable rectangle, ellipse, triangle, and right arrow | **In review**. The same regression reads native geometry and verifies the absence of image substitutes. DOC reopens via LibreOffice. HWP additionally reopens through rhwp. Word and Hancom application checks are still outstanding. |
+| DOCX, HWPX, DOC, HWP | Shape Format / 도형 | Select an existing object, delete it, resize, move, wrap, or rotate it | **Missing**. First verify stable selection and deletion by reopening a file with two similar objects. Resize/move should check resulting geometry and placement without altering the neighbor. |
+| DOCX, HWPX, DOC, HWP | Shape Format / 도형 | Fill, line, effects, text in shapes, alignment, layering, groups, and geometry editing | **Missing**. Test native properties and visible results using two overlapping shapes and a grouped object. |
+| DOCX, HWPX, DOC, HWP | Table Layout / 표 레이아웃 | Enter cell content, add/delete rows and columns, merge/split, distribute sizes, repeat header, and split/join tables | **Missing** in the canvas. Whole-document text replacement in existing table text and text-block editing have narrower scope. Verify the cell grid and unrelated cells after reopen. |
+| DOCX, HWPX, DOC, HWP | Table Design / 표 디자인 | Apply borders, shading, cell margins, alignment, styles, and captions | **Missing**. Verify style propagation and reopened layout, including merged cells and tables spanning pages. |
+| DOCX, HWPX, DOC, HWP | Insert / 입력 and References | Images, hyperlinks, bookmarks, equations, text boxes, references, footnotes, captions, TOC, indices, fields, charts and embedded objects | **Missing** as general insert/edit controls. Existing Word text-block editing can update text in supported note parts. Separate ordinary hyperlinks and static objects from linked or executable content. |
+| DOCX, HWPX, DOC, HWP | Layout / 쪽, Design / 서식 | Page size, margins, orientation, breaks, columns, numbering, headers/footer setup, paragraph styles and template changes | **Missing** beyond basic text formatting. Verify stored section properties and rendered pagination. |
+| DOCX, HWPX, DOC, HWP | Review / 검토 | In-file comments, tracked revisions, author attribution, accept/reject | **Missing**. GitDoc review applies to entire file versions. Add an in-file round-trip fixture with multiple authors if this surface is implemented. |
+| DOCX, HWPX, DOC, HWP | View / 보기 | Navigation, zoom, ruler, outline, split view, visible editing marks | **Needs verification** for current navigation, zoom and Word ruler. Outline editing, split view, and editing marks are missing. |
+
+## Presentations
+
+| Formats | Reference area | Document operation | Status and evidence |
+| --- | --- | --- | --- |
+| PPTX | Home / Slides and Insert | Add/duplicate/delete slides, edit text, insert pictures, basic shapes and tables, edit table cell text | **Verified** for duplicate, pictures, triangle, grouping and cell content with [presentation tests](../tests/test_presentation_edit.py). Additional shape types, new/delete slide round-trip, and independent preview checks need dedicated tests. |
+| PPTX | Home / Arrange and formatting | Group/ungroup, object order, positioning, sizing, text selection formatting | **Verified** for group and order plus tested text styles. Move/resize and more formatting need original-format coverage. |
+| PPTX | Design, Slide Master, Table/Chart Design | Themes, layouts, background, masters, tables with styled cells, native charts, SmartArt, media and notes | **Missing** beyond existing table creation and cell text editing. Check relationship targets and intact masters or media after reopen. |
+| PPTX | Transitions, Animations, Slide Show, Review | Author effects, timing, slide show settings and in-file comments | **Missing**. Use format-specific structure checks and the corresponding reference editor for playback. |
+| PPT | Home, Insert, Design | Same editing baseline as PPTX where supported in Office 97–2003 | **Missing** as direct editing. Existing open/compare/export path does not prove same-format edits. Start with slide, text, table and shape round-trip through Impress. |
+| PPTM | Common slide editing | Preserve the macro project while editing ordinary content | **Missing**. Archive/preview support is separate. Macro editing or execution is outside the document parity scope. |
+
+## Spreadsheets, PDF, and other formats
+
+| Formats | Reference area | Document operation | Status and evidence |
+| --- | --- | --- | --- |
+| XLSX | Home and Formulas | Edit cell text, numeric values, formula text, and clear a cell | **Needs verification** of a dedicated save/reopen fixture covering formula calculation, styles, and neighboring cells. [Current editor](../editing.py) writes the formula for the spreadsheet application to recalculate. |
+| XLSX, XLS, XLSM | Home, Insert, Page Layout, Data, Formulas | Range editing, paste/fill, row/column/sheet edits, merged cells, formulas, formatting, validation, filters/sort, tables, charts, pivot tables, and print setup | **Missing** beyond XLSX single-cell edits. XLS and XLSM are first eligible for basic cell edits once same-format writes preserve charts and other structures. XLSM parity requires preservation of the macro project without executing macros. |
+| PDF | Organize Pages / Comments | Rotate/delete pages, insert blank/other PDF pages, create a text note | **Verified** through [PDF edit tests](../tests/test_pdf_edit.py) and [MCP output test](../tests/test_mcp_document_tools.py), including original geometry and annotation checks. |
+| PDF | Organize Pages / Edit | Reorder, split, extract, crop, replace page, and edit native text or images | **Missing** as general editor operations. Text replacement should begin with a single text object and test fonts, layout, extraction, and a second renderer after saving. Scanned image pages require a separate OCR workflow. |
+| PDF | Comments, Prepare Form, Protect, Accessibility | Edit/remove annotations, form fill/create, redaction, signing, accessibility tag editing | **Missing** beyond text-note insertion. Signature preservation and permission behavior require separate tests. Existing signed/encrypted originals are read-only in the page editor. |
+| ODT | Writer Home, Insert, Format, Table | Same-format text, table, image, shape and section editing | **Missing** as direct editing. Test ODF structures and rendering in Writer. |
+| ODS | Calc Home, Insert, Format, Data | Same-format cell, sheet, table and chart editing | **Missing** as direct editing. Test ODF cell/formula metadata and Calc rendering. |
+| ODP | Impress Slide, Insert, Format | Same-format slide, text, table, shape and presentation editing | **Missing** as direct editing. Test ODF geometry, notes and linked resources. |
+| DOCM | Word Home, Insert, Layout | Edit ordinary document content while preserving macro parts byte-for-byte | **Missing**. Treat macro execution and editing as a separate scope. |
+| CSV, TSV | Calc Text Import and grid | Edit fields and rows while preserving bytes outside the changed records where possible | **Missing** as direct editing. Test quotes, embedded newlines, delimiters, line endings, UTF-8/UTF-16/CP949 and row keys. Workbook styles, charts, macros and multiple sheets are **format limits**. |
+
+## Regression sequence
+
+1. **Next on Word and Hangul:** select and delete a saved, pre-existing table or shape. Use two similar objects and a protected or ambiguous target. Then add resize, placement and style changes. Verify each in DOC, DOCX, HWP and HWPX separately.
+2. Verify table cell content, row/column operations, merges and formatting. Use existing tables as well as newly inserted tables. Test adjacent content, undo/redo, and same-extension save.
+3. Expand text/layout and insertion coverage while testing complex documents. Add structured workbook and legacy presentation edits in their own changes.
+4. Extend PDF page operations before editing content streams, forms and annotations. Keep OCR and digital signatures on explicitly verified workflows.
+
+For each change, drive the desktop action, save to a new version, compare against the preserved base, inspect saved objects with independent readers where available, and render the saved extension. Record the reference application and version, commands, test and remaining gaps. Fixtures are generated or synthetic. Vendor cloud, AI and separately hosted or paid services are outside the local document parity scope. Track product-specific elements that a target format cannot express as format limits with the applicable specification.
