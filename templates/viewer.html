@@ -1,0 +1,94 @@
+{% macro viewer(document_id, before, after) %}
+{% if before.extension in ('xls', 'xlsx') and request.args.get('view') != 'pages' %}
+  {{ sheet_viewer(document_id, before, after) }}
+{% else %}
+<section class="panel comparison visual-viewer" data-visual-viewer aria-labelledby="visual-title">
+  <div class="viewer-heading">
+    <h2 id="visual-title">문서 페이지 대조</h2>
+    {% if before.extension in ('xls', 'xlsx') %}<a href="?{{ request.args.to_dict()|without_view|urlencode }}">시트 대조</a>{% endif %}
+  </div>
+  <div class="viewer-controls">
+    <div class="viewer-navigation">
+      <button class="secondary" type="button" data-previous disabled aria-label="이전 페이지">←</button>
+      <label>페이지 <input type="number" min="1" value="1" data-page disabled></label>
+      <span data-total>/ —</span>
+      <button class="secondary" type="button" data-next disabled aria-label="다음 페이지">→</button>
+    </div>
+    <div class="viewer-navigation" aria-label="변경 위치 이동">
+      <button class="secondary" type="button" data-previous-change disabled>이전 변경</button>
+      <button class="secondary" type="button" data-next-change disabled>다음 변경</button>
+      <span class="small" data-change-position aria-live="polite"></span>
+    </div>
+    <label>확대 <select data-zoom><option value="100">맞춤</option><option value="125">125%</option><option value="150">150%</option><option value="200">200%</option></select></label>
+    <label class="viewer-check"><input type="checkbox" data-highlight checked> 시각적 차이 표시</label>
+    <label class="viewer-check"><input type="checkbox" data-sync checked> 스크롤 동기화</label>
+  </div>
+  <p class="subtle small">같은 페이지 번호를 대조합니다. Microsoft Office 파일은 변환 시 글꼴이나 줄 배치가 달라질 수 있습니다.</p>
+  {% if before.extension in ('xls', 'xlsx') %}<p class="subtle small">엑셀은 시트마다 한 페이지로 표시하며, 숨김 시트도 포함될 수 있습니다.</p>{% endif %}
+  {{ change_list() }}
+  <p class="viewer-message small" data-status role="status">두 버전의 미리보기를 준비하고 있습니다.</p>
+  <noscript><p>스크립트를 사용할 수 없으면 각 버전의 PDF 미리보기를 여세요.</p></noscript>
+  <div class="viewer-grid">
+    {% for item in (before, after) %}
+    <article class="viewer-side" data-preview="{{ url_for('visual_preview', document_id=document_id, version_id=item.id) }}">
+      <div class="viewer-side-title">
+        <strong>{{ '기준본' if loop.first else '수정본' }} · v{{ item.number }}</strong>
+        <a href="{{ url_for('preview_pdf', document_id=document_id, version_id=item.id) }}" target="_blank" rel="noopener noreferrer">PDF로 열기<span class="sr-only"> v{{ item.number }}</span></a>
+      </div>
+      <div class="viewer-scroll" tabindex="0" aria-label="{{ '기준' if loop.first else '비교' }} 버전 문서 페이지">
+        <p class="viewer-placeholder">페이지 준비 중</p>
+        <div class="viewer-sheet" hidden>
+          <img alt="{{ '기준' if loop.first else '비교' }} 버전 페이지">
+          <canvas class="viewer-overlay" aria-hidden="true" hidden></canvas>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+<script src="{{ url_for('static', filename='viewer.js') }}" defer></script>
+{% endif %}
+{% endmacro %}
+
+{% macro change_list() %}
+<details class="viewer-change-list" data-change-list hidden>
+  <summary>변경 목록</summary>
+  <p class="small subtle" data-list-status aria-live="polite"></p>
+  <ol data-change-items></ol>
+</details>
+{% endmacro %}
+
+{% macro sheet_viewer(document_id, before, after) %}
+<section class="panel comparison visual-viewer" data-workbook-viewer aria-labelledby="visual-title">
+  <div class="viewer-heading">
+    <h2 id="visual-title">시트 대조</h2>
+    <a href="?{{ request.args.to_dict()|without_view|urlencode }}&amp;view=pages">PDF 페이지 대조</a>
+  </div>
+  <div class="viewer-controls">
+    <div class="viewer-navigation">
+      <button class="secondary" type="button" data-previous-change disabled>이전 변경</button>
+      <button class="secondary" type="button" data-next-change disabled>다음 변경</button>
+      <span class="small" data-change-position aria-live="polite"></span>
+    </div>
+    <form class="viewer-navigation" data-cell-form>
+      <label>셀 주소 <input name="cell" type="text" required maxlength="10" placeholder="A1" autocomplete="off"></label>
+      <button class="secondary" disabled>이동</button>
+    </form>
+  </div>
+  {{ change_list() }}
+  <div class="sheet-tabs" data-sheet-tabs role="group" aria-label="시트"></div>
+  <p class="viewer-message small" data-status role="status">두 통합 문서를 읽고 있습니다.</p>
+  <div class="viewer-grid">
+    {% for item in (before, after) %}
+    <article class="viewer-side" data-workbook="{{ url_for('workbook', document_id=document_id, version_id=item.id) }}">
+      <div class="viewer-side-title">
+        <strong>{{ '기준본' if loop.first else '수정본' }} · v{{ item.number }}</strong>
+        <a href="{{ url_for('download', document_id=document_id, version_id=item.id) }}">원본 다운로드</a>
+      </div>
+      <div class="viewer-scroll sheet-scroll" tabindex="0" aria-label="{{ '기준본' if loop.first else '수정본' }} 시트"></div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+<script src="{{ url_for('static', filename='workbook.js') }}" defer></script>
+{% endmacro %}

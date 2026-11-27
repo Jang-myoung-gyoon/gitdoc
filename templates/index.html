@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block main %}
+  <div class="page-heading"><h1>문서함</h1><p>확정본을 찾고 문서의 수정 이력을 확인하세요.</p></div>
+  <div class="layout">
+    <section class="panel" aria-labelledby="documents-title">
+      <div class="section-head">
+        <h2 id="documents-title">문서 목록</h2>
+        <form method="get" class="search">
+          <label for="query" class="sr-only">제목 또는 파일명</label>
+          <input type="search" id="query" name="q" value="{{ query }}" placeholder="제목 또는 파일명" maxlength="150">
+          <button class="secondary">검색</button>
+        </form>
+      </div>
+      {% if documents %}
+      <div class="documents">
+        {% for item in documents %}
+        <a class="doc-row" href="{{ url_for('detail', document_id=item.id) }}">
+          <span class="type">{{ item.extension|upper }}</span>
+          <span class="doc-name"><strong>{{ item.title }}</strong><small>확정본 v{{ item.number }} · {{ item.created_at[:10] }}</small></span>
+          {% if item.pending %}<span class="status pending">검토 대기 {{ item.pending }}</span>{% endif %}
+          <span class="arrow" aria-hidden="true">→</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty">{{ '검색 결과가 없습니다.' if query else '등록된 문서가 없습니다. 새 문서를 등록하면 v1이 확정본으로 저장됩니다.' }}</p>
+      {% if query %}<a href="{{ url_for('index') }}">전체 문서 보기</a>{% endif %}
+      {% endif %}
+    </section>
+    <section class="panel" aria-labelledby="new-title">
+      <h2 id="new-title">새 문서 등록</h2>
+      <form action="{{ url_for('create') }}" method="post" enctype="multipart/form-data" class="stack">
+        <label for="title">문서 제목</label><input id="title" name="title" required maxlength="120" placeholder="예시: 사업 제안서">
+        <label for="file">원본 파일</label><input id="file" type="file" name="file" required accept=".hwp,.hwpx,.docx,.pdf,.ppt,.pptx,.xls,.xlsx" aria-describedby="formats">
+        <p id="formats" class="subtle small">HWP, HWPX, DOCX, PDF, PPT, PPTX, XLS, XLSX · 최대 30MB</p>
+        <button>문서 등록</button>
+      </form>
+    </section>
+  </div>
+{% endblock %}

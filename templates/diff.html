@@ -1,0 +1,16 @@
+{% macro diff(original, updated, changes, truncated) %}
+  {% if original.extraction_note or updated.extraction_note %}
+    {% for item in (original, updated) %}
+      {% if item.extraction_note %}<p>v{{ item.number }} · {{ item.extraction_note }}</p>{% endif %}
+    {% endfor %}
+  {% elif changes %}
+    <p class="subtle small">+ 추가 · − 삭제</p>
+    <pre class="diff" aria-label="텍스트 변경 사항">{% for line in changes %}<span class="{{ 'add' if line.startswith('+') else 'remove' if line.startswith('-') else 'range' if line.startswith('@@') else 'same' }}">{{ line }}</span>
+{% endfor %}</pre>
+    {% if truncated %}<p class="small">일부 변경 줄만 표시합니다. 원본에서 전체 변경을 확인하세요.</p>{% endif %}
+  {% elif original.sha256 == updated.sha256 %}
+    <p>두 버전의 파일 내용이 같습니다.</p>
+  {% else %}
+    <p>추출된 텍스트가 같습니다. 이미지와 서식 등의 변경은 원본에서 확인하세요.</p>
+  {% endif %}
+{% endmacro %}

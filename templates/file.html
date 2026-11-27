@@ -1,0 +1,8 @@
+{% macro links(document_id, version) %}
+  {% if version.extension == 'pdf' %}
+  <a href="{{ url_for('download', document_id=document_id, version_id=version.id, preview=1) }}" target="_blank" rel="noopener noreferrer">PDF 열기</a>
+  {% else %}
+  <a href="{{ url_for('preview_pdf', document_id=document_id, version_id=version.id) }}" target="_blank" rel="noopener noreferrer">문서 미리보기<span class="sr-only"> v{{ version.number }}</span></a>
+  {% endif %}
+  <a href="{{ url_for('download', document_id=document_id, version_id=version.id) }}">원본 다운로드<span class="sr-only"> v{{ version.number }}</span></a>
+{% endmacro %}

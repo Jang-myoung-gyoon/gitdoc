@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% from "file.html" import links %}
+{% from "diff.html" import diff %}
+{% from "viewer.html" import viewer %}
+{% from "compare_sidebar.html" import comparison_sidebar %}
+{% block main_class %}comparison-wrap{% endblock %}
+{% block title %}브랜치 대조 · {{ doc.title }}{% endblock %}
+{% block main %}
+  <nav class="breadcrumb" aria-label="현재 위치"><a href="{{ url_for('index') }}">문서함</a><span aria-hidden="true">/</span><a href="{{ url_for('detail', document_id=doc.id, branch=target.name) }}">{{ doc.title }}</a></nav>
+  <div class="page-heading">
+    <h1>브랜치 대조</h1>
+    <p>{{ source.name }} → {{ target.name }} · 공통 조상 v{{ ancestor.number }}</p>
+  </div>
+  <div class="comparison-workspace">
+    {{ comparison_sidebar(doc, sidebar, source, a, b) }}
+    <div class="comparison-body">
+      {{ viewer(doc.id, a, b) }}
+  <div class="compare-cards">
+    {% for label, item, v in [('대상', target, a), ('가져올 브랜치', source, b)] %}
+    <section class="panel">
+      <h2>{{ label }} · {{ item.name }} v{{ v.number }}</h2>
+      <p class="filename">{{ v.filename }}</p>
+      <div class="file-links">{{ links(doc.id, v) }}</div>
+    </section>
+    {% endfor %}
+  </div>
+  <section class="panel comparison">
+    <h2>추출된 내용 차이</h2>
+    {% for title, before, after, changes, truncated in panels %}
+    <details class="diff-panel" {% if loop.first %}open{% endif %}>
+      <summary>{{ title }} · v{{ before.number }} → v{{ after.number }}</summary>
+      {{ diff(before, after, changes, truncated) }}
+      {% if not loop.first %}<a href="{{ url_for('compare', document_id=doc.id, branch=target.name, base=before.id, target=after.id) }}">이 범위를 문서 페이지로 대조</a>{% endif %}
+    </details>
+    {% endfor %}
+    <p class="file-links"><a href="{{ url_for('download', document_id=doc.id, version_id=ancestor.id) }}">공통 조상 원본 다운로드</a></p>
+  </section>
+  <section class="panel comparison">
+    <h2>{{ target.name }}에 병합</h2>
+    {% if state == 'merged' %}
+    <p>가져올 버전이 이미 대상 브랜치 이력에 포함되어 있습니다.</p>
+    {% else %}
+    {% if state == 'conflict' %}
+    <p class="notice error">두 브랜치 모두 공통 조상에서 변경되어 충돌했습니다. 두 원본을 확인한 뒤 합친 파일을 올리세요.</p>
+    {% elif state == 'source' %}
+    <p>{{ source.name }}의 파일을 {{ target.name }}의 새 확정본으로 저장합니다.</p>
+    {% else %}
+    <p>{{ target.name }}의 파일을 유지하고 양쪽 이력을 연결합니다.</p>
+    {% endif %}
+    <form class="stack" method="post" action="{{ url_for('merge_branches', document_id=doc.id) }}" enctype="multipart/form-data">
+      <input type="hidden" name="target" value="{{ target.name }}">
+      <input type="hidden" name="source" value="{{ source.name }}">
+      <input type="hidden" name="target_head" value="{{ a.id }}">
+      <input type="hidden" name="source_head" value="{{ b.id }}">
+      {% if state == 'conflict' %}
+      <label for="resolution">병합 파일</label><input id="resolution" name="file" type="file" accept=".{{ a.extension }}" required>
+      {% endif %}
+      <label for="merge-reason">병합 사유</label><textarea id="merge-reason" name="reason" required maxlength="500" rows="3"></textarea>
+      <button>병합하여 확정</button>
+    </form>
+    {% endif %}
+  </section>
+    </div>
+  </div>
+{% endblock %}
