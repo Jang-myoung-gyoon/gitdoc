@@ -8,7 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from desktop_link import desktop_url, document_path
+from browser_viewer import viewer_url
+from desktop_link import checked_document_path, desktop_url
 from uploads import MAX_FILE, prepare_upload
 from store import (
     DATABASE, ROOT, VERSION_FIELDS, append_version, branch_list, create_document, database, find_branch,
@@ -200,30 +201,13 @@ def native_executable():
     return executable
 
 
-def open_desktop(args):
-    if args.document_id is None and any(value is not None for value in
-                                        (args.branch, args.base, args.target, args.version, args.page,
-                                         args.change, args.sheet, args.cell, args.row_key)):
-        raise ValueError("위치를 열려면 문서 ID를 지정하세요.")
-    if args.target is not None and args.version is not None:
-        raise ValueError("--version은 문서 보기에서 사용합니다. 비교할 때는 --target을 사용하세요.")
-    if args.target is None and (args.base is not None or args.change is not None or args.row_key is not None):
-        raise ValueError("비교 위치를 열려면 --target 버전 ID를 지정하세요.")
-    if any(value is not None and value < 1 for value in (args.page, args.change)):
-        raise ValueError("페이지와 변경 번호는 1 이상이어야 합니다.")
-    if args.change and not args.page:
-        raise ValueError("--change를 사용할 때 --page를 지정하세요.")
-    if args.document_id is not None:
-        with database(readonly=True) as db:
-            require(find_document(db, args.document_id), "문서를 찾을 수 없습니다.")
-            for version_id in (args.base, args.target, args.version):
-                if version_id is not None:
-                    require(find_version(db, args.document_id, version_id), "이 문서의 버전을 찾을 수 없습니다.")
-            if args.branch:
-                require(find_branch(db, args.document_id, args.branch), "브랜치를 찾을 수 없습니다.")
-    path = document_path(args.document_id, branch=args.branch, base=args.base, target=args.target,
-                         version=args.version, page=args.page, change=args.change,
-                         sheet=args.sheet, cell=args.cell, row_key=args.row_key)
+def open_document(args):
+    path = checked_document_path(args.document_id, branch=args.branch, base=args.base, target=args.target,
+                                 version=args.version, page=args.page, change=args.change, sheet=args.sheet,
+                                 cell=args.cell, row_key=args.row_key)
+    if args.browser:
+        print(viewer_url(path, open_tab=not args.url))
+        return
     link = desktop_url(path)
     if args.url:
         print(link)
@@ -261,7 +245,7 @@ def main():
     cm = commands.add_parser("commit", help="작업 브랜치에 변경 저장")
     cm.add_argument("-m", "--message", required=True)
     cm.set_defaults(run=commit)
-    desktop = commands.add_parser("open", help="GitDoc 데스크톱 앱에서 문서 또는 비교 화면 열기")
+    desktop = commands.add_parser("open", help="GitDoc 앱 또는 브라우저에서 문서나 비교 화면 열기")
     desktop.add_argument("document_id", type=int, nargs="?")
     desktop.add_argument("-b", "--branch")
     desktop.add_argument("--base", type=int)
@@ -272,8 +256,9 @@ def main():
     desktop.add_argument("--sheet")
     desktop.add_argument("--cell")
     desktop.add_argument("--row-key", help="CSV/TSV 비교에 사용할 열 제목")
-    desktop.add_argument("--url", action="store_true", help="앱을 실행하지 않고 링크 출력")
-    desktop.set_defaults(run=open_desktop)
+    desktop.add_argument("--browser", action="store_true", help="로컬 브라우저 뷰어 사용")
+    desktop.add_argument("--url", action="store_true", help="창을 열지 않고 링크 출력")
+    desktop.set_defaults(run=open_document)
     args = parser.parse_args()
     try:
         os.chdir(args.directory)

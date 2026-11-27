@@ -30,9 +30,22 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe docvers.py open
 ```
 
-`docvers.py open` builds the executable with Cargo on first launch. After updating the source, rebuild with `cargo build --locked --manifest-path desktop/native/Cargo.toml`. On macOS, run `./desktop/build.sh` to build `.build/GitDoc.app` for Finder. To use the separate browser interface, run `python app.py` in the same environment and open the [local document library](http://127.0.0.1:8796/).
+`docvers.py open` builds the executable with Cargo on first launch. After updating the source, rebuild with `cargo build --locked --manifest-path desktop/native/Cargo.toml`. On macOS, run `./desktop/build.sh` to build `.build/GitDoc.app` for Finder.
 
-The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a different file and give the desktop app and MCP the same value. `DOCVERS_PORT` sets the port for the browser interface.
+The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a different file and give the desktop app, CLI, and MCP the same value.
+
+## Browser viewer
+
+Select **브라우저에서 보기** in the desktop app to open the current version or comparison in your default browser. GitDoc carries over the selected page or spreadsheet cell.
+
+Use `python docvers.py open --browser` to open the local library. For Codex's built-in browser, use the MCP tool `open_browser_view` or add `--url` to start the local viewer and print its URL without opening the default browser.
+
+```sh
+python docvers.py open 1 --version 2 --page 3 --browser --url
+python docvers.py open 1 --base 2 --target 3 --browser --url
+```
+
+The viewer listens on `127.0.0.1:8796` and uses the local document store. Open its URL in a browser on the same computer. Set `DOCVERS_PORT` if the port is already in use. You can also run `python app.py` in the foreground.
 
 ## Version history and comparison
 
@@ -47,7 +60,7 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 | HWP, HWPX | Convert to PDF with rhwp |
 | DOC, DOCX, DOCM, ODT, PPT, PPTX, PPTM, ODP, ODS | Convert to PDF with LibreOffice |
 | XLS, XLSX, XLSM | Compare cell values, merges, and some formatting by sheet and address. Print-layout preview is also available. |
-| CSV, TSV | View and compare literal cell values. Compare by row number or by a shared unique header in the desktop app. |
+| CSV, TSV | View and compare literal cell values. Compare by row number or by a shared unique header selected in the desktop app or passed as `--row-key`. |
 
 The native app renders pages with PDFium and computes visual changes in its Rust worker. The Python bridge supplies cached PDF paths and document metadata. The browser preview uses Poppler's `pdftoppm`. LibreOffice's `soffice` can be found on PATH or in standard installation locations. For Hangul files, install the [rhwp](https://github.com/edwardkim/rhwp) executable on PATH or at `data/tools/rhwp/rhwp` (`rhwp.exe` on Windows). Use `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, and `DOCVERS_RHWP` to supply explicit tool paths.
 

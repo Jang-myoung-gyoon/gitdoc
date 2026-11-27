@@ -96,8 +96,9 @@
   <div class="sheet-tabs" data-sheet-tabs role="group" aria-label="시트"></div>
   <p class="viewer-message small" data-status role="status">시트를 불러오는 중입니다.</p>
   <div class="viewer-grid{{ ' viewer-single' if not comparing }}">
+    {% set row_key = request.args.get('row_key') if comparing else none %}
     {% for item in ((before, after) if comparing else (before,)) %}
-    <article class="viewer-side" data-workbook="{{ url_for('workbook', document_id=document_id, version_id=item.id) }}">
+    <article class="viewer-side" data-workbook="{{ url_for('workbook', document_id=document_id, version_id=item.id, row_key=row_key, base=before.id if row_key else none, target=after.id if row_key else none) }}">
       <div class="viewer-side-title">
         <strong>{{ ('기준본' if loop.first else '수정본') if comparing else item.branch_name }} · {{ item.version_label }}{% if not comparing %} · {{ item.filename }}{% endif %}</strong>
         {% if comparing %}

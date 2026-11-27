@@ -568,6 +568,7 @@ impl GitDoc {
                 );
                 self.notify("버전 이력을 갱신했습니다.", false);
             }
+            "browser" => self.notify("브라우저에서 문서를 열었습니다.", false),
             "print" => {
                 match crate::printing::print(
                     text(&result["path"]),
@@ -778,6 +779,12 @@ impl GitDoc {
             if ui.add_enabled(selected > 0 && self.busy == 0, Button::new("인쇄")).clicked() {
                 self.notify("인쇄용 문서를 준비하는 중입니다.", false);
                 self.request("print", 0, json!({"doc":self.doc, "version":selected}));
+            }
+            if ui.add_enabled(selected > 0 && self.busy == 0, Button::new("브라우저에서 보기")).clicked() {
+                let sheet = self.pane.sheets.get(self.pane.sheet);
+                self.request("browser", 0, json!({"doc":self.doc, "ids":self.ids, "branch":self.branch,
+                    "page":self.pane.page.max(1), "sheet":sheet, "cell":self.pane.cell,
+                    "row_key":self.pane.data["row_key"], "pages":self.selection.pages}));
             }
             if ui.button("수정안 제출").clicked() { self.file_form(Action::Submit,None); }
             if ui.add_enabled(selected==self.head() && matches!(extension.as_str(),"hwp"|"hwpx"|"docx"|"pptx"|"xlsx"|"pdf"),Button::new("문서 편집")).clicked() {

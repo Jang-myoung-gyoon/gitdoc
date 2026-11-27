@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pypdfium2_raw
 
+from browser_viewer import viewer_url
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
+from desktop_link import document_path
 from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
@@ -152,6 +154,13 @@ def print_preview(doc, version):
             "pdfium_directory": str(Path(pypdfium2_raw.__file__).resolve().parent)}
 
 
+def open_browser_view(doc, ids, branch, page=None, sheet=None, cell=None, row_key=None, pages=False):
+    selection = {"base": ids[0], "target": ids[1], "row_key": row_key} if len(ids) == 2 else {"version": ids[0]}
+    path = document_path(doc, branch=branch, page=page, sheet=sheet, cell=cell,
+                         view="pages" if pages else None, **selection)
+    return viewer_url(path, open_tab=True)
+
+
 def save_file(doc, version, path, format):
     record = versions(doc, [version])[0]
     source = record["extension"]
@@ -188,6 +197,7 @@ OPERATIONS = {
     "view": view, "page_notes": page_notes, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "review": review,
     "restore": restore, "save": save_file, "print": print_preview, "merge": merge,
+    "browser": open_browser_view,
 }
 
 

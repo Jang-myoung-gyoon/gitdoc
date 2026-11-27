@@ -1,4 +1,3 @@
-import hashlib
 import io
 import os
 from datetime import datetime, timedelta, timezone
@@ -8,19 +7,20 @@ from flask import Flask, Response, abort, flash, jsonify, redirect, render_templ
 from pypdf.errors import PyPdfError
 from werkzeug.exceptions import SecurityError
 
+from browser_viewer import HOST, STORE_ID, browser_port
+from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from editing import MODES, read_pdf_notes
-from formats import EXTENSIONS, WORKBOOK_EXTENSIONS
+from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
 from preview import PreviewError, page_sizes, preview_path, preview_png
 from workbook import read_workbook
 from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
 from workflow import MissingEntity, merge_revision, restore_revision, review_revision, save_document_edit, save_proposal
 from store import (
-    DATABASE, VERSION_FIELDS, branch_history, branch_list, create_document, database,
+    VERSION_FIELDS, branch_history, branch_list, create_document, database,
     find_branch, find_document, find_version, initialize, merge_state, new_branch,
     search_documents, text_diff,
 )
 
-STORE_ID = hashlib.sha256(os.fsencode(DATABASE)).hexdigest()
 app = Flask(__name__)
 app.jinja_env.globals.update(extensions=EXTENSIONS, workbook_extensions=WORKBOOK_EXTENSIONS,
                             max_file_mib=MAX_FILE_MIB)
@@ -261,7 +261,15 @@ def compare(document_id):
         base = request.args.get("base", type=int) or updated["base_id"] or active["head_id"]
         original = version(db, document_id, base, VERSION_FIELDS + ", extracted")
         sidebar = comparison_sidebar(db, document_id, active, original, updated)
-    changes, truncated = text_diff(original["extracted"], updated["extracted"])
+        left, right = original["extracted"], updated["extracted"]
+        row_key = request.args.get("row_key")
+        if row_key is not None:
+            try:
+                left, right = ("\n".join(table_lines(table)) for table in
+                               aligned_tables(db, document_id, base, target, row_key))
+            except ValueError as error:
+                abort(400, description=str(error))
+    changes, truncated = text_diff(left, right)
     return render_template("compare.html", doc=doc, original=original, updated=updated,
                            active=active, review_branch=review_branch, changes=changes, truncated=truncated,
                            sidebar=sidebar)
@@ -320,8 +328,30 @@ def pdf_notes(document_id, version_id, page):
         return jsonify(notes=[])
 
 
+def aligned_tables(db, document_id, base, target, row_key):
+    records = [version(db, document_id, item, "extension, content") for item in (base, target)]
+    if any(item["extension"] not in DELIMITED_EXTENSIONS for item in records):
+        raise ValueError("행 기준 열은 CSV/TSV에서만 사용할 수 있습니다.")
+    tables = [table_rows(item["extension"], item["content"]) for item in records]
+    column = key_columns(*tables).get(row_key)
+    if column is None:
+        raise ValueError("두 파일에서 중복과 빈 값이 없는 공통 열 제목을 선택하세요.")
+    return aligned_rows(*tables, column)
+
+
 @app.get("/documents/<int:document_id>/versions/<int:version_id>/workbook")
 def workbook(document_id, version_id):
+    row_key = request.args.get("row_key")
+    if row_key is not None:
+        base, target = (request.args.get(name, type=int) for name in ("base", "target"))
+        if base is None or target is None or version_id not in (base, target):
+            abort(400, description="두 비교 버전을 지정하세요.")
+        try:
+            with database() as db:
+                tables = aligned_tables(db, document_id, base, target, row_key)
+        except ValueError as error:
+            return jsonify(error=str(error)), 422
+        return jsonify(sheets=[table_sheet(tables[0 if version_id == base else 1])])
     with database() as db:
         item = version(db, document_id, version_id, "extension, content")
     if item["extension"] not in WORKBOOK_EXTENSIONS:
@@ -390,4 +420,4 @@ def show_error(error):
 
 if __name__ == "__main__":
     initialize()
-    app.run(host="127.0.0.1", port=int(os.environ.get("DOCVERS_PORT", "8796")))
+    app.run(host=HOST, port=browser_port())

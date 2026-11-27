@@ -30,9 +30,22 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe docvers.py open
 ```
 
-`docvers.py open`은 실행 파일이 없으면 Cargo로 빌드합니다. 소스를 갱신한 후에는 `cargo build --locked --manifest-path desktop/native/Cargo.toml`로 다시 빌드합니다. macOS에서 Finder로 실행하려면 `./desktop/build.sh`로 `.build/GitDoc.app`을 빌드합니다. 별도 브라우저 UI는 같은 환경에서 `python app.py`로 시작한 후 [로컬 문서함](http://127.0.0.1:8796/)에서 사용할 수 있습니다.
+`docvers.py open`은 실행 파일이 없으면 Cargo로 빌드합니다. 소스를 갱신한 후에는 `cargo build --locked --manifest-path desktop/native/Cargo.toml`로 다시 빌드합니다. macOS에서 Finder로 실행하려면 `./desktop/build.sh`로 `.build/GitDoc.app`을 빌드합니다.
 
-기본 저장소는 `data/documents.sqlite3`입니다. `DOCVERS_DB`로 경로를 바꾸고, 앱과 MCP에 같은 값을 지정합니다. `DOCVERS_PORT`는 별도 브라우저 UI의 포트를 지정합니다.
+기본 저장소는 `data/documents.sqlite3`입니다. `DOCVERS_DB`로 경로를 바꾸고 데스크톱 앱, CLI, MCP에 같은 값을 지정합니다.
+
+## 브라우저 뷰어
+
+데스크톱 앱에서 **브라우저에서 보기**를 누르면 현재 버전 또는 두 버전 비교가 기본 브라우저에서 열립니다. 보고 있던 페이지나 시트의 선택 셀도 이어서 볼 수 있습니다.
+
+`python docvers.py open --browser`로 로컬 문서함을 열 수 있습니다. Codex 내장 브라우저에서 확인하려면 MCP의 `open_browser_view`를 사용하거나 CLI에 `--url`을 추가하세요. 두 방법 모두 로컬 뷰어를 시작하고 주소를 반환합니다.
+
+```sh
+python docvers.py open 1 --version 2 --page 3 --browser --url
+python docvers.py open 1 --base 2 --target 3 --browser --url
+```
+
+뷰어는 `127.0.0.1:8796`에서 로컬 문서 저장소를 읽습니다. 같은 컴퓨터의 브라우저에서 주소를 여세요. 포트가 사용 중이면 `DOCVERS_PORT`로 변경할 수 있습니다. `python app.py`로 서버를 직접 실행할 수도 있습니다.
 
 ## 버전 관리와 비교
 
@@ -47,7 +60,7 @@ py -3.12 -m venv .venv
 | HWP, HWPX | rhwp에서 PDF로 변환 |
 | DOC, DOCX, DOCM, ODT, PPT, PPTX, PPTM, ODP, ODS | LibreOffice에서 PDF로 변환 |
 | XLS, XLSX, XLSM | 시트 이름과 셀 주소로 값·병합·일부 서식 대조. PDF 페이지 보기 제공 |
-| CSV, TSV | 셀 내용을 텍스트로 표시하고 비교. 데스크톱에서 행 번호 또는 공통 고유 열로 행을 맞출 수 있습니다. |
+| CSV, TSV | 셀 내용을 텍스트로 표시하고 비교합니다. 행 번호로 비교하거나 데스크톱 또는 `--row-key`에서 공통 고유 열을 지정할 수 있습니다. |
 
 네이티브 앱은 Rust 작업 스레드에서 PDFium으로 페이지를 렌더링하고 시각적 변경 영역을 계산합니다. Python 브리지는 캐시된 PDF의 경로와 문서 정보를 전달합니다. 브라우저 UI의 페이지 미리보기에는 Poppler의 `pdftoppm`가 필요합니다. LibreOffice의 `soffice`는 PATH와 일반 설치 경로에서 찾습니다. HWP/HWPX는 [rhwp](https://github.com/edwardkim/rhwp)의 `rhwp` 실행 파일을 PATH나 `data/tools/rhwp/rhwp`에 둡니다. 도구 경로는 `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, `DOCVERS_RHWP`로 직접 지정할 수 있습니다.
 

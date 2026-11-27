@@ -5,8 +5,9 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+from browser_viewer import viewer_url
 from delimited import aligned_rows, key_columns, lines as table_lines, table_rows
-from desktop_link import desktop_url, document_path
+from desktop_link import checked_document_path, desktop_url, document_path
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch, find_document, initialize, new_branch,
@@ -119,6 +120,23 @@ def read_version(document_id: int, version_id: int, offset: Offset = 0,
     text = item["extracted"]
     return {"version": metadata(item), "text": text[offset:offset + length],
             "next_offset": offset + length if offset + length < len(text) else None}
+
+
+@server.tool(structured_output=True)
+def open_browser_view(document_id: int | None = None, version_id: int | None = None,
+                      base_version_id: int | None = None, target_version_id: int | None = None,
+                      branch: str | None = None, page: int | None = None, change: int | None = None,
+                      sheet: str | None = None, cell: str | None = None,
+                      row_key: str | None = None) -> dict[str, str]:
+    """Start or reuse GitDoc's loopback viewer and return a URL for a browser on this computer.
+
+    Omit document_id for the library. Use version_id for one version or base_version_id
+    and target_version_id for comparison. The tool does not open a browser or edit a document.
+    """
+    path = checked_document_path(document_id, version=version_id, base=base_version_id,
+                                 target=target_version_id, branch=branch, page=page, change=change,
+                                 sheet=sheet, cell=cell, row_key=row_key)
+    return {"browser_url": viewer_url(path)}
 
 
 @server.tool(annotations=read_only, structured_output=True)
