@@ -1,6 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod bridge;
+mod pages;
 mod screen;
 
 use eframe::egui;

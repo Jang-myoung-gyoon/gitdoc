@@ -1,16 +1,11 @@
 """Local JSON-lines interface for the native GitDoc window."""
 
-import base64
-import io
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
-from functools import lru_cache
 from pathlib import Path
 
-import pypdfium2 as pdfium
-from PIL import Image, ImageChops
+import pypdfium2_raw
 
 from editing import read_pdf_notes
 from preview import page_sizes, preview_path
@@ -87,102 +82,25 @@ def view(doc, ids, mode="auto"):
             previews = list(workers.map(inspect_preview, records))
     else:
         previews = [inspect_preview(record) for record in records]
-    counts, faults = map(list, zip(*previews))
-    return dict(result, pages=max(counts, default=0), counts=counts, faults=faults)
+    counts, faults, paths = map(list, zip(*previews))
+    return dict(result, pages=max(counts, default=0), counts=counts, faults=faults, paths=paths,
+                pdfium_directory=str(Path(pypdfium2_raw.__file__).resolve().parent),
+                pdf_notes=len(records) == 1 and records[0]["extension"] == "pdf")
 
 
 def inspect_preview(record):
     try:
-        return len(page_sizes(page_path(record))), ""
+        path = page_path(record)
+        return len(page_sizes(path)), "", str(path)
     except Exception as error:
-        return 0, str(error)
+        return 0, str(error), None
 
 
-@lru_cache(maxsize=16)
-def pixels(path, number):
-    if number > len(page_sizes(path)):
-        return None
-    with pdfium.PdfDocument(path) as document:
-        with closing(document[number - 1]) as page:
-            scale = min(4, 1350 / max(page.get_size()))
-            with closing(page.render(scale=scale)) as bitmap:
-                return bitmap.to_pil().convert("RGB").copy()
-
-
-def regions(before, after):
-    if before is None or after is None or before.size != after.size:
-        return [[0, 0, 1, 1]] if before is not None or after is not None else []
-    width, height = before.size
-    tile = 28
-    cols, rows = (width + tile - 1) // tile, (height + tile - 1) // tile
-    red, green, blue = ImageChops.difference(before, after).split()
-    mask = ImageChops.lighter(ImageChops.lighter(red, green), blue).point(lambda value: 255 if value >= 28 else 0)
-    pad = Image.new("L", (cols * tile, rows * tile))
-    pad.paste(mask)
-    points = {(x, y) for y in range(rows) for x in range(cols)
-              if pad.crop((x*tile, y*tile, (x+1)*tile, (y+1)*tile)).getbbox()}
-    result = []
-    while points and len(result) < 160:
-        x, y = min(points, key=lambda point: (point[1], point[0]))
-        points.remove((x, y))
-        pending = [(x, y)]
-        left = right = x
-        top = bottom = y
-        for cx, cy in pending:
-            left, right = min(left, cx), max(right, cx)
-            top, bottom = min(top, cy), max(bottom, cy)
-            for px in range(cx-1, cx+2):
-                for py in range(cy-1, cy+2):
-                    if (px, py) in points:
-                        points.remove((px, py))
-                        pending.append((px, py))
-        result.append([left*tile/width, top*tile/height, min(1,(right+1)*tile/width),
-                       min(1,(bottom+1)*tile/height)])
-    return result
-
-
-def page_images(records, number):
-    images = []
-    for record in records:
-        try:
-            images.append(pixels(page_path(record), number))
-        except Exception:
-            images.append(None)
-    return images
-
-
-def encoded_image(image):
-    if image is None:
-        return None
-    buffer = io.BytesIO()
-    image.save(buffer, "PNG", optimize=False)
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
-
-
-def page(doc, ids, number, comparable=True):
-    records = versions(doc, ids)
-    images = page_images(records, number)
-    notes = []
-    if len(records) == 1 and records[0]["extension"] == "pdf":
-        try:
-            notes = read_pdf_notes(content(doc, ids[0]), number)
-        except Exception:
-            pass
-    return {"images": [encoded_image(image) for image in images], "notes": notes,
-            "regions": regions(*images) if len(images) == 2 and comparable else []}
-
-
-def changes(doc, ids, counts):
-    records = versions(doc, ids)
-    if len(records) != 2 or not all(counts):
+def page_notes(doc, version, number):
+    try:
+        return read_pdf_notes(content(doc, version), number)
+    except Exception:
         return []
-    found = []
-    for index in range(1, max(counts) + 1):
-        images = page_images(records, index)
-        if all(image is not None or index > count for image, count in zip(images, counts)):
-            for change in range(len(regions(*images))):
-                found.append([index, change])
-    return found
 
 
 def register(file, title):
@@ -225,7 +143,7 @@ def restore(doc, branch, version, base, reason):
 
 OPERATIONS = {
     "library": library, "detail": detail, "branch_compare": branch_comparison,
-    "view": view, "page": page, "changes": changes, "register": register,
+    "view": view, "page_notes": page_notes, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "review": review,
     "restore": restore, "save": save_file, "merge": merge,
 }

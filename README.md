@@ -44,7 +44,7 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 | DOCX, PPT, PPTX | Convert to PDF with LibreOffice |
 | XLS, XLSX | Compare cell values, merges, and some formatting by sheet and address. Print-layout preview is also available. |
 
-The native app renders pages with PDFium. The browser preview uses Poppler's `pdftoppm`. LibreOffice's `soffice` can be found on PATH or in standard installation locations. For Hangul files, install the [rhwp](https://github.com/edwardkim/rhwp) executable on PATH or at `data/tools/rhwp/rhwp` (`rhwp.exe` on Windows). Use `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, and `DOCVERS_RHWP` to supply explicit tool paths.
+The native app renders pages with PDFium and computes visual changes in its Rust worker. The Python bridge supplies cached PDF paths and document metadata. The browser preview uses Poppler's `pdftoppm`. LibreOffice's `soffice` can be found on PATH or in standard installation locations. For Hangul files, install the [rhwp](https://github.com/edwardkim/rhwp) executable on PATH or at `data/tools/rhwp/rhwp` (`rhwp.exe` on Windows). Use `DOCVERS_PDFTOPPM`, `DOCVERS_SOFFICE`, and `DOCVERS_RHWP` to supply explicit tool paths.
 
 GitDoc compares pages by page number, so inserting a page can flag later pages as changed. Hangul and Office layout depends on the converter and installed fonts. The spreadsheet view shows values and XLSX formulas, with differences in cell values, merged ranges, and some formatting. Use print-layout preview to review charts and printed pages. Original downloads are available for encrypted files or files that fail to render.
 

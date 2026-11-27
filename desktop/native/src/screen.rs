@@ -2,7 +2,6 @@ use crate::{
     Destination,
     bridge::{Bridge, Message, Reply},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
 use eframe::egui::*;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -248,7 +247,9 @@ impl GitDoc {
         self.request(
             "page",
             self.frame,
-            json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable}),
+            json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable,
+                "paths":self.pane.data["paths"],"pdfium_directory":self.pane.data["pdfium_directory"],
+                "pdf_notes":self.pane.data["pdf_notes"]}),
         );
     }
 
@@ -391,25 +392,14 @@ impl GitDoc {
                 }
             }
             "page" => {
-                self.pane.textures = rows(&result["images"])
-                    .iter()
+                self.pane.textures = reply
+                    .images
+                    .into_iter()
                     .enumerate()
-                    .map(|(side, data)| {
-                        let encoded = data.as_str()?;
-                        let decoded = STANDARD.decode(encoded).ok()?;
-                        let image =
-                            image::load_from_memory_with_format(&decoded, image::ImageFormat::Png)
-                                .ok()?
-                                .to_rgba8();
-                        let color = ColorImage::from_rgba_unmultiplied(
-                            [image.width() as usize, image.height() as usize],
-                            image.as_raw(),
-                        );
-                        Some(ctx.load_texture(
-                            format!("page-{side}"),
-                            color,
-                            TextureOptions::LINEAR,
-                        ))
+                    .map(|(side, image)| {
+                        image.map(|color| {
+                            ctx.load_texture(format!("page-{side}"), color, TextureOptions::LINEAR)
+                        })
                     })
                     .collect();
                 self.pane.regions =
@@ -887,7 +877,8 @@ impl GitDoc {
         self.request(
             "changes",
             self.epoch,
-            json!({"doc":self.doc,"ids":self.ids,"counts":self.pane.data["counts"]}),
+            json!({"counts":self.pane.data["counts"], "paths":self.pane.data["paths"],
+                "pdfium_directory":self.pane.data["pdfium_directory"]}),
         );
     }
     fn seek_pages(&mut self, last: (usize, Option<usize>), forward: bool) {

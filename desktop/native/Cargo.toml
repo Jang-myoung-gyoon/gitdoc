@@ -6,8 +6,10 @@ license = "MIT"
 
 [dependencies]
 eframe = { version = "0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
-base64 = "0.22.1"
-image = { version = "0.25", default-features = false, features = ["png"] }
+pdfium-render = { version = "0.9.6", default-features = false, features = ["pdfium_8125"] }
 rfd = "0.15.4"
 serde_json = "1"
 url = "2.5"
+
+[profile.dev.package.gitdoc-desktop]
+opt-level = 2
