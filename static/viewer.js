@@ -29,7 +29,7 @@ function comparePixels(left, right) {
 }
 
 function changeRegions(result) {
-  const { counts, columns, tileSize } = result;
+  const { counts, columns, tileSize, width, height } = result;
   const visited = new Uint8Array(counts.length);
   const regions = [];
   for (let tile = 0; tile < counts.length; tile += 1) {
@@ -57,16 +57,74 @@ function changeRegions(result) {
         }
       }
     }
-    regions.push({
-      x: bounds.left * tileSize, y: bounds.top * tileSize,
-      width: (bounds.right - bounds.left + 1) * tileSize,
-      height: (bounds.bottom - bounds.top + 1) * tileSize
-    });
+    regions.push([bounds.left * tileSize, bounds.top * tileSize,
+      Math.min((bounds.right + 1) * tileSize, width),
+      Math.min((bounds.bottom + 1) * tileSize, height)]);
   }
-  return regions;
+  return compactRegions(regions, width, height);
 }
 
-function showMarks(sides, result, highlight, selected) {
+function boundingBox(a, b) {
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+}
+
+function area([left, top, right, bottom]) {
+  return Math.max(0, right - left) * Math.max(0, bottom - top);
+}
+
+function coveredArea(regions) {
+  const edges = [...new Set(regions.flatMap(r => [r[0], r[2]]))].sort((a, b) => a - b);
+  let total = 0;
+  for (let i = 1; i < edges.length; i += 1) {
+    const spans = regions.filter(r => r[0] < edges[i] && r[2] > edges[i - 1])
+      .sort((a, b) => a[1] - b[1]);
+    let end = 0;
+    let height = 0;
+    for (const [, top, , bottom] of spans) {
+      height += Math.max(0, bottom - Math.max(top, end));
+      end = Math.max(end, bottom);
+    }
+    total += (edges[i] - edges[i - 1]) * height;
+  }
+  return total;
+}
+
+function compactRegions(regions, width, height) {
+  const binsPerAxis = 8;
+  // Limit the pair search for pages with many isolated marks.
+  if (regions.length > binsPerAxis ** 2) {
+    const bins = [];
+    for (const r of regions) {
+      const x = Math.floor((r[0] + r[2]) * binsPerAxis / (width * 2));
+      const y = Math.floor((r[1] + r[3]) * binsPerAxis / (height * 2));
+      const index = y * binsPerAxis + x;
+      bins[index] = bins[index] ? boundingBox(bins[index], r) : r;
+    }
+    regions = bins.filter(Boolean);
+  }
+  while (regions.length > 7) {
+    let best = Infinity;
+    let pair;
+    for (let i = 0; i < regions.length; i += 1) {
+      for (let j = i + 1; j < regions.length; j += 1) {
+        const a = regions[i], b = regions[j];
+        const overlap = area([Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])]);
+        const added = area(boundingBox(a, b)) - (area(a) + area(b) - overlap);
+        if (added < best) {
+          best = added;
+          pair = [i, j];
+        }
+      }
+    }
+    const [i, j] = pair;
+    regions[i] = boundingBox(regions[i], regions[j]);
+    regions.splice(j, 1);
+  }
+  if (coveredArea(regions) * 5 >= width * height * 4) return [[0, 0, width, height]];
+  return regions.sort((a, b) => a[1] - b[1] || a[0] - b[0] || a[3] - b[3] || a[2] - b[2]);
+}
+
+function showMarks(sides, result, regions, highlight, selected) {
   sides.forEach(({ canvas }, side) => {
     canvas.hidden = !result || (!highlight && !selected);
     if (canvas.hidden) return;
@@ -75,20 +133,21 @@ function showMarks(sides, result, highlight, selected) {
     const context = canvas.getContext('2d');
     if (highlight) {
       context.fillStyle = side === 0 ? 'rgba(217, 48, 77, .23)' : 'rgba(30, 157, 89, .25)';
-      result.counts.forEach((count, index) => {
-        if (count >= 3) {
-          context.fillRect((index % result.columns) * result.tileSize,
-            Math.floor(index / result.columns) * result.tileSize, result.tileSize, result.tileSize);
-        }
-      });
+      context.beginPath();
+      for (const [left, top, right, bottom] of regions) {
+        context.rect(left, top, right - left, bottom - top);
+      }
+      context.fill();
     }
     if (selected) {
       const pad = 5;
       context.strokeStyle = '#1658b3';
       context.lineWidth = 4;
-      context.strokeRect(Math.max(2, selected.x - pad), Math.max(2, selected.y - pad),
-        Math.min(canvas.width - 4, selected.width + 2 * pad),
-        Math.min(canvas.height - 4, selected.height + 2 * pad));
+      const left = Math.max(2, selected[0] - pad);
+      const top = Math.max(2, selected[1] - pad);
+      const right = Math.min(canvas.width - 2, selected[2] + pad);
+      const bottom = Math.min(canvas.height - 2, selected[3] + pad);
+      context.strokeRect(left, top, right - left, bottom - top);
     }
   });
 }
@@ -210,7 +269,7 @@ async function mountViewer(root) {
 
   function drawMarks(number, state) {
     if (!comparable || !state?.pixels) return;
-    showMarks(state.rendered, state.pixels, highlight.checked && state.regions.length > 0,
+    showMarks(state.rendered, state.pixels, state.regions, highlight.checked && state.regions.length > 0,
       number === pageNumber ? state.regions[activeRegion] : null);
   }
 
@@ -412,7 +471,7 @@ async function mountViewer(root) {
     if (region && state.pixels) {
       const image = state.rendered[0].image;
       const bounds = image.getBoundingClientRect();
-      setOffset(topOf(image) + (region.y + region.height / 2) * bounds.height / state.pixels.height - scroll.clientHeight / 2);
+      setOffset(topOf(image) + (region[1] + region[3]) * bounds.height / (2 * state.pixels.height) - scroll.clientHeight / 2);
     }
   }
 

@@ -6,6 +6,7 @@ use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 pub type PageImage = Arc<ColorImage>;
 pub type Region = [f32; 4];
+type Bounds = [usize; 4];
 
 pub struct Pages {
     pdfium: Pdfium,
@@ -106,7 +107,6 @@ pub fn regions(before: Option<&PageImage>, after: Option<&PageImage>) -> Vec<Reg
 
     const TILE: usize = 28;
     const THRESHOLD: u8 = 28;
-    const REGION_LIMIT: usize = 160;
 
     let [width, height] = before.size;
     let cols = width.div_ceil(TILE);
@@ -155,17 +155,103 @@ pub fn regions(before: Option<&PageImage>, after: Option<&PageImage>) -> Vec<Reg
                 }
             }
             result.push([
-                (left * TILE) as f32 / width as f32,
-                (top * TILE) as f32 / height as f32,
-                ((right + 1) * TILE).min(width) as f32 / width as f32,
-                ((bottom + 1) * TILE).min(height) as f32 / height as f32,
+                left * TILE,
+                top * TILE,
+                ((right + 1) * TILE).min(width),
+                ((bottom + 1) * TILE).min(height),
             ]);
-            if result.len() == REGION_LIMIT {
-                return result;
-            }
         }
     }
-    result
+    compact_regions(result, width, height)
+        .into_iter()
+        .map(|[left, top, right, bottom]| {
+            [
+                left as f32 / width as f32,
+                top as f32 / height as f32,
+                right as f32 / width as f32,
+                bottom as f32 / height as f32,
+            ]
+        })
+        .collect()
+}
+
+fn bounding_box(a: Bounds, b: Bounds) -> Bounds {
+    [
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ]
+}
+
+fn area([left, top, right, bottom]: Bounds) -> usize {
+    right.saturating_sub(left) * bottom.saturating_sub(top)
+}
+
+fn covered_area(regions: &[Bounds]) -> usize {
+    let mut edges: Vec<_> = regions.iter().flat_map(|r| [r[0], r[2]]).collect();
+    edges.sort_unstable();
+    edges.dedup();
+    edges
+        .windows(2)
+        .map(|strip| {
+            let mut spans: Vec<_> = regions
+                .iter()
+                .filter(|r| r[0] < strip[1] && r[2] > strip[0])
+                .map(|r| (r[1], r[3]))
+                .collect();
+            spans.sort_unstable();
+            let mut end = 0;
+            let height: usize = spans
+                .into_iter()
+                .map(|(top, bottom)| {
+                    let length = bottom.saturating_sub(top.max(end));
+                    end = end.max(bottom);
+                    length
+                })
+                .sum();
+            (strip[1] - strip[0]) * height
+        })
+        .sum()
+}
+
+fn compact_regions(mut regions: Vec<Bounds>, width: usize, height: usize) -> Vec<Bounds> {
+    const MAX_REGIONS: usize = 7;
+    const BINS: usize = 8;
+    // Limit the pair search for pages with many isolated marks.
+    if regions.len() > BINS * BINS {
+        let mut bins = [None; BINS * BINS];
+        for r in regions {
+            let x = (r[0] + r[2]) * BINS / (width * 2);
+            let y = (r[1] + r[3]) * BINS / (height * 2);
+            let slot = &mut bins[y * BINS + x];
+            *slot = Some(slot.map_or(r, |old| bounding_box(old, r)));
+        }
+        regions = bins.into_iter().flatten().collect();
+    }
+    while regions.len() > MAX_REGIONS {
+        let mut best = (usize::MAX, 0, 1);
+        for (i, &a) in regions.iter().enumerate() {
+            for (j, &b) in regions.iter().enumerate().skip(i + 1) {
+                let overlap = area([
+                    a[0].max(b[0]),
+                    a[1].max(b[1]),
+                    a[2].min(b[2]),
+                    a[3].min(b[3]),
+                ]);
+                let added = area(bounding_box(a, b)) - (area(a) + area(b) - overlap);
+                best = best.min((added, i, j));
+            }
+        }
+        let (_, i, j) = best;
+        regions[i] = bounding_box(regions[i], regions[j]);
+        regions.remove(j);
+    }
+    if covered_area(&regions) * 5 >= width * height * 4 {
+        return vec![[0, 0, width, height]];
+    }
+    regions.sort_unstable_by_key(|r| (r[1], r[0], r[3], r[2]));
+    regions
 }
 
 #[cfg(test)]
@@ -186,5 +272,27 @@ mod tests {
         );
         assert!(regions(Some(&base), Some(&base)).is_empty());
         assert_eq!(regions(None, Some(&base)), vec![[0.0, 0.0, 1.0, 1.0]]);
+    }
+
+    #[test]
+    fn merges_nearby_boxes_without_discarding_changes() {
+        let mut boxes = vec![[4, 4, 8, 8], [10, 4, 14, 8]];
+        boxes.extend((1..=6).map(|i| [20 * i, 40, 20 * i + 4, 44]));
+        let compacted = compact_regions(boxes.clone(), 150, 100);
+        assert_eq!(compacted.len(), 7);
+        assert_eq!(compacted[0], [4, 4, 14, 8]);
+        assert!(
+            boxes
+                .into_iter()
+                .all(|b| compacted.iter().any(|&r| bounding_box(b, r) == r))
+        );
+    }
+
+    #[test]
+    fn counts_overlaps_once_and_marks_exactly_eighty_percent_as_a_full_page() {
+        let boxes = vec![[0, 0, 60, 100], [40, 0, 79, 100]];
+        assert_eq!(compact_regions(boxes.clone(), 100, 100), boxes);
+        let boxes = vec![[0, 0, 60, 100], [40, 0, 80, 100]];
+        assert_eq!(compact_regions(boxes, 100, 100), vec![[0, 0, 100, 100]]);
     }
 }
