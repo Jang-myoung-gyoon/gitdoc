@@ -18,6 +18,7 @@ from desktop.document_objects import (
 )
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
+from desktop.hangul_format import OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
 from desktop.shape_editor import apply_shape, prepare_legacy_shapes, shape_catalog
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
 from page_text import embedded_text
@@ -251,6 +252,8 @@ class PagedEditor:
         self.tables = []
         self.shapes = []
         self.shape_xml = None
+        self.hangul_formatting = set()
+        self.hangul_fonts = []
         self.hwp_shapes_allowed = True
         if extension == "hwp":
             with olefile.OleFileIO(io.BytesIO(data)) as document:
@@ -277,6 +280,7 @@ class PagedEditor:
         width, height = sizes[number-1]
         texts, locations, anchor = self.texts, self.locations, self.hangul_anchor
         shapes, shape_xml = self.shapes, self.shape_xml
+        formatting, hangul_fonts = self.hangul_formatting, self.hangul_fonts
         changed = key != self.current_key
         with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
             folder = Path(work)
@@ -287,7 +291,8 @@ class PagedEditor:
                     content = hangul_xml(source)
                     texts = dict(hwp_paragraphs(content))
                     shapes = shape_catalog(content, hangul=True) if self.hwp_shapes_allowed else []
-                    shape_xml = content if shapes and extension == "hwp" else None
+                    formatting, hangul_fonts = formatting_catalog(content) if self.hwp_shapes_allowed else (set(), [])
+                    shape_xml = content if (shapes or formatting) and extension == "hwp" else None
                 placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number-1), "--json"], folder))["pages"][0]
                 section = placement["section"]
                 anchor = next(
@@ -297,6 +302,9 @@ class PagedEditor:
                      and (section, item["paraIndex"]) in texts),
                     (section, 0) if count == 1 and (section, 0) in texts else None)
                 objects, tables = hwp_locations(source, number, placement, texts)
+                for item in objects:
+                    identity = item["id"]
+                    item["hangul_format"] = (identity >> 32, (identity & 0xffffffff) - 1) in formatting
             else:
                 if changed:
                     locations = word_locations(data, pdf, count)
@@ -313,8 +321,9 @@ class PagedEditor:
         self.page_count = count
         self.tables, self.shapes, self.shape_xml = tables, shapes, shape_xml
         self.texts, self.locations, self.hangul_anchor = texts, locations, anchor
+        self.hangul_formatting, self.hangul_fonts = formatting, hangul_fonts
         return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
-                "objects": objects, "tables": tables, "shapes": shapes, "image": str(png), "fonts": fonts}
+                "objects": objects, "tables": tables, "shapes": shapes, "hangul_fonts": hangul_fonts, "image": str(png), "fonts": fonts}
 
     def page(self, number, operation=None, text_edit=None, target=None, value=None, **_):
         index = self.position
@@ -342,6 +351,15 @@ class PagedEditor:
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
 
     def apply(self, source, operation, text_edit, target, value):
+        if self.extension in HANGUL_EXTENSIONS and operation in HANGUL_FORMATS:
+            identity = (target or {}).get("id")
+            if text_edit or type(identity) is not int or not any(item["id"] == identity and item.get("hangul_format")
+                                                                 for item in self.page_objects):
+                raise ValueError("본문 입력을 먼저 저장하고, 서식을 적용할 문단을 선택하세요.")
+            section, paragraph = identity >> 32, (identity & 0xffffffff) - 1
+            data = self.shape_xml if self.extension == "hwp" else source
+            changed = format_paragraph(data, section, paragraph, operation, value)
+            return convert_format("hwpx", "hwp", changed) if self.extension == "hwp" else changed
         if operation in SHAPE_EDITS:
             address = value.get("address") if isinstance(value, dict) else None
             if (text_edit or not isinstance(address, list) or len(address) != 2

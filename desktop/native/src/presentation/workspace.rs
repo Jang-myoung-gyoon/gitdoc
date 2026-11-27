@@ -613,6 +613,24 @@ mod tests {
     }
 
     #[test]
+    fn hangul_formatting_tab_routes_a_narrow_toolbar_click_to_the_selected_paragraph() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.objects[0].hangul_format = true;
+        editor.selected = Some(editor.objects[0].target);
+        frame(&ctx, &mut editor, size, vec![]);
+        let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+        let tabs = find_text(&ui.shapes, "서식");
+        assert!(click(&ctx, &mut editor, size, tabs).is_none());
+        let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+        let bold = find_text(&ui.shapes, "B 진하게");
+        assert!(matches!(click(&ctx, &mut editor, size, bold),
+            Some(Command::Page(params)) if params["operation"] == "bold"
+                && params["target"]["id"] == 1));
+    }
+
+    #[test]
     fn table_toolbar_selects_and_deletes_one_table() {
         for (format, menu_name, address) in [
             (Format::Hangul, "기존 표", vec![0, 3, 2]),

@@ -1,3 +1,4 @@
+mod hangul_ribbon;
 mod shape_tools;
 mod workspace;
 
@@ -45,6 +46,7 @@ struct Object {
     text: Option<String>,
     name: String,
     align: Vec<String>,
+    hangul_format: bool,
     fonts: Vec<Span>,
     baselines: Vec<(usize, f32, f32)>,
     font_reference: String,
@@ -62,6 +64,7 @@ impl Object {
             parent: value["parent"].as_u64(),
             text: value["text"].as_str().map(str::to_owned),
             name: value["name"].as_str().unwrap_or("").to_owned(),
+            hangul_format: value["hangul_format"] == true,
             align: serde_json::from_value(value["align"].clone()).unwrap_or_default(),
             fonts: serde_json::from_value(value["fonts"].clone()).unwrap_or_default(),
             baselines: serde_json::from_value(value["baselines"].clone()).unwrap_or_default(),
@@ -141,6 +144,8 @@ pub struct Editor {
     page_shapes: Vec<PageShape>,
     selected_shape: Option<usize>,
     shape_size: [u32; 2],
+    hangul_tab: hangul_ribbon::HangulTab,
+    hangul_fonts: Vec<String>,
     edit_digest: String,
     selected_table: Option<usize>,
     reveal_table: bool,
@@ -191,6 +196,8 @@ impl Editor {
             page_shapes: Vec::new(),
             selected_shape: None,
             shape_size: [0, 0],
+            hangul_tab: Default::default(),
+            hangul_fonts: Vec::new(),
             edit_digest: String::new(),
             selected_table: None,
             reveal_table: false,
@@ -258,6 +265,8 @@ impl Editor {
                 .iter()
                 .any(|item| item.target.id == *id && item.parent.is_none())
         });
+        self.hangul_fonts =
+            serde_json::from_value(result["hangul_fonts"].clone()).unwrap_or_default();
         self.page_tables = serde_json::from_value(result["tables"].clone()).unwrap_or_default();
         self.page_shapes = serde_json::from_value(result["shapes"].clone()).unwrap_or_default();
         self.selected_shape = None;
@@ -550,6 +559,9 @@ impl Editor {
     }
 
     fn tool(&mut self, ui: &mut Ui) -> Option<(&'static str, Value)> {
+        if self.format == Format::Hangul {
+            return self.hangul_tools(ui);
+        }
         let mut action = None;
         let text = self.selected.is_some_and(|target| {
             self.objects
@@ -602,9 +614,6 @@ impl Editor {
                     || action = Some(("paste", Value::Null)),
                 );
                 ui.separator();
-                if self.format == Format::Hangul {
-                    return;
-                }
                 ui.add_enabled_ui(text, |ui| {
                     let font_button = ui.add_sized(
                         [140.0, ui.spacing().interact_size.y],
@@ -986,7 +995,7 @@ impl Editor {
             self.focus_reason = true;
             ctx.request_repaint();
         }
-        if self.selected.is_some() && self.format != Format::Hangul {
+        if self.selected.is_some() && (self.format != Format::Hangul || self.can_format_hangul()) {
             for (key, tool) in [(Key::B, "bold"), (Key::I, "italic"), (Key::U, "underline")] {
                 if consume(Modifiers::COMMAND, key) && self.text.is_some() {
                     return Some((tool, Value::Null));
