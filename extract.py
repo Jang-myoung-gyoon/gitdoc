@@ -1,4 +1,5 @@
 import io
+import os
 import posixpath
 import re
 import subprocess
@@ -125,10 +126,18 @@ def extract(extension, data):
             source = folder / f"document.{extension}"
             source.write_bytes(data)
             if extension == "hwp":
-                command = Path(sys.executable).with_name("hwp5txt")
-                result = subprocess.run([str(command), str(source)], capture_output=True,
-                                        check=True, timeout=20)
-                yield from result.stdout.decode("utf-8").splitlines()
+                command = Path(sys.executable).with_name("hwp5txt.exe" if os.name == "nt" else "hwp5txt")
+                try:
+                    result = subprocess.run([str(command), str(source)], capture_output=True,
+                                            check=True, timeout=20)
+                except (OSError, subprocess.SubprocessError):
+                    from preview import rhwp_command, run_converter
+
+                    output = folder / "document.hwpx"
+                    run_converter([rhwp_command(), "export-hwpx", str(source), str(output)], folder)
+                    yield from office_lines("hwpx", output.read_bytes())
+                else:
+                    yield from result.stdout.decode("utf-8").splitlines()
             else:
                 from preview import BUNDLED_BIN, executable, office_profile, run_converter
 
