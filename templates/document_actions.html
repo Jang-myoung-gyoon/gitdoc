@@ -69,6 +69,9 @@
         <span class="subtle small">{{ v.branch_name }}{% if before and v.id == before.id %} · 기준본{% endif %}</span><time datetime="{{ v.created_at.replace(' ', 'T') }}Z">{{ v.created_at|local_time }}</time>
       </div>
       <p class="reason">{{ v.reason }}</p>
+      {% if v.page_insert_count %}
+      <p class="small">GitDoc 편집 기록 · {{ v.page_insert_before }}쪽부터 {{ v.page_insert_count }}장 삽입</p>
+      {% endif %}
       <p class="subtle small filename">{{ v.filename }}</p>
       {% if v.review_note %}<p class="small"><strong>검토 의견</strong> {{ v.review_note }}</p>{% endif %}
       {% if v.restored_from %}<p class="subtle small">{{ v.restored_version_label }}에서 복원</p>{% endif %}

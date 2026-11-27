@@ -7,6 +7,8 @@ from threading import Lock
 
 from pypdfium2 import PdfDocument, PdfiumError
 
+from store import ANCESTORS, database, find_version
+
 _pdfium = Lock()
 
 
@@ -89,6 +91,31 @@ def near_page_keys(before, after, left, a, right, b):
     return left_keys, right_keys
 
 
+def matching_blocks(before, after):
+    if len(before) * len(after) > 250_000:
+        yield from SequenceMatcher(None, before, after, autojunk=False).get_matching_blocks()
+        return
+    width = len(after)
+    lengths = [[0] * (width + 1) for _ in range(len(before) + 1)]
+    for i in range(len(before) - 1, -1, -1):
+        row, below = lengths[i], lengths[i + 1]
+        for j in range(width - 1, -1, -1):
+            row[j] = 1 + below[j + 1] if before[i] == after[j] else max(below[j], row[j + 1])
+    i = j = 0
+    while i < len(before) and j < width:
+        if before[i] == after[j]:
+            left, right = i, j
+            while i < len(before) and j < width and before[i] == after[j]:
+                i += 1
+                j += 1
+            yield left, right, i - left
+        elif lengths[i + 1][j] >= lengths[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    yield len(before), width, 0
+
+
 def match_pages(before, after, *, renders=None):
     # Give unreadable pages unique keys so they never anchor an alignment.
     keys = [[key if key is not None else (side, index) for index, key in enumerate(versions)]
@@ -101,7 +128,7 @@ def match_pages(before, after, *, renders=None):
         return [[after, before] for before, after in deleted]
     pairs = []
     left = right = 0
-    for a, b, size in SequenceMatcher(None, *keys, autojunk=False).get_matching_blocks():
+    for a, b, size in matching_blocks(*keys):
         # Without an unchanged anchor inside a gap, compare its common span as edits.
         if renders and a > left and b > right:
             gap = match_pages(*near_page_keys(*renders, left, a, right, b))
@@ -115,13 +142,101 @@ def match_pages(before, after, *, renders=None):
     return pairs
 
 
-def aligned_pages(paths, counts):
-    if len(paths) != 2 or not all(paths) or paths[0] == paths[1]:
-        return positional_pages(counts)
+def aligned_pages(paths, counts, *, keep=None):
+    fallback = counts if keep is None else list(map(len, keep))
+    if len(paths) != 2 or not all(paths) or (paths[0] == paths[1] and keep is None):
+        return positional_pages(fallback)
     try:
         before, after = (fingerprints(path) for path in paths)
     except (PdfiumError, OSError, ValueError):
-        return positional_pages(counts)
+        return positional_pages(fallback)
     if [len(before), len(after)] != list(counts):
-        return positional_pages(counts)
+        return positional_pages(fallback)
+    if keep is not None:
+        before, after = (tuple(pages[i - 1] for i in selected)
+                         for pages, selected in zip((before, after), keep))
     return match_pages([key for key, _ in before], [key for key, _ in after], renders=(before, after))
+
+
+def page_lineage(db, document_id, version_id, count):
+    steps = []
+    fields = "id, sha256, base_id, restored_from, merge_parent_id, page_base_count, page_insert_before, page_insert_count"
+    current = find_version(db, document_id, version_id, fields)
+    while current:
+        parent = None
+        base, inserted = current["page_base_count"], current["page_insert_count"]
+        start = current["page_insert_before"]
+        if (base and inserted is not None and count == base + inserted
+                and (inserted == 0 or start and 1 <= start <= base + 1)):
+            parent = find_version(db, document_id, current["base_id"], fields)
+            if parent:
+                if inserted:
+                    steps.append((current["id"], start, inserted))
+                count = base
+        if parent is None:
+            for candidate in (current["restored_from"], current["base_id"], current["merge_parent_id"]):
+                old = find_version(db, document_id, candidate, fields) if candidate else None
+                if old and old["sha256"] == current["sha256"]:
+                    parent = old
+                    break
+        if parent is None:
+            break
+        current = parent
+    root = (current["id"] if current else version_id, count)
+    pages = [(root[0], i) for i in range(1, count + 1)]
+    for version, start, inserted in reversed(steps):
+        pages[start - 1:start - 1] = [(version, i) for i in range(1, inserted + 1)]
+    return root, pages
+
+
+def with_recorded_gaps(pairs, keep, counts):
+    result = []
+    source = []
+    next_page = [1, 1]
+    for pair in [*pairs, [len(keep[0]) + 1, len(keep[1]) + 1]]:
+        mapped = [keep[side][i - 1] if i and i <= len(keep[side]) else None for side, i in enumerate(pair)]
+        for side, index in enumerate(pair):
+            if index is None:
+                continue
+            stop = mapped[side] or counts[side] + 1
+            for number in range(next_page[side], stop):
+                result.append([number, None] if side == 0 else [None, number])
+                source.append("recorded")
+            next_page[side] = stop + 1
+        if any(mapped):
+            result.append(mapped)
+            source.append("inferred" if None in mapped else None)
+    return result, source
+
+
+def comparison_pages(document_id, ids, paths, counts):
+    if len(ids) != 2 or not all(paths):
+        pairs = aligned_pages(paths, counts)
+        return pairs, [None] * len(pairs)
+    with database(readonly=True) as db:
+        (left, before), (right, after) = [page_lineage(db, document_id, version, count)
+                                         for version, count in zip(ids, counts)]
+        if left == right:
+            pairs, previous_left, previous_right = [], 0, 0
+            # Page identities from the same source stay ordered through recorded edits.
+            right_positions = {key: i for i, key in enumerate(after)}
+            shared = [(i, right_positions[key]) for i, key in enumerate(before) if key in right_positions]
+            for i, j in [*shared, (len(before), len(after))]:
+                pairs.extend([page + 1, None] for page in range(previous_left, i))
+                pairs.extend([None, page + 1] for page in range(previous_right, j))
+                if i < len(before):
+                    pairs.append([i + 1, j + 1])
+                previous_left, previous_right = i + 1, j + 1
+            return pairs, ["recorded" if None in pair else None for pair in pairs]
+        keep = []
+        for side, (root, pages) in enumerate(((left, before), (right, after))):
+            opposite = ids[1 - side]
+            inserted = {version for version, _ in pages if version != root[0]}
+            forced = {version for version in inserted if db.execute(
+                ANCESTORS + "SELECT 1 FROM ancestors WHERE id = ?", (version, opposite)).fetchone()}
+            keep.append([i for i, (version, _) in enumerate(pages, 1) if version not in forced])
+    if list(map(len, keep)) == list(counts):
+        pairs = aligned_pages(paths, counts)
+        return pairs, ["inferred" if None in pair else None for pair in pairs]
+    pairs = aligned_pages(paths, counts, keep=keep)
+    return with_recorded_gaps(pairs, keep, counts)

@@ -310,18 +310,46 @@ def read_pdf_notes(data, page_number):
     return notes
 
 
-def update_pdf(data, page_number, operation, note):
+def edit_pdf(data, fields, source=None):
+    try:
+        page_number = int(fields.get("page", ""))
+    except (ValueError, TypeError):
+        page_number = 0
+    try:
+        return update_pdf(data, page_number, fields.get("operation"),
+                          valid_text(fields.get("note", ""), 1000, multiline=True), source)
+    except (PyPdfError, RecursionError, OSError, KeyError) as error:
+        raise ValueError("PDF 구조를 읽을 수 없습니다. 원본을 확인하세요.") from error
+
+
+def update_pdf(data, page_number, operation, note, source=None):
     reader = PdfReader(io.BytesIO(data))
     if reader.is_encrypted or any(field.get("/FT") == "/Sig" and field.get("/V")
                                   for field in (reader.get_fields() or {}).values()):
         raise ValueError("암호가 걸렸거나 서명된 PDF입니다.")
-    if not 1 <= page_number <= len(reader.pages):
+    base_count = len(reader.pages)
+    if not 1 <= page_number <= base_count + (operation == "insert"):
         raise ValueError("PDF 페이지 번호를 확인하세요.")
     writer = PdfWriter(clone_from=reader)
-    page = writer.pages[page_number - 1]
-    if operation in ("left", "right"):
+    inserted = 0
+    if operation == "insert":
+        if source is None:
+            reference = writer.pages[min(page_number, base_count) - 1]
+            box = reference.mediabox
+            writer.insert_blank_page(float(box.width), float(box.height), index=page_number - 1).rotate(reference.rotation)
+            inserted = 1
+        else:
+            incoming = PdfReader(io.BytesIO(source))
+            if incoming.is_encrypted or not incoming.pages:
+                raise ValueError("암호가 없고 페이지가 있는 PDF를 선택하세요.")
+            inserted = len(incoming.pages)
+            for offset, page in enumerate(incoming.pages):
+                writer.insert_page(page, index=page_number - 1 + offset)
+    elif operation in ("left", "right"):
+        page = writer.pages[page_number - 1]
         page.rotate(90 if operation == "right" else -90)
     elif operation == "note" and note.strip():
+        page = writer.pages[page_number - 1]
         box = page.cropbox
         left, top = float(box.left), float(box.top)
         width, height = min(26, float(box.width)), min(26, float(box.height))
@@ -330,7 +358,7 @@ def update_pdf(data, page_number, operation, note):
         raise ValueError("PDF 작업을 선택하거나 메모 내용을 입력하세요.")
     output = io.BytesIO()
     writer.write(output)
-    return output.getvalue()
+    return output.getvalue(), (base_count, page_number if inserted else None, inserted)
 
 
 def modify_document(extension, data, fields, max_file):
@@ -349,12 +377,7 @@ def modify_document(extension, data, fields, max_file):
                                fields.get("value_kind"), valid_text(fields.get("value", ""), 10000,
                                                                   multiline=True))
         if kind == "page":
-            try:
-                number = int(fields.get("page", ""))
-            except (ValueError, TypeError):
-                number = 0
-            return update_pdf(data, number, fields.get("operation"),
-                              valid_text(fields.get("note", ""), 1000, multiline=True))
+            return edit_pdf(data, fields)[0]
     except (BadZipFile, KeyError, etree.XMLSyntaxError, PyPdfError, OSError, RecursionError) as error:
         raise ValueError("문서 구조를 읽을 수 없습니다. 원본을 확인하세요.") from error
     raise ValueError("이 형식의 내장 편집을 지원하지 않습니다.")

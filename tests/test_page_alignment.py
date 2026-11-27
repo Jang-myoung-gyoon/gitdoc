@@ -6,7 +6,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject
 
 from extract import comparison_text
-from page_alignment import aligned_pages, match_pages
+from page_alignment import aligned_pages, match_pages, matching_blocks
 
 
 def write_pdf(path, offsets):
@@ -34,6 +34,9 @@ class PageAlignmentTests(unittest.TestCase):
     def test_duplicates_remain_in_order(self):
         self.assertEqual(match_pages(["a", "b", "a"], ["a", "a", "b", "a"]),
                          [[1, 1], [None, 2], [2, 3], [3, 4]])
+
+    def test_repeated_pages_keep_the_maximum_number_of_ordered_matches(self):
+        self.assertEqual(sum(size for _, _, size in matching_blocks("aaaaa", "abaaa")), 4)
 
     def test_an_edit_and_a_later_insertion_are_separate(self):
         self.assertEqual(match_pages(["a", "b", "c", "d"], ["a", "B", "c", "new", "d"]),

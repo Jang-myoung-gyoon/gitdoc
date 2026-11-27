@@ -748,12 +748,19 @@ impl GitDoc {
                         } else {
                             status(&version["status"])
                         };
-                        let label = format!(
+                        let mut label = format!(
                             "{}  ·  {}\n{}",
                             text(&version["version_label"]),
                             badge,
                             text(&version["reason"])
                         );
+                        let inserted = count(&version["page_insert_count"]);
+                        if inserted > 0 {
+                            label.push_str(&format!(
+                                "\nGitDoc 편집 기록 · {}쪽부터 {inserted}장 삽입",
+                                count(&version["page_insert_before"])
+                            ));
+                        }
                         if ui
                             .selectable_label(self.ids.last() == Some(&v), label)
                             .clicked()
@@ -1219,9 +1226,12 @@ impl GitDoc {
         if self.ids.len() != 2 || !rows(&self.pane.data["counts"]).iter().all(|n| count(n) > 0) {
             return None;
         }
-        match pair.as_slice() {
-            [None, Some(_)] => Some("삽입된 페이지"),
-            [Some(_), None] => Some("삭제된 페이지"),
+        let recorded = self.pane.data["sources"][number - 1] == "recorded";
+        match (pair.as_slice(), recorded) {
+            ([None, Some(_)], true) => Some("삽입 · GitDoc 편집 기록"),
+            ([Some(_), None], true) => Some("삭제 · GitDoc 편집 기록"),
+            ([None, Some(_)], false) => Some("삽입 · 자동 판정"),
+            ([Some(_), None], false) => Some("삭제 · 자동 판정"),
             _ => None,
         }
     }
@@ -1669,6 +1679,7 @@ impl GitDoc {
                                 .selected_text(match form.kind.as_str() {
                                     "note" => "메모 추가",
                                     "left" => "왼쪽 회전",
+                                    "insert" => "페이지 삽입",
                                     _ => "오른쪽 회전",
                                 })
                                 .show_ui(ui, |ui| {
@@ -1676,12 +1687,30 @@ impl GitDoc {
                                         ("right", "오른쪽 회전"),
                                         ("left", "왼쪽 회전"),
                                         ("note", "메모 추가"),
+                                        ("insert", "페이지 삽입"),
                                     ] {
                                         ui.selectable_value(&mut form.kind, key.into(), label);
                                     }
                                 });
                             if form.kind == "note" {
                                 ui.text_edit_multiline(&mut form.replacement);
+                            } else if form.kind == "insert" {
+                                ui.label("지정한 쪽 앞에 삽입합니다. 맨 뒤에 넣으려면 마지막 쪽 번호에 1을 더하세요.");
+                                if let Some(file) = &form.file {
+                                    ui.label(file.file_name().unwrap_or_default().to_string_lossy());
+                                } else {
+                                    ui.label("PDF를 선택하지 않으면 빈 페이지 한 장을 삽입합니다.");
+                                }
+                                ui.horizontal(|ui| {
+                                    if ui.button("삽입할 PDF 선택").clicked()
+                                        && let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).pick_file()
+                                    {
+                                        form.file = Some(path);
+                                    }
+                                    if form.file.is_some() && ui.button("파일 선택 해제").clicked() {
+                                        form.file = None;
+                                    }
+                                });
                             }
                         }
                     }
@@ -1758,7 +1787,9 @@ impl GitDoc {
                     "merge"
                 }
             };
-            if let Some(file) = &form.file {
+            if let Some(file) = &form.file
+                && (form.action != Action::Edit || form.kind == "insert")
+            {
                 args["file"] = json!(file);
             }
             if matches!(

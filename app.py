@@ -12,7 +12,7 @@ from delimited import aligned_rows, key_columns, lines as table_lines, sheet as 
 from editing import MODES, read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, EXTENSIONS, WORKBOOK_EXTENSIONS
-from page_alignment import aligned_pages
+from page_alignment import comparison_pages
 from preview import PreviewError, page_dimensions, preview_path, preview_png
 from workbook import read_workbook
 from uploads import MAX_FILE, MAX_FILE_MIB, prepare_upload
@@ -233,7 +233,9 @@ def edit_document(document_id):
         reason = request.form.get("reason", "").strip()
         if not 1 <= len(reason) <= 500:
             raise ValueError("변경 사유를 1~500자로 입력하세요.")
-        version_id = save_document_edit(document_id, name, base, request.form, reason)
+        uploaded = request.files.get("file")
+        source = read_upload() if uploaded and uploaded.filename else None
+        version_id = save_document_edit(document_id, name, base, request.form, reason, source=source)
     except ValueError as error:
         return render_template("edit.html", **context, error=str(error)), 422
     return review_draft(document_id, name, version_id)
@@ -397,7 +399,8 @@ def page_alignment(document_id):
         counts = [len(page_dimensions(path)) for path in paths]
     except PreviewError as error:
         return jsonify(error=str(error)), 422
-    return jsonify(pairs=aligned_pages(paths, counts))
+    pairs, sources = comparison_pages(document_id, ids, paths, counts)
+    return jsonify(pairs=pairs, sources=sources)
 
 
 @app.get("/documents/<int:document_id>/versions/<int:version_id>/preview")

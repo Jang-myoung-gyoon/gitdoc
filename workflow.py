@@ -1,6 +1,6 @@
 """Write operations shared by the desktop UI and the MCP tools."""
 
-from editing import MODES, modify_document
+from editing import MODES, edit_pdf, modify_document
 from store import (
     UPLOAD_FIELDS, VERSION_FIELDS, append_version, database, find_branch, find_version, merge_state, move_head,
 )
@@ -24,7 +24,7 @@ def reason_for(value, kind="변경"):
     return reason
 
 
-def save_proposal(document_id, name, base, upload, reason):
+def save_proposal(document_id, name, base, upload, reason, *, page_edit=None):
     reason = reason_for(reason)
     with database(write=True) as db:
         active = require(find_branch(db, document_id, name), "브랜치")
@@ -35,10 +35,10 @@ def save_proposal(document_id, name, base, upload, reason):
             raise ValueError("확정본과 같은 확장자의 파일을 선택하세요.")
         if current["sha256"] == upload[3]:
             raise ValueError("확정본과 같은 파일입니다.")
-        return append_version(db, active, upload, reason, "pending")
+        return append_version(db, active, upload, reason, "pending", page_edit=page_edit)
 
 
-def save_document_edit(document_id, name, base, fields, reason, expected_mode=None):
+def save_document_edit(document_id, name, base, fields, reason, expected_mode=None, *, source=None):
     reason = reason_for(reason)
     with database() as db:
         active = require(find_branch(db, document_id, name), "브랜치")
@@ -47,8 +47,14 @@ def save_document_edit(document_id, name, base, fields, reason, expected_mode=No
         item = require(find_version(db, document_id, base, VERSION_FIELDS + ", content"), "버전")
     if expected_mode is not None and MODES.get(item["extension"]) != expected_mode:
         raise ValueError("편집 작업이 이 문서 형식과 맞지 않습니다.")
-    updated = modify_document(item["extension"], item["content"], fields, MAX_FILE)
-    return save_proposal(document_id, name, base, prepare_upload(item["filename"], updated), reason)
+    if source is not None and (item["extension"] != "pdf" or fields.get("operation") != "insert" or source[1] != "pdf"):
+        raise ValueError("페이지 삽입 작업에서 PDF 파일을 선택하세요.")
+    page_edit = None
+    if item["extension"] == "pdf":
+        updated, page_edit = edit_pdf(item["content"], fields, source[-1] if source else None)
+    else:
+        updated = modify_document(item["extension"], item["content"], fields, MAX_FILE)
+    return save_proposal(document_id, name, base, prepare_upload(item["filename"], updated), reason, page_edit=page_edit)
 
 
 def review_revision(document_id, version_id, action, base, note=""):

@@ -11,7 +11,7 @@ DATABASE = Path(os.environ.get("DOCVERS_DB", str(ROOT / "data" / "documents.sqli
 VERSION_FIELDS = """
     id, document_id, number, version_label, change_scale, change_basis, filename, extension, size, sha256, reason, status,
     base_id, restored_from, created_at, review_note, reviewed_at, extraction_note,
-    branch_id, merge_parent_id,
+    branch_id, merge_parent_id, page_base_count, page_insert_before, page_insert_count,
     (SELECT name FROM branches WHERE branches.id = versions.branch_id) AS branch_name,
     (SELECT number FROM versions AS source WHERE source.id = versions.restored_from) AS restored_number,
     (SELECT version_label FROM versions AS source WHERE source.id = versions.restored_from) AS restored_version_label
@@ -75,6 +75,9 @@ def initialize():
             for field in ("version_label", "change_scale", "change_basis"):
                 db.execute(f"ALTER TABLE versions ADD COLUMN {field} TEXT")
             label_existing_versions(db)
+        for field in ("page_base_count", "page_insert_before", "page_insert_count"):
+            if field not in columns:
+                db.execute(f"ALTER TABLE versions ADD COLUMN {field} INTEGER")
         db.execute("CREATE UNIQUE INDEX IF NOT EXISTS version_label_unique ON versions(document_id, version_label)")
         db.execute("CREATE INDEX IF NOT EXISTS version_branch ON versions(branch_id, status)")
 
@@ -178,7 +181,8 @@ def move_head(db, branch, version_id):
         db.execute("UPDATE documents SET current_id = ? WHERE id = ?", (version_id, branch["document_id"]))
 
 
-def append_version(db, branch, upload, reason, status="approved", restored_from=None, merge_parent_id=None):
+def append_version(db, branch, upload, reason, status="approved", restored_from=None, merge_parent_id=None, *,
+                   page_edit=None):
     document_id = branch["document_id"]
     last = db.execute("SELECT number, version_label FROM versions WHERE document_id = ? ORDER BY number DESC LIMIT 1",
                       (document_id,)).fetchone()
@@ -193,10 +197,10 @@ def append_version(db, branch, upload, reason, status="approved", restored_from=
     cursor = db.execute("""
         INSERT INTO versions (document_id, number, version_label, change_scale, change_basis,
             reason, status, base_id, restored_from, branch_id, merge_parent_id, filename, extension,
-            size, sha256, extraction_note, extracted, content)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            size, sha256, extraction_note, extracted, content, page_base_count, page_insert_before, page_insert_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (document_id, number, label, scale, basis, reason, status, branch["head_id"], restored_from,
-          branch["id"], merge_parent_id, *upload))
+          branch["id"], merge_parent_id, *upload, *(page_edit or (None, None, None))))
     if status == "approved":
         move_head(db, branch, cursor.lastrowid)
     return cursor.lastrowid

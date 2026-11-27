@@ -89,7 +89,9 @@ Open **Edit document** from an approved version and enter changes beside the pre
 | HWP, HWPX | Replace text in body and table content with an rhwp 0.9 build that provides text editing |
 | DOCX, PPTX | Replace existing text in Word body, tables, headers, footers, and footnotes, or in PowerPoint slides |
 | XLSX | Enter text, a number, or a formula in a cell, or clear the value. Excel recalculates formulas based on workbook settings. |
-| PDF | Rotate a page or add a note annotation |
+| PDF | Rotate a page, add a note annotation, or insert a blank page or pages from another PDF |
+
+To insert pages, enter the page number they should go before. Enter the current page count plus one to append. GitDoc records the insertion position and page count in the version history. When comparing versions, **GitDoc 편집 기록** takes priority through recorded PDF edits. **자동 판정** identifies inferred insertions from uploaded versions where no applicable record exists.
 | DOC, PPT, XLS, ODT, ODS, ODP, DOCM, XLSM, PPTM, CSV, TSV | Submit a revised file from an external editor |
 
 [office_oxide](https://github.com/yfedoseev/office_oxide) edits DOCX and PPTX text. GitDoc imports its edited XML when the result matches the expected change and formatting. GitDoc's XML editor handles other cases and XLSX cell edits. A replacement spanning multiple Word or PowerPoint runs takes the formatting of the first character. Review the preview for layout and styling.

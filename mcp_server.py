@@ -183,9 +183,10 @@ class EditCell(BaseModel):
 
 
 class EditPDFPage(BaseModel):
-    operation: Literal["right", "left", "note"]
+    operation: Literal["right", "left", "note", "insert"]
     page: Annotated[int, Field(ge=1)]
     note: str = ""
+    file_path: str | None = Field(default=None, description="For insertion, an optional absolute PDF path; omit to insert a blank page.")
 
 
 Edit = Annotated[ReplaceText | EditCell | EditPDFPage, Field(discriminator="operation")]
@@ -231,10 +232,12 @@ def submit_revision(document_id: int, base_version_id: int, file_path: str, reas
 @server.tool(annotations=write, structured_output=True)
 def edit_revision(document_id: int, base_version_id: int, edit: Edit, reason: str,
                   branch: str = "main") -> dict[str, object]:
-    """Edit HWP/HWPX/DOCX/PPTX text, an XLSX cell, or a PDF page and save a pending draft."""
+    """Edit text, an XLSX cell, or a PDF page. Insert before the selected page or use page count + 1 to append."""
     mode = "replace" if isinstance(edit, ReplaceText) else "cell" if isinstance(edit, EditCell) else "page"
-    version_id = save_document_edit(document_id, branch, base_version_id, edit.model_dump(), reason,
-                                    expected_mode=mode)
+    fields = edit.model_dump()
+    file = fields.pop("file_path", None)
+    version_id = save_document_edit(document_id, branch, base_version_id, fields, reason,
+                                    expected_mode=mode, source=load_local_file(file) if file else None)
     return version_result(document_id, version_id)
 
 

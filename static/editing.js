@@ -5,15 +5,23 @@ for (const workspace of document.querySelectorAll('[data-document-editor]')) {
   const pages = workspace.querySelector('[data-visual-viewer]');
   if (form.elements.operation && pages) {
     const note = form.querySelector('[data-note-field]');
+    const insert = form.querySelector('[data-insert-field]');
+    let total = null;
     const updateOperation = () => {
       note.hidden = form.elements.operation.value !== 'note';
       form.elements.note.required = !note.hidden;
+      insert.hidden = form.elements.operation.value !== 'insert';
+      form.elements.file.disabled = insert.hidden;
+      if (total !== null) form.elements.page.max = total + (insert.hidden ? 0 : 1);
     };
     form.elements.operation.addEventListener('change', updateOperation);
     updateOperation();
     pages.addEventListener('gitdoc:page', event => {
-      form.elements.page.max = event.detail.total;
-      form.elements.page.value = event.detail.number;
+      total = event.detail.total;
+      updateOperation();
+      if (insert.hidden || Number(form.elements.page.value) !== total + 1) {
+        form.elements.page.value = event.detail.number;
+      }
     });
   }
 

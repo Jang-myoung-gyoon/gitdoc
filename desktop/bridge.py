@@ -14,7 +14,7 @@ from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
 from extract import comparison_text
 from formats import DELIMITED_EXTENSIONS, WORKBOOK_EXTENSIONS
-from page_alignment import aligned_pages
+from page_alignment import comparison_pages
 from preview import page_dimensions, page_sizes, preview_path
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
@@ -108,8 +108,8 @@ def view(doc, ids, mode="auto", row_key=None):
     else:
         previews = [inspect_preview(record) for record in records]
     counts, faults, paths, ratios = map(list, zip(*previews))
-    pairs = aligned_pages(paths, counts)
-    return dict(result, pages=len(pairs), pairs=pairs, counts=counts, faults=faults, paths=paths, ratios=ratios,
+    pairs, sources = comparison_pages(doc, ids, paths, counts)
+    return dict(result, pages=len(pairs), pairs=pairs, sources=sources, counts=counts, faults=faults, paths=paths, ratios=ratios,
                 pdfium_directory=str(Path(pypdfium2_raw.__file__).resolve().parent),
                 pdf_notes=len(records) == 1 and records[0]["extension"] == "pdf")
 
@@ -187,8 +187,8 @@ def submit(doc, branch, base, file, reason):
     return save_proposal(doc, branch, base, load_local_file(file), reason)
 
 
-def edit(doc, branch, base, fields, reason):
-    return save_document_edit(doc, branch, base, fields, reason)
+def edit(doc, branch, base, fields, reason, file=None):
+    return save_document_edit(doc, branch, base, fields, reason, source=load_local_file(file) if file else None)
 
 
 def restore(doc, branch, version, base, reason):

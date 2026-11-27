@@ -175,7 +175,7 @@ body:has(.document-dialog[open]) { overflow: hidden; }
 .edit-link { font-weight: 750; }
 .editing-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(245px, 320px); gap: 16px; align-items: start; }
 .editing-workspace .visual-viewer { margin: 0; }
-.editing-workspace [data-note-field][hidden] { display: none; }
+.editing-workspace [data-note-field][hidden], .editing-workspace [data-insert-field][hidden] { display: none; }
 .editing-workspace .sheet-table td[data-address] { cursor: cell; }
 .editing-workspace .sheet-table td[data-address]:hover { background-color: #edf3fd; }
 @media (max-width: 780px) {

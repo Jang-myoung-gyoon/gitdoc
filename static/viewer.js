@@ -186,10 +186,11 @@ async function mountViewer(root) {
   const maxPages = Math.max(...infos.map(info => info.pages || 0));
   let pairs = Array.from({ length: maxPages }, (_, index) =>
     infos.map(info => index < info.pages ? index + 1 : null));
+  let sources = [];
   if (comparable) {
     try {
       const response = await fetch(root.dataset.pageAlignment);
-      if (response.ok) ({ pairs } = await response.json());
+      if (response.ok) ({ pairs, sources } = await response.json());
     } catch {
       // Keep the existing positional preview available if alignment cannot be loaded.
     }
@@ -216,8 +217,9 @@ async function mountViewer(root) {
     const element = document.createElement('div');
     element.className = 'viewer-grid paper-row' + (comparing ? '' : ' viewer-single');
     element.dataset.pageNumber = number;
-    const change = comparable && !pair[0] ? '삽입된 페이지'
+    const gap = comparable && !pair[0] ? '삽입된 페이지'
       : comparable && !pair[1] ? '삭제된 페이지' : '';
+    const change = gap ? `${gap} · ${sources[index] === 'recorded' ? 'GitDoc 편집 기록' : '자동 판정'}` : '';
     const cells = infos.map((info, side) => {
       const physicalPage = pair[side];
       const cell = document.createElement('section');
