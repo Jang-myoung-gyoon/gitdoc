@@ -1,3 +1,4 @@
+import hashlib
 import io
 import tempfile
 import unittest
@@ -5,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image, ImageChops
+from pypdfium2 import PdfDocument, raw
 
 import store
 from desktop.bridge import CanvasSession
@@ -14,7 +16,7 @@ from desktop.paged_editor import rhwp
 from editing import open_package, parse_part
 from extract import matches_format
 from mcp_server import get_preview_info, register_document, render_document_page
-from preview import BUNDLED_BIN, PreviewError, executable, office_profile, rhwp_command, run_converter
+from preview import BUNDLED_BIN, PreviewError, executable, office_profile, preview_path, rhwp_command, run_converter
 from workflow import review_revision
 
 
@@ -182,14 +184,19 @@ class DocumentObjectTests(unittest.TestCase):
                     geometry = root.findall(".//{*}enhanced-geometry")
                     draw = "{urn:oasis:names:tc:opendocument:xmlns:drawing:1.0}"
                     types = {node.get(draw + "type") for node in geometry}
-                    self.assertTrue({"rectangle", "ellipse"} <= types)
-                    # The legacy DOC exporter may serialize the arrow and triangle as freeform geometry.
-                    types_and_paths = [(node.get(draw + "type", ""), node.get(draw + "enhanced-path", ""))
-                                       for node in geometry]
-                    self.assertTrue(any("triangle" in kind.lower() or path.split().count("L") == 1
-                                        and len(path.split()) == 10 for kind, path in types_and_paths))
-                    self.assertTrue(any("arrow" in kind.lower() or path.split().count("L") == 1
-                                        and len(path.split()) == 18 for kind, path in types_and_paths))
+                    self.assertTrue({"rectangle", "ellipse", "isosceles-triangle", "right-arrow"} <= types)
+            pdf = preview_path(extension, hashlib.sha256(data).hexdigest(), lambda: data)
+            with PdfDocument(pdf) as reopened:
+                coordinates = []
+                for shape in reopened[0].get_objects(filter=[raw.FPDF_PAGEOBJ_PATH]):
+                    left, bottom, right, top = shape.get_bounds()
+                    if 70 <= right - left <= 115 and 25 <= top - bottom <= 55:
+                        coordinates.append((bottom + top) / 2)
+                coordinates.sort()
+                # Fill and outline usually produce separate path objects at the same position.
+                visible_shapes = bool(coordinates) + sum(y - previous > 20
+                                                        for previous, y in zip(coordinates, coordinates[1:]))
+                self.assertEqual(visible_shapes, 4)
             return
         saved_as_hwpx = convert_format("hwp", "hwpx", data) if extension == "hwp" else data
         with open_package(saved_as_hwpx) as archive:

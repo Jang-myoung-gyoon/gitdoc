@@ -8,6 +8,12 @@ WORD_TAG = f"{{{WORD}}}"
 DRAWING = "http://schemas.openxmlformats.org/drawingml/2006/main"
 DRAWING_WORD = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 WORD_SHAPE = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+VML = "urn:schemas-microsoft-com:vml"
+VML_OFFICE = "urn:schemas-microsoft-com:office:office"
+LEGACY_PATHS = {
+    "triangle": ("5", "m10800,0l21600,21600,0,21600xe"),
+    "arrow": ("13", "m0,5400l12960,5400,12960,0,21600,10800,12960,21600,12960,16200,0,16200xe"),
+}
 HANGUL = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
 WORD_SHAPES = {"rectangle": "rect", "ellipse": "ellipse", "triangle": "triangle", "arrow": "rightArrow"}
 HANGUL_SHAPES = {"rectangle": "rectangle", "ellipse": "ellipse", "triangle": "polygon", "arrow": "polygon"}
@@ -50,12 +56,21 @@ def word_table(rows, columns):
 def word_shape(kind, identifier, legacy):
     paragraph = etree.Element(WORD_TAG + "p")
     run = word(paragraph, "r")
-    if legacy and kind == "ellipse":
-        # LibreOffice's DOC filter loses the DrawingML ellipse path; its VML oval survives.
-        picture = word(run, "pict")
-        etree.SubElement(picture, "{urn:schemas-microsoft-com:vml}oval",
-                         id=f"GitDocEllipse{identifier}", style="width:92pt;height:42pt",
-                         fillcolor="#DCE8F8", strokecolor="#23456A")
+    if legacy and kind != "rectangle":
+        # The DOC filter preserves these VML shape types and outlines through the binary save.
+        picture = etree.SubElement(run, WORD_TAG + "pict", nsmap={"v": VML, "o": VML_OFFICE})
+        attributes = {"id": f"GitDocShape{identifier}", "style": "width:92pt;height:42pt",
+                      "fillcolor": "#DCE8F8", "strokecolor": "#23456A"}
+        if kind == "ellipse":
+            etree.SubElement(picture, f"{{{VML}}}oval", attributes)
+        else:
+            shape_type, path = LEGACY_PATHS[kind]
+            type_id = f"GitDocShapeType{identifier}"
+            etree.SubElement(picture, f"{{{VML}}}shapetype",
+                             {"id": type_id, "coordsize": "21600,21600", "path": path,
+                              f"{{{VML_OFFICE}}}spt": shape_type})
+            etree.SubElement(picture, f"{{{VML}}}shape", {**attributes, "type": f"#{type_id}",
+                                                        "coordsize": "21600,21600"})
         return paragraph
     drawing = word(run, "drawing")
     drawing.append(etree.fromstring(f'''<wp:inline xmlns:wp="{DRAWING_WORD}"
@@ -104,9 +119,11 @@ def insert_word_object(data, operation, value, candidates, single_page, *, legac
                 for item in doc.iter(f"{{{DRAWING_WORD}}}docPr")
                 if (item.get("id") or "").isdigit()
             }
-            vml_ids = {item.get("id") for item in root.iter("{urn:schemas-microsoft-com:vml}oval")}
+            vml_ids = {item.get("id") for name in ("oval", "shape", "shapetype")
+                       for item in root.iter(f"{{{VML}}}{name}")}
             identifier = 1
-            while identifier in used or f"GitDocEllipse{identifier}" in vml_ids:
+            while identifier in used or any(f"{prefix}{identifier}" in vml_ids
+                                            for prefix in ("GitDocShape", "GitDocShapeType")):
                 identifier += 1
             node = word_shape(value, identifier, legacy)
         insertion = anchor if anchor is not None else body.find(WORD_TAG + "sectPr")
