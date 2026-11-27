@@ -33,6 +33,15 @@ fn status(value: &Value) -> &'static str {
     }
 }
 
+fn library_heading(ui: &mut Ui) -> Response {
+    ui.horizontal_wrapped(|ui| {
+        ui.heading("문서함");
+        ui.button("＋ 문서 등록")
+            .on_hover_text("파일을 선택해 문서함에 등록합니다.")
+    })
+    .inner
+}
+
 fn saved_message(result: &Value) -> &'static str {
     if result["status"] == "pending" {
         "수정안을 검토 대기로 저장했습니다."
@@ -714,6 +723,7 @@ impl GitDoc {
                 self.open_view(ids, Destination::default());
             }
             "register" => {
+                self.query.clear();
                 self.refresh();
                 self.open_doc(id(&result), Destination::default());
                 self.notify("문서를 등록했습니다.", false);
@@ -866,7 +876,9 @@ impl GitDoc {
                 if self.deck.is_some() {
                     ui.disable();
                 }
-                ui.heading("문서함");
+                if library_heading(ui).clicked() {
+                    self.register_form(None);
+                }
                 let search =
                     ui.add(TextEdit::singleline(&mut self.query).hint_text("제목 또는 파일명"));
                 if search.changed() {
@@ -2395,6 +2407,43 @@ fn sheet_changes(books: &[Value], names: &[String]) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_register_button_responds_at_narrow_width() {
+        let ctx = Context::default();
+        let mut clicked = false;
+        let mut position = Pos2::ZERO;
+        let mut frame = |events| {
+            let output = ctx.run(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(220.0, 340.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    CentralPanel::default().show(ctx, |ui| {
+                        let response = library_heading(ui);
+                        clicked = response.clicked();
+                        position = response.rect.center();
+                    });
+                },
+            );
+            (clicked, position, output)
+        };
+        let (_, point, output) = frame(vec![]);
+        assert!(point.x < 220.0);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, epaint::Shape::Text(text) if text.galley.job.text == "＋ 문서 등록")
+        }));
+        let mouse = |pressed| Event::PointerButton {
+            pos: point,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        assert!(!frame(vec![Event::PointerMoved(point), mouse(true)]).0);
+        assert!(frame(vec![mouse(false)]).0);
+    }
+
     #[test]
     fn spreadsheet_addresses_are_bounded() {
         assert_eq!(cell_position("AB92"), Some((91, 27)));
