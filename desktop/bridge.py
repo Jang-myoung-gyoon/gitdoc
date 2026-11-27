@@ -21,11 +21,11 @@ from page_text import page_text
 from preview import CACHE, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
-    find_document, find_version, initialize, merge_state, new_branch, search_documents, text_diff,
+    find_document, find_version, first_parent_ids, initialize, merge_state, new_branch, search_documents, text_diff,
 )
 from uploads import load_local_file
 from workbook import read_workbook
-from workflow import merge_revision, require, restore_revision, review_revision, save_document_edit, save_proposal
+from workflow import merge_revision, require, reset_branch, restore_revision, review_revision, save_document_edit, save_proposal
 
 
 def item(db, doc, version, fields=VERSION_FIELDS):
@@ -47,6 +47,7 @@ def detail(doc, branch=None, version=None):
             "title": document["title"], "branch": dict(active),
             "branches": [dict(row) for row in branch_list(db, doc)],
             "versions": [dict(row) for row in branch_history(db, active)],
+            "first_parents": first_parent_ids(db, active["head_id"]),
         }
 
 
@@ -220,11 +221,15 @@ def restore(doc, branch, version, base, reason):
     return restore_revision(doc, branch, version, base, reason)
 
 
+def rewind(doc, branch, version, base):
+    return reset_branch(doc, branch, version, base)
+
+
 OPERATIONS = {
     "workspace": workspace_info, "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "review": review,
-    "restore": restore, "save": save_file, "print": print_preview, "merge": merge,
+    "restore": restore, "rewind": rewind, "save": save_file, "print": print_preview, "merge": merge,
     "browser": open_browser_view, "font_raster": font_raster,
 }
 

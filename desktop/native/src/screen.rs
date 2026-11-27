@@ -40,6 +40,7 @@ enum Action {
     Approve,
     Reject,
     Restore,
+    Rewind,
     Merge,
 }
 
@@ -428,7 +429,7 @@ impl GitDoc {
                     self.pane.index_failures += pages.saturating_sub(self.pane.indexed_through);
                     self.pane.indexed_through = pages;
                 }
-                if reply.op == "edit"
+                if matches!(reply.op, "edit" | "rewind")
                     && let Some(form) = self.form.as_mut().filter(|form| form.submitting)
                 {
                     form.submitting = false;
@@ -616,6 +617,25 @@ impl GitDoc {
                 );
                 self.notify("버전 이력을 갱신했습니다.", false);
             }
+            "rewind" => {
+                self.form = None;
+                self.refresh();
+                self.open_doc(
+                    self.doc,
+                    Destination {
+                        branch: Some(self.branch.clone()),
+                        ..Default::default()
+                    },
+                );
+                self.notify(
+                    format!(
+                        "커밋 {}건을 되돌렸습니다. 복구 브랜치 {}",
+                        count(&result["removed_commits"]),
+                        text(&result["recovery_branch"])
+                    ),
+                    false,
+                );
+            }
             "browser" => {
                 if result["opened"] == true {
                     self.notify("브라우저에서 문서를 열었습니다.", false);
@@ -687,6 +707,7 @@ impl GitDoc {
         let mut chosen = 0;
         let mut branch = None;
         let mut selected = None;
+        let mut rewind = None;
         SidePanel::left("library")
             .resizable(true)
             .default_width(290.0)
@@ -804,16 +825,35 @@ impl GitDoc {
                                 count(&version["page_insert_before"])
                             ));
                         }
-                        if ui
-                            .selectable_label(self.ids.last() == Some(&v), label)
-                            .clicked()
-                        {
+                        let response = ui.selectable_label(self.ids.last() == Some(&v), label);
+                        if response.clicked() {
                             selected = Some((v, version["status"] == "pending"));
+                        }
+                        if rows(&self.detail["first_parents"]).iter().any(|entry| id(entry) == v) {
+                            let parent = id(&version["base_id"]);
+                            response.context_menu(|ui| {
+                                if v != self.head() && ui.button("이 버전까지 되돌리기…").clicked() {
+                                    rewind = Some((v, "이 버전까지 되돌리기"));
+                                    ui.close();
+                                }
+                                if parent > 0 && ui.button("이 커밋부터 제거…").clicked() {
+                                    rewind = Some((parent, "이 커밋부터 제거"));
+                                    ui.close();
+                                }
+                            });
                         }
                     }
                 });
             });
-        if chosen > 0 {
+        if let Some((version, title)) = rewind {
+            let label = self
+                .record(version)
+                .map_or("", |row| text(&row["version_label"]))
+                .to_owned();
+            self.open_form(Action::Rewind, title, json!({
+                "doc":self.doc, "branch":self.branch, "version":version, "base":self.head(), "label":label
+            }));
+        } else if chosen > 0 {
             self.open_doc(chosen, Destination::default());
         } else if let Some(branch) = branch {
             self.open_doc(
@@ -1730,6 +1770,11 @@ impl GitDoc {
                     });
                     ui.text_edit_singleline(&mut form.name);
                 }
+                if form.action == Action::Rewind {
+                    ui.label(format!("{} 브랜치의 확정본을 {}으로 옮깁니다.",
+                        text(&form.values["branch"]), text(&form.values["label"])));
+                    ui.label("선택한 버전 이후의 커밋은 복구 브랜치에 보관합니다.");
+                }
                 if form.action == Action::Edit {
                     match form.mode.as_str() {
                         "replace" => {
@@ -1879,6 +1924,12 @@ impl GitDoc {
                     "review"
                 }
                 Action::Restore => "restore",
+                Action::Rewind => {
+                    if let Some(values) = args.as_object_mut() {
+                        values.remove("label");
+                    }
+                    "rewind"
+                }
                 Action::Merge => {
                     args.as_object_mut()
                         .expect("merge arguments")
@@ -1897,7 +1948,7 @@ impl GitDoc {
             ) {
                 args["reason"] = json!(form.reason);
             }
-            if form.action == Action::Edit {
+            if matches!(form.action, Action::Edit | Action::Rewind) {
                 let sent = self.request(operation, 0, args);
                 if let Some(form) = &mut self.form {
                     form.submitting = sent;

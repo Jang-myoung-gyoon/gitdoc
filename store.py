@@ -170,9 +170,19 @@ ANCESTORS = """
 def branch_history(db, branch, limit=-1, offset=0):
     return db.execute(ANCESTORS + f"""
         SELECT {VERSION_FIELDS} FROM versions
-        WHERE id IN (SELECT id FROM ancestors) OR branch_id = ?
+        WHERE id IN (SELECT id FROM ancestors) OR (branch_id = ? AND status != 'approved')
         ORDER BY number DESC LIMIT ? OFFSET ?
     """, (branch["head_id"], branch["id"], limit, offset)).fetchall()
+
+
+def first_parent_ids(db, head):
+    return [row[0] for row in db.execute("""
+        WITH RECURSIVE chain(id) AS (
+            SELECT ? UNION ALL
+            SELECT v.base_id FROM versions v JOIN chain c ON c.id = v.id WHERE v.base_id IS NOT NULL
+        )
+        SELECT id FROM chain
+    """, (head,))]
 
 
 def move_head(db, branch, version_id):

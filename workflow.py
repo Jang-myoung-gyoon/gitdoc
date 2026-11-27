@@ -2,7 +2,8 @@
 
 from editing import MODES, edit_pdf, modify_document
 from store import (
-    UPLOAD_FIELDS, VERSION_FIELDS, append_version, database, find_branch, find_version, merge_state, move_head,
+    ANCESTORS, UPLOAD_FIELDS, VERSION_FIELDS, append_version, database, find_branch, find_version, first_parent_ids,
+    merge_state, move_head, new_branch,
 )
 from uploads import MAX_FILE, prepare_upload
 
@@ -106,3 +107,29 @@ def restore_revision(document_id, name, version_id, base, reason):
             raise ValueError("지금은 이 버전을 복원할 수 없습니다. 현재 확정본을 확인하세요.")
         upload = find_version(db, document_id, version_id, UPLOAD_FIELDS)
         return append_version(db, active, upload, reason, restored_from=version_id)
+
+
+def reset_branch(document_id, name, version_id, expected_head):
+    """Move the active branch back and keep its previous history in a recovery branch."""
+    with database(write=True) as db:
+        active = require(find_branch(db, document_id, name), "브랜치")
+        if active["head_id"] != expected_head:
+            raise ValueError("브랜치 확정본이 변경되었습니다. 새로 고침한 뒤 다시 시도하세요.")
+        chain = first_parent_ids(db, expected_head)
+        if version_id not in chain[1:]:
+            raise ValueError("현재 브랜치의 이전 확정 버전을 선택하세요.")
+        prefix = f"recovery-{expected_head}"
+        backup = prefix
+        number = 2
+        while find_branch(db, document_id, backup):
+            backup = f"{prefix}-{number}"
+            number += 1
+        new_branch(db, document_id, backup, expected_head)
+        recovery = find_branch(db, document_id, backup)
+        db.execute(ANCESTORS + """
+            UPDATE versions SET branch_id = ? WHERE branch_id = ? AND status != 'approved'
+            AND base_id NOT IN (SELECT id FROM ancestors)
+        """, (version_id, recovery["id"], active["id"]))
+        move_head(db, active, version_id)
+        return {"head_id": version_id, "recovery_branch": backup,
+                "removed_commits": chain.index(version_id)}

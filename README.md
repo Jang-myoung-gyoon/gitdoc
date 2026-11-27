@@ -98,6 +98,8 @@ Spreadsheet units are cell values and extracted formulas keyed by sheet and addr
 
 ## Editing in the app
 
+In the desktop version history, right-click a commit to rewind the current branch to that version or to remove that commit and the newer commits from the branch. GitDoc asks for confirmation and creates a `recovery-…` branch at the old head. A regular restore instead records the old contents as a new version. The rewind is also available through `reset_document_branch`.
+
 Open **Edit document** from an approved version and enter changes beside the preview. Saving as a draft opens the comparison for review. Approval advances the branch head. If the head changes while editing, start again from the latest version.
 
 | Format | In-app edits |
