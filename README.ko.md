@@ -64,7 +64,7 @@ py -3.12 -m venv .venv
 
 1. `desktop/native/Cargo.toml`의 `version`을 새 버전으로 바꾸고 `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`으로 `Cargo.lock`을 갱신한 뒤 병합합니다. 패키지 버전은 이 파일에서 가져옵니다.
 2. 그 커밋에 `vX.Y.Z` 태그를 붙여 푸시합니다. `git tag v0.2.0 && git push origin v0.2.0`
-3. 워크플로가 태그와 버전이 일치하는지 확인합니다. 양쪽 설치 테스트와 macOS Developer ID 서명, Apple 공증, 공증 티켓 첨부, Gatekeeper 검사를 통과하면 두 설치 파일을 게시합니다.
+3. 워크플로가 태그와 버전이 일치하는지 확인합니다. 양쪽 설치 테스트와 macOS Developer ID 서명, Apple 공증, 공증 티켓 첨부, Gatekeeper 검사를 통과하면 태그 실행에서 두 설치 파일을 내려받아 저장소 소유자 계정으로 함께 게시합니다.
 
 macOS 서명 및 공증 단계는 원본 저장소의 버전 태그 푸시에서 실행됩니다. 이 단계에서 Actions Secret `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`를 사용합니다. 풀 리퀘스트와 수동 실행 빌드는 ad-hoc 서명을 사용합니다.
 
