@@ -3,10 +3,12 @@ name = "gitdoc-desktop"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+default-run = "gitdoc-desktop"
 
 [dependencies]
 eframe = { version = "0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+lopdf = { version = "0.47.0", default-features = false }
 pdfium-render = { version = "0.9.6", default-features = false, features = ["pdfium_8125"] }
 rfd = "0.15.4"
 serde_json = "1"

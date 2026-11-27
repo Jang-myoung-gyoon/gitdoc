@@ -40,6 +40,15 @@ impl Bridge {
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit());
+            if std::env::var_os("DOCVERS_PDF_EDITOR").is_none()
+                && let Ok(executable) = std::env::current_exe()
+            {
+                let mut editor = executable.with_file_name("gitdoc-pdf");
+                editor.set_extension(std::env::consts::EXE_EXTENSION);
+                if editor.is_file() {
+                    command.env("DOCVERS_PDF_EDITOR", editor);
+                }
+            }
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;

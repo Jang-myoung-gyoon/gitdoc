@@ -14,11 +14,11 @@ from zipfile import BadZipFile, ZipFile
 
 from lxml import etree
 from office_oxide import EditableDocument, OfficeOxideError
-from pypdf import PdfReader, PdfWriter
-from pypdf.annotations import Text
+from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
 from extract import ZIP_MARKERS, ordered_parts
+from pdf_edit import edit_pdf_bytes
 from preview import PreviewError, rhwp_command, run_converter
 
 MODES = {"hwp": "replace", "hwpx": "replace", "docx": "replace", "pptx": "replace",
@@ -468,56 +468,8 @@ def edit_pdf(data, fields, source=None):
         page_number = int(fields.get("page", ""))
     except (ValueError, TypeError):
         page_number = 0
-    try:
-        return update_pdf(data, page_number, fields.get("operation"),
+    return edit_pdf_bytes(data, page_number, fields.get("operation"),
                           valid_text(fields.get("note", ""), 1000, multiline=True), source)
-    except (PyPdfError, RecursionError, OSError, KeyError) as error:
-        raise ValueError("PDF 구조를 읽을 수 없습니다. 원본을 확인하세요.") from error
-
-
-def update_pdf(data, page_number, operation, note, source=None):
-    reader = PdfReader(io.BytesIO(data))
-    if reader.is_encrypted or any(field.get("/FT") == "/Sig" and field.get("/V")
-                                  for field in (reader.get_fields() or {}).values()):
-        raise ValueError("암호가 걸렸거나 서명된 PDF입니다.")
-    base_count = len(reader.pages)
-    if not 1 <= page_number <= base_count + (operation == "insert"):
-        raise ValueError("PDF 페이지 번호를 확인하세요.")
-    writer = PdfWriter(clone_from=reader)
-    inserted = 0
-    deleted = None
-    if operation == "insert":
-        if source is None:
-            reference = writer.pages[min(page_number, base_count) - 1]
-            box = reference.mediabox
-            writer.insert_blank_page(float(box.width), float(box.height), index=page_number - 1).rotate(reference.rotation)
-            inserted = 1
-        else:
-            incoming = PdfReader(io.BytesIO(source))
-            if incoming.is_encrypted or not incoming.pages:
-                raise ValueError("암호가 없고 페이지가 있는 PDF를 선택하세요.")
-            inserted = len(incoming.pages)
-            for offset, page in enumerate(incoming.pages):
-                writer.insert_page(page, index=page_number - 1 + offset)
-    elif operation in ("left", "right"):
-        page = writer.pages[page_number - 1]
-        page.rotate(90 if operation == "right" else -90)
-    elif operation == "delete":
-        if base_count <= 1:
-            raise ValueError("PDF에는 적어도 한 페이지가 있어야 합니다.")
-        writer.remove_page(page_number - 1, clean=True)
-        deleted = page_number
-    elif operation == "note" and note.strip():
-        page = writer.pages[page_number - 1]
-        box = page.cropbox
-        left, top = float(box.left), float(box.top)
-        width, height = min(26, float(box.width)), min(26, float(box.height))
-        writer.add_annotation(page_number - 1, Text(rect=(left, top - height, left + width, top), text=note))
-    else:
-        raise ValueError("PDF 작업을 선택하거나 메모 내용을 입력하세요.")
-    output = io.BytesIO()
-    writer.write(output)
-    return output.getvalue(), (base_count, page_number if inserted else None, inserted, deleted)
 
 
 def modify_document(extension, data, fields, max_file):
