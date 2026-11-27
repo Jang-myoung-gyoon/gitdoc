@@ -260,7 +260,7 @@ class CanvasSession:
         if extension == "pptx":
             from desktop.presentation import Deck
             working = Deck(original["content"], original["sha256"])
-        elif extension in ("doc", "hwp"):
+        elif extension in ("doc", "docx", "hwp", "hwpx"):
             from desktop.paged_editor import PagedEditor
             working = PagedEditor(extension, original["content"])
         else:

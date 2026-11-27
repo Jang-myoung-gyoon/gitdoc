@@ -64,7 +64,7 @@ The [release workflow](.github/workflows/release.yml) builds both packages with 
 
 1. Set the new `version` in `desktop/native/Cargo.toml`, refresh `Cargo.lock` with `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`, and merge the change. The packages take their version from this file.
 2. Tag that commit `vX.Y.Z` and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. The workflow checks that the tag matches the version. It publishes both installers after the installation tests, macOS Developer ID signing, notarization, stapling, and Gatekeeper assessment succeed.
+3. The workflow checks that the tag matches the version. After the installation tests, macOS Developer ID signing, notarization, stapling, and Gatekeeper assessment succeed, download both artifacts from the tag run and publish them together using the repository owner account.
 
 The macOS signing and notarization steps run on version-tag pushes in the upstream repository. They use the Actions secrets `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`. Pull requests and manually dispatched builds use ad-hoc signing.
 
@@ -144,14 +144,12 @@ Enable **설정 → 수정안 검토 사용** in the desktop app to save new des
 
 [PPTX design](assets/editor-designs/pptx.png) · [DOC design](assets/editor-designs/doc.png) · [HWP design](assets/editor-designs/hwp.png)
 
-PPTX opens with slide navigation and slide and object tools. DOC opens with page navigation, a ruler in centimeters, and text formatting tools. HWP opens with a list of editable paragraphs on the current page. Page and zoom controls stay along the bottom. The current page's thumbnail uses the existing render.
+PPTX opens with slide navigation and slide and object tools. DOC and DOCX open with page navigation, a ruler in centimeters, and text formatting tools. HWP and HWPX open with a list of editable paragraphs on the current page. Page and zoom controls stay along the bottom. The current page's thumbnail uses the existing render.
 
 | Format | In-app edits |
 | --- | --- |
-| HWP | Type directly in body paragraphs that fit on one page, or find and replace text in the body and tables |
-| HWPX | Replace text in body and table content with rhwp |
-| DOC | Type directly in Word paragraphs and apply basic formatting |
-| DOCX | Edit Word text blocks and formatting, or find and replace text |
+| HWP, HWPX | Type in body paragraphs, insert tables and shapes, or find and replace text in the body and tables |
+| DOC, DOCX | Type in body paragraphs, apply basic formatting, and insert tables and shapes. DOCX also offers a text-block editor. |
 | PPTX | Type directly on slides and in table cells, format text, and edit slides and objects |
 | XLSX | Double-click a cell on the current version to edit its value or formula, or clear the value. Excel recalculates formulas based on workbook settings. |
 | PDF | Rotate or delete a page, add a note annotation, or insert a blank page or pages from another PDF. |
@@ -161,7 +159,13 @@ Open **슬라이드 편집** from the current approved PPTX version and click te
 
 Save with **수정안 저장**, **Cmd+S** on macOS, or **Ctrl+S** on Windows. The change reason is optional. Press **Enter** in the reason field to save. Changing text-box alignment redraws only that box on the editing canvas. When the slide order stays the same at save time, GitDoc renders the changed slides and reuses the verified unchanged pages for the comparison preview.
 
-Open **본문 편집** to click and type in DOC and HWP body paragraphs. The new version keeps the original extension. DOC uses a LibreOffice round trip through DOCX, which may change some layout or formatting. Direct HWP editing uses rhwp and requires a body paragraph whose source position can be verified. Clicking text starts editing in its rendered position. PPTX shows a single selection outline on the object. DOC and HWP show the caret and text selection without a paragraph outline. When you type directly on the PPTX, DOC, or HWP canvas, the editor uses the font, size, and color from the preview. Unavailable fonts follow the document font substitution rules.
+Open **본문 편집** in DOC, DOCX, HWP, or HWPX. Use **표** to select 1–12 rows and columns, or **도형** to insert a rectangle, ellipse, triangle, or right arrow. GitDoc uses the selected body paragraph, or a body paragraph on the current page. In Hangul, a new shape occupies its own paragraph after the anchor. Use **수정안 저장** to save a new version in the original format, then review the comparison. Some multipage layouts have no verifiable insertion point on the current page.
+
+In HWP and HWPX, click a table or select it from **기존 표**. GitDoc outlines the selection. In DOC and DOCX, use **문서 표** to select a top-level body table by its order, dimensions, and text. **표 전체 삭제** removes the selected table and its contents. Undo is available before saving.
+
+For existing standalone inline shapes, open **도형 선택** under **도형 서식** in Word documents or **도형 도구** in Hangul documents. Pick the shape by paragraph and size. Move it one paragraph up or down where available, enter its width and height in millimeters, or delete it. Undo is available before saving. Floating and grouped shapes require additional support. Rotation and resizing rotated shapes are outside these controls.
+
+DOC uses LibreOffice to convert to DOCX for editing and back to DOC when saving. HWP and HWPX use rhwp with table and shape insertion support. HWP triangles and right arrows use editable, closed HWPX polygons that rhwp saves back to HWP. Legacy format conversions can change existing layout or formatting. For direct text entry, the canvas uses the font, size, and color from the preview. Unavailable fonts follow the document font substitution rules.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. Password-protected and signed originals cannot be edited.
 
