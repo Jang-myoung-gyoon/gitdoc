@@ -2,6 +2,7 @@
 
 mod bridge;
 mod pages;
+mod paper;
 mod printing;
 mod screen;
 

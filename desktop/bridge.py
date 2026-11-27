@@ -9,7 +9,7 @@ import pypdfium2_raw
 
 from desktop.exporting import convert_format, export_formats, write_export
 from editing import read_pdf_notes
-from preview import page_sizes, preview_path
+from preview import page_dimensions, page_sizes, preview_path
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, find_branch,
     find_document, find_version, initialize, merge_state, new_branch, search_documents, text_diff,
@@ -85,8 +85,8 @@ def view(doc, ids, mode="auto"):
             previews = list(workers.map(inspect_preview, records))
     else:
         previews = [inspect_preview(record) for record in records]
-    counts, faults, paths = map(list, zip(*previews))
-    return dict(result, pages=max(counts, default=0), counts=counts, faults=faults, paths=paths,
+    counts, faults, paths, ratios = map(list, zip(*previews))
+    return dict(result, pages=max(counts, default=0), counts=counts, faults=faults, paths=paths, ratios=ratios,
                 pdfium_directory=str(Path(pypdfium2_raw.__file__).resolve().parent),
                 pdf_notes=len(records) == 1 and records[0]["extension"] == "pdf")
 
@@ -94,9 +94,12 @@ def view(doc, ids, mode="auto"):
 def inspect_preview(record):
     try:
         path = page_path(record)
-        return len(page_sizes(path)), "", str(path)
+        dimensions = page_dimensions(path)
+        ratios = [height / width if width > 0 and 0 < height / width < 100 else 1.4
+                  for width, height in dimensions]
+        return len(dimensions), "", str(path), ratios
     except Exception as error:
-        return 0, str(error), None
+        return 0, str(error), None, []
 
 
 def page_notes(doc, version, number):

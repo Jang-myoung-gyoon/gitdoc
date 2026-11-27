@@ -96,24 +96,30 @@ def convert(source, destination, extension):
     run_converter(args, folder, env)
 
 
-def read_page_sizes(path):
+def read_page_dimensions(path):
     try:
         with path.open("rb") as stream:
             pdf = PdfReader(stream)
             if pdf.is_encrypted:
                 raise PreviewError("암호가 걸린 PDF입니다. 원본을 열어 확인하세요.")
-            sizes = tuple(
-                float(page.cropbox.height if page.rotation % 180 else page.cropbox.width)
-                for page in pdf.pages
-            )
+            sizes = []
+            for page in pdf.pages:
+                box = page.cropbox
+                width, height = float(box.width), float(box.height)
+                sizes.append((height, width) if page.rotation % 180 else (width, height))
     except (OSError, PdfReadError, ValueError, RecursionError) as error:
         raise PreviewError("PDF 페이지를 읽을 수 없습니다.") from error
     if not sizes:
         raise PreviewError("표시할 페이지가 없습니다.")
-    return sizes
+    return tuple(sizes)
 
 
-page_sizes = lru_cache(maxsize=128)(read_page_sizes)
+page_dimensions = lru_cache(maxsize=128)(read_page_dimensions)
+
+
+@lru_cache(maxsize=128)
+def page_sizes(path):
+    return tuple(width for width, _ in page_dimensions(path))
 
 
 def preview_path(extension, digest, load_content):
@@ -136,7 +142,7 @@ def preview_path(extension, digest, load_content):
                 convert(source, output, extension)
             if not output.is_file() or not 0 < output.stat().st_size <= MAX_PREVIEW:
                 raise PreviewError("미리보기를 생성할 수 없거나 변환 결과가 너무 큽니다.")
-            read_page_sizes(output)
+            read_page_dimensions(output)
             output.replace(path)
     return path
 

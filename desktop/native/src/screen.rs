@@ -1,10 +1,14 @@
 use crate::{
     Destination,
     bridge::{Bridge, Message, Reply},
+    paper::{self, PaperRow},
 };
 use eframe::egui::*;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 fn rows(value: &Value) -> &[Value] {
     value.as_array().map_or(&[], Vec::as_slice)
@@ -79,29 +83,37 @@ impl Form {
 }
 
 #[derive(Default)]
-struct Pane {
-    data: Value,
+struct PagePreview {
     textures: Vec<Option<TextureHandle>>,
     regions: Vec<[f32; 4]>,
+    notes: Vec<String>,
+}
+
+#[derive(Default)]
+struct Pane {
+    data: Value,
+    ratios: Vec<Vec<f32>>,
+    previews: HashMap<usize, Option<PagePreview>>,
     index: Option<Vec<(usize, usize)>>,
     indexing: bool,
     seek: Option<((usize, Option<usize>), bool)>,
     page: usize,
-    selected_region: Option<usize>,
+    selected_region: Option<(usize, usize)>,
+    page_jump: Option<usize>,
+    follow_region: bool,
+    paper_offset: Option<f32>,
     scroll_to: bool,
     sheet: usize,
     cell: String,
     jump_cell: String,
     sheets: Vec<String>,
     sheet_changes: Vec<(String, String)>,
-    notes: Vec<String>,
 }
 
 pub struct GitDoc {
     bridge: Bridge,
     busy: usize,
     epoch: u64,
-    frame: u64,
     doc: i64,
     branch: String,
     library: Value,
@@ -128,7 +140,6 @@ impl GitDoc {
             bridge,
             busy: 0,
             epoch: 0,
-            frame: 0,
             doc: 0,
             branch: "main".into(),
             library: Value::Null,
@@ -182,11 +193,11 @@ impl GitDoc {
         self.branch = place.branch.clone().unwrap_or_else(|| "main".into());
         self.selection = place;
         self.epoch += 1;
-        self.frame += 1;
         self.ids.clear();
         self.detail = Value::Null;
         self.comparison = Value::Null;
         self.pane = Pane::default();
+        self.zoom = 100.0;
         self.request(
             "detail",
             self.epoch,
@@ -202,10 +213,8 @@ impl GitDoc {
 
     fn open_view(&mut self, ids: Vec<i64>, place: Destination) {
         self.epoch += 1;
-        self.frame += 1;
         self.ids = ids;
         self.selection = place;
-        self.zoom = 100.0;
         self.pane = Pane::default();
         self.list_changes = false;
         self.request(
@@ -229,6 +238,7 @@ impl GitDoc {
             ids,
             Destination {
                 pages: self.selection.pages,
+                page: self.pane.page,
                 ..Default::default()
             },
         );
@@ -255,25 +265,33 @@ impl GitDoc {
     }
     fn go_to_page(&mut self, page: usize, highlight: Option<usize>) {
         let total = count(&self.pane.data["pages"]);
-        if total == 0 {
+        if total > 0 {
+            let page = page.clamp(1, total);
+            self.pane.page = page;
+            self.pane.selected_region = highlight.map(|region| (page, region));
+            self.pane.page_jump = Some(page);
+            self.pane.follow_region = false;
+        }
+    }
+
+    fn request_page(&mut self, page: usize) {
+        const PENDING_LIMIT: usize = 4;
+        if self.pane.previews.contains_key(&page)
+            || self
+                .pane
+                .previews
+                .values()
+                .filter(|preview| preview.is_none())
+                .count()
+                >= PENDING_LIMIT
+        {
             return;
         }
-        let page = page.clamp(1, total);
-        let same = page == self.pane.page && !self.pane.textures.is_empty();
-        self.pane.page = page;
-        self.pane.selected_region = highlight;
-        self.pane.scroll_to = true;
-        if same {
-            return;
-        }
-        self.frame += 1;
-        self.pane.textures.clear();
-        self.pane.regions.clear();
-        self.pane.notes.clear();
+        self.pane.previews.insert(page, None);
         let comparable = rows(&self.pane.data["counts"]).iter().all(|n| count(n) > 0);
         self.request(
             "page",
-            self.frame,
+            self.epoch,
             json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable,
                 "paths":self.pane.data["paths"],"pdfium_directory":self.pane.data["pdfium_directory"],
                 "pdf_notes":self.pane.data["pdf_notes"]}),
@@ -345,16 +363,27 @@ impl GitDoc {
     fn receive(&mut self, ctx: &Context, frame: &eframe::Frame, reply: Reply) {
         self.busy = self.busy.saturating_sub(1);
         let wanted = match reply.op {
-            "page" => reply.scope == self.frame,
-            "detail" | "view" | "changes" | "branch_compare" => reply.scope == self.epoch,
+            "page" | "detail" | "view" | "changes" | "branch_compare" => reply.scope == self.epoch,
             _ => true,
         };
         if !wanted {
             return;
         }
+        if reply.op == "page"
+            && !reply
+                .page
+                .is_some_and(|number| self.pane.previews.contains_key(&number))
+        {
+            return;
+        }
         let result = match reply.result {
             Ok(result) => result,
             Err(error) => {
+                if let Some(number) = reply.page.filter(|_| reply.op == "page") {
+                    self.pane
+                        .previews
+                        .insert(number, Some(PagePreview::default()));
+                }
                 if reply.op == "changes" {
                     self.pane.indexing = false;
                     self.pane.seek = None;
@@ -417,26 +446,47 @@ impl GitDoc {
                     self.pane.jump_cell = self.pane.cell.clone();
                     self.pane.sheet_changes = sheet_changes(books, &self.pane.sheets);
                 } else if count(&self.pane.data["pages"]) > 0 {
+                    self.pane.ratios = serde_json::from_value(self.pane.data["ratios"].clone())
+                        .unwrap_or_default();
                     self.go_to_page(self.selection.page.max(1), self.selection.change);
                 } else if let Some(fault) = rows(&self.pane.data["faults"]).first() {
                     self.notify(text(fault).to_owned(), true);
                 }
             }
             "page" => {
-                self.pane.textures = reply
+                let Some(number) = reply.page else { return };
+                let textures = reply
                     .images
                     .into_iter()
                     .enumerate()
                     .map(|(side, image)| {
                         image.map(|color| {
-                            ctx.load_texture(format!("page-{side}"), color, TextureOptions::LINEAR)
+                            ctx.load_texture(
+                                format!("page-{number}-{side}"),
+                                color,
+                                TextureOptions::LINEAR,
+                            )
                         })
                     })
                     .collect();
-                self.pane.regions =
-                    serde_json::from_value(result["regions"].clone()).unwrap_or_default();
-                self.pane.notes =
-                    serde_json::from_value(result["notes"].clone()).unwrap_or_default();
+                self.pane.previews.insert(
+                    number,
+                    Some(PagePreview {
+                        textures,
+                        regions: serde_json::from_value(result["regions"].clone())
+                            .unwrap_or_default(),
+                        notes: serde_json::from_value(result["notes"].clone()).unwrap_or_default(),
+                    }),
+                );
+                if self.pane.follow_region
+                    && self
+                        .pane
+                        .selected_region
+                        .is_some_and(|(page, _)| page == number)
+                {
+                    self.pane.page_jump = Some(number);
+                    self.pane.follow_region = false;
+                }
             }
             "changes" => {
                 self.pane.indexing = false;
@@ -807,7 +857,12 @@ impl GitDoc {
         let comparison =
             self.ids.len() == 2 && rows(&self.pane.data["counts"]).iter().all(|n| count(n) > 0);
         let mut page = self.pane.page.max(1);
-        let current = (page, self.pane.selected_region);
+        let selected_region = self
+            .pane
+            .selected_region
+            .filter(|&(number, _)| number == page)
+            .map(|(_, region)| region);
+        let current = (page, selected_region);
         ui.horizontal_wrapped(|ui| {
             if ui.add_enabled(page > 1, Button::new("◀ 이전 쪽")).clicked() {
                 self.go_to_page(page - 1, None);
@@ -823,11 +878,16 @@ impl GitDoc {
                 self.go_to_page(page + 1, None);
             }
             ui.separator();
-            ui.add(
-                Slider::new(&mut self.zoom, 50.0..=200.0)
-                    .suffix("%")
-                    .text("확대"),
-            );
+            if ui
+                .add(
+                    Slider::new(&mut self.zoom, 50.0..=200.0)
+                        .suffix("%")
+                        .text("확대"),
+                )
+                .changed()
+            {
+                self.go_to_page(page, selected_region);
+            }
             if comparison {
                 ui.separator();
                 if ui.button("이전 변경").clicked() {
@@ -873,92 +933,192 @@ impl GitDoc {
                 ui.weak("변경 위치를 찾는 중입니다.");
             }
         }
-        let available = ui.available_width();
+        self.continuous_pages(ui, pages);
+    }
+
+    fn continuous_pages(&mut self, ui: &mut Ui, pages: usize) {
+        let gap = 12.0;
         let side_count = self.ids.len();
-        let width = ((available - 24.0) / side_count as f32 - 12.0)
-            .min(790.0)
-            .max(160.0)
+        let available = (ui.available_width() - 32.0).max(0.0);
+        let width = ((available - gap * (side_count - 1) as f32) / side_count as f32)
+            .clamp(160.0, 790.0)
             * self.zoom
             / 100.0;
-        let area = ScrollArea::both()
+        let span = width * side_count as f32 + gap * (side_count - 1) as f32;
+        let paper = paper::layout(&self.pane.ratios, pages, width);
+        let height = paper[pages - 1].bottom;
+        let left = ((available - span) / 2.0).max(0.0);
+        let jump = self.pane.page_jump.take();
+        let mut area = ScrollArea::both()
             .id_salt("paper")
             .auto_shrink([false, false]);
-        let area = if self.pane.scroll_to && self.pane.selected_region.is_none() {
-            area.vertical_scroll_offset(0.0)
-        } else {
-            area
-        };
-        let mut drawn = false;
-        area.show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                for side in 0..side_count {
-                    ui.vertical(|ui| {
-                        ui.strong(text(&self.pane.data["versions"][side]));
-                        if let Some(Some(texture)) = self.pane.textures.get(side) {
-                            let shape = texture.size_vec2();
-                            let rect = ui
-                                .add(
-                                    Image::new(texture)
-                                        .fit_to_exact_size(vec2(width, width * shape.y / shape.x)),
-                                )
-                                .rect;
-                            let first_image = !drawn;
-                            drawn = true;
-                            for (i, r) in self.pane.regions.iter().enumerate() {
-                                let region = Rect::from_min_max(
-                                    pos2(
-                                        rect.left() + r[0] * rect.width(),
-                                        rect.top() + r[1] * rect.height(),
-                                    ),
-                                    pos2(
-                                        rect.left() + r[2] * rect.width(),
-                                        rect.top() + r[3] * rect.height(),
-                                    ),
-                                );
-                                let shade = if side == 0 {
-                                    Color32::from_rgba_unmultiplied(207, 49, 65, 59)
-                                } else {
-                                    Color32::from_rgba_unmultiplied(30, 169, 112, 59)
-                                };
-                                ui.painter().rect_filled(region, 0.0, shade);
-                                if self.pane.selected_region == Some(i) {
-                                    ui.painter().rect_stroke(
-                                        region,
-                                        0.0,
-                                        Stroke::new(2.0_f32, Color32::from_rgb(31, 102, 174)),
-                                        StrokeKind::Inside,
-                                    );
-                                    if self.pane.scroll_to && first_image {
-                                        ui.scroll_to_rect(region, Some(Align::Center));
-                                    }
+        if let Some(number) = jump {
+            let row = &paper[number - 1];
+            let mut offset = row.top;
+            let region = self
+                .pane
+                .selected_region
+                .filter(|&(page, _)| page == number);
+            if let Some((_, change)) = region {
+                if let Some(preview) = self.pane.previews.get(&number).and_then(Option::as_ref) {
+                    if let Some((region, height)) = preview.regions.get(change).zip(
+                        preview
+                            .textures
+                            .iter()
+                            .zip(row.heights)
+                            .find_map(|(texture, height)| texture.as_ref().and(height)),
+                    ) {
+                        offset += paper::HEADER + (region[1] + region[3]) * height / 2.0
+                            - ui.available_height() / 2.0;
+                    }
+                } else {
+                    self.pane.follow_region = true;
+                }
+            }
+            area = area.vertical_scroll_offset(
+                offset.clamp(0.0, (height - ui.available_height()).max(0.0)),
+            );
+        }
+        let viewport = area.show_viewport(ui, |ui, viewport| {
+            let origin = ui.cursor().min;
+            ui.set_min_size(vec2(span + left, height));
+            let visible = paper::visible(&paper, viewport.top(), viewport.bottom());
+            for index in visible.clone() {
+                self.draw_paper_row(
+                    ui,
+                    origin + vec2(left, 0.0),
+                    &paper[index],
+                    index + 1,
+                    width,
+                    gap,
+                );
+            }
+            (visible, viewport)
+        });
+        let (visible, bounds) = viewport.inner;
+        let offset = bounds.top();
+        if jump.is_none()
+            && self
+                .pane
+                .paper_offset
+                .is_some_and(|previous| (offset - previous).abs() > 0.5)
+        {
+            let focus = offset + bounds.height().min(56.0);
+            let near_end = offset > 0.0 && bounds.bottom() >= height - 1.0;
+            let page = if near_end {
+                pages
+            } else {
+                paper.partition_point(|row| row.top <= focus).max(1)
+            };
+            if self.pane.page != page {
+                self.pane.page = page;
+                self.pane.selected_region = None;
+                self.pane.follow_region = false;
+                ui.ctx().request_repaint();
+            }
+        }
+        self.pane.paper_offset = Some(offset);
+
+        // Keep textures close to the viewport and render the next row ahead of scrolling.
+        let keep_from = visible.start.saturating_sub(1).max(1);
+        let keep_to = (visible.end + 2).min(pages);
+        self.pane
+            .previews
+            .retain(|number, preview| preview.is_none() || (keep_from..=keep_to).contains(number));
+        if let Some(page) = jump {
+            self.request_page(page);
+        }
+        for index in visible.clone() {
+            self.request_page(index + 1);
+        }
+        if visible.end < pages {
+            self.request_page(visible.end + 1);
+        }
+    }
+
+    fn draw_paper_row(
+        &self,
+        ui: &mut Ui,
+        origin: Pos2,
+        row: &PaperRow,
+        number: usize,
+        width: f32,
+        gap: f32,
+    ) {
+        let preview = self.pane.previews.get(&number).and_then(Option::as_ref);
+        for side in 0..self.ids.len() {
+            let start = origin + vec2(side as f32 * (width + gap), row.top);
+            let header = Rect::from_min_size(start, vec2(width, paper::HEADER));
+            ui.scope_builder(
+                UiBuilder::new()
+                    .id_salt(("page-header", number, side))
+                    .max_rect(header),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong(format!(
+                            "{} · {number}쪽",
+                            text(&self.pane.data["versions"][side])
+                        ));
+                        if side == 0
+                            && let Some(preview) = preview.filter(|page| !page.notes.is_empty())
+                        {
+                            ui.menu_button("페이지 메모", |ui| {
+                                for note in &preview.notes {
+                                    ui.label(note);
                                 }
-                            }
-                        } else {
-                            ui.set_min_width(width);
-                            let message = text(&self.pane.data["faults"][side]);
-                            ui.weak(if !message.is_empty() {
-                                message
-                            } else if self.busy > 0 {
-                                "페이지 불러오는 중…"
-                            } else {
-                                "이 쪽을 표시할 수 없습니다."
                             });
                         }
                     });
-                }
-            });
-            if !self.pane.notes.is_empty() {
-                ui.collapsing("페이지 메모", |ui| {
-                    for note in &self.pane.notes {
-                        ui.label(note);
+                },
+            );
+            let page_origin = start + vec2(0.0, paper::HEADER);
+            let rect =
+                Rect::from_min_size(page_origin, vec2(width, row.heights[side].unwrap_or(36.0)));
+            if let Some((preview, texture)) =
+                preview.and_then(|page| Some((page, page.textures.get(side)?.as_ref()?)))
+            {
+                let image = ui
+                    .put(rect, Image::new(texture).fit_to_exact_size(rect.size()))
+                    .rect;
+                let shade = if side == 0 {
+                    Color32::from_rgba_unmultiplied(207, 49, 65, 59)
+                } else {
+                    Color32::from_rgba_unmultiplied(30, 169, 112, 59)
+                };
+                for (index, region) in preview.regions.iter().enumerate() {
+                    let bounds = Rect::from_min_max(
+                        image.min + vec2(region[0] * image.width(), region[1] * image.height()),
+                        image.min + vec2(region[2] * image.width(), region[3] * image.height()),
+                    );
+                    ui.painter().rect_filled(bounds, 0.0, shade);
+                    if self.pane.selected_region == Some((number, index)) {
+                        ui.painter().rect_stroke(
+                            bounds,
+                            0.0,
+                            Stroke::new(2.0_f32, Color32::from_rgb(31, 102, 174)),
+                            StrokeKind::Inside,
+                        );
                     }
-                });
+                }
+            } else {
+                ui.painter()
+                    .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                let fault = text(&self.pane.data["faults"][side]);
+                let message = if !fault.is_empty() {
+                    fault
+                } else if row.heights[side].is_none() {
+                    "이 버전에는 이 쪽이 없습니다."
+                } else if preview.is_none() {
+                    "페이지 불러오는 중…"
+                } else {
+                    "이 쪽을 표시할 수 없습니다."
+                };
+                let label = Rect::from_min_size(rect.min, vec2(width, 28.0));
+                ui.put(label, Label::new(RichText::new(message).weak()).truncate());
             }
-        });
-        if drawn {
-            self.pane.scroll_to = false;
         }
     }
+
     fn request_index(&mut self) {
         if self.pane.indexing {
             return;

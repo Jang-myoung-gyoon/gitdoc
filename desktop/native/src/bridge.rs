@@ -20,6 +20,7 @@ pub struct Reply {
     pub scope: u64,
     pub result: Result<Value, String>,
     pub images: Vec<Option<PageImage>>,
+    pub page: Option<usize>,
 }
 
 pub struct Bridge {
@@ -52,6 +53,7 @@ impl Bridge {
                         scope: 0,
                         result: Err(error.to_string()),
                         images: vec![],
+                        page: None,
                     });
                     ui.request_repaint();
                     return;
@@ -97,6 +99,7 @@ impl Bridge {
                         scope: request.scope,
                         result,
                         images,
+                        page: request.params["number"].as_u64().map(|n| n as usize),
                     })
                     .is_err()
                 {
