@@ -33,7 +33,7 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 ## Version history and comparison
 
 1. Register an original file to create `v1.0.0` on `main`. Open a document or pick a specific version to read it in the app. **Save original** exports the stored file. GitDoc stores the original bytes of supported files up to 30 MB each.
-2. Create branches or submit draft revisions. Review each proposed change, then approve or reject it.
+2. Create branches or submit draft revisions. Review each proposed change, then approve or reject it. In **Compare two versions**, choose a different revision from the history to change the target while keeping the chosen base. Select **View one version** to leave comparison.
 3. Compare branch heads and their common ancestor. To resolve a conflict, submit a merged file of the same format. Restoring an older version records a new version.
 4. Use the previous/next change controls and the change list to jump to a difference. GitDoc matches spreadsheets by sheet name, so a reordered sheet keeps its identity. You can open a specific sheet and cell address.
 

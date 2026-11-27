@@ -117,6 +117,7 @@ pub struct GitDoc {
     show_diff: bool,
     list_changes: bool,
     compare_base: i64,
+    comparison_anchor: Option<i64>,
     branch_target: String,
     comparison: Value,
 }
@@ -143,6 +144,7 @@ impl GitDoc {
             show_diff: false,
             list_changes: false,
             compare_base: 0,
+            comparison_anchor: None,
             branch_target: String::new(),
             comparison: Value::Null,
         };
@@ -213,18 +215,43 @@ impl GitDoc {
             "mode": if self.selection.pages {"pages"} else {"auto"}}),
         );
     }
-    fn display(&mut self, version: i64, compared: bool) {
+    fn previous_version(&self, version: i64) -> i64 {
+        self.record(version).map_or(0, |row| id(&row["base_id"]))
+    }
+
+    fn display(&mut self, version: i64, base: Option<i64>) {
         self.comparison = Value::Null;
-        let base = self
-            .record(version)
-            .map(|row| id(&row["base_id"]))
-            .unwrap_or(0);
-        let ids = if compared && base > 0 {
-            vec![base, version]
-        } else {
-            vec![version]
+        let ids = match base {
+            Some(base) => vec![base, version],
+            None => vec![version],
         };
-        self.open_view(ids, Destination::default());
+        self.open_view(
+            ids,
+            Destination {
+                pages: self.selection.pages,
+                ..Default::default()
+            },
+        );
+    }
+
+    fn select_version(&mut self, version: i64, pending: bool) {
+        if self.ids.last() == Some(&version) {
+            return;
+        }
+        let previous = self.previous_version(version);
+        let base = if let Some(anchor) = self.comparison_anchor {
+            [
+                anchor,
+                previous,
+                self.ids.last().copied().unwrap_or(0),
+                self.head(),
+            ]
+            .into_iter()
+            .find(|&candidate| candidate > 0 && candidate != version)
+        } else {
+            (pending && previous > 0).then_some(previous)
+        };
+        self.display(version, base);
     }
     fn go_to_page(&mut self, page: usize, highlight: Option<usize>) {
         let total = count(&self.pane.data["pages"]);
@@ -354,7 +381,11 @@ impl GitDoc {
                         .filter(|n| *n > 0)
                         .unwrap_or(self.head());
                 }
-                self.compare_base = self.head();
+                self.comparison_anchor = (ids.len() == 2 && ids[0] != ids[1]).then(|| ids[0]);
+                self.compare_base = self.comparison_anchor.unwrap_or_else(|| {
+                    let previous = self.previous_version(ids[0]);
+                    if previous > 0 { previous } else { self.head() }
+                });
                 self.branch_target = rows(&self.detail["branches"])
                     .iter()
                     .map(|row| text(&row["name"]))
@@ -416,6 +447,7 @@ impl GitDoc {
             }
             "branch_compare" => {
                 let ids = vec![id(&result["base"]), id(&result["target"])];
+                self.comparison_anchor = (ids[0] != ids[1]).then(|| ids[0]);
                 self.comparison = result;
                 self.open_view(ids, Destination::default());
             }
@@ -608,7 +640,7 @@ impl GitDoc {
                 },
             );
         } else if let Some((version, compare)) = selected {
-            self.display(version, compare);
+            self.select_version(version, compare);
         }
     }
     fn save_as(&mut self, selected: i64, filename: &str, format: &str) {
@@ -682,7 +714,8 @@ impl GitDoc {
                 )
                 .clicked()
             {
-                self.display(selected, false);
+                self.comparison_anchor = None;
+                self.display(selected, None);
             }
             let choice = self
                 .record(self.compare_base)
@@ -707,17 +740,19 @@ impl GitDoc {
                 )
                 .clicked()
             {
-                self.comparison = Value::Null;
-                self.open_view(vec![self.compare_base, selected], Destination::default());
+                self.comparison_anchor = Some(self.compare_base);
+                self.display(selected, self.comparison_anchor);
             }
             if ui
                 .add_enabled(
-                    base > 0 && self.ids.len() == 1,
+                    base > 0 && self.ids.as_slice() != [base, selected],
                     Button::new("이전본과 비교"),
                 )
                 .clicked()
             {
-                self.display(selected, true);
+                self.compare_base = base;
+                self.comparison_anchor = Some(base);
+                self.display(selected, self.comparison_anchor);
             }
             if rows(&self.detail["branches"]).len() > 1 {
                 ComboBox::from_id_salt("merge-branch")
