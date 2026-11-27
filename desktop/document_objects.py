@@ -109,12 +109,15 @@ def insert_word_object(data, operation, value, candidates, single_page, *, legac
             while identifier in used or f"GitDocEllipse{identifier}" in vml_ids:
                 identifier += 1
             node = word_shape(value, identifier, legacy)
-        if anchor is not None:
-            anchor.addprevious(node)
-        elif (settings := body.find(WORD_TAG + "sectPr")) is not None:
-            settings.addprevious(node)
-        else:
+        insertion = anchor if anchor is not None else body.find(WORD_TAG + "sectPr")
+        previous = insertion.getprevious() if insertion is not None else (body[-1] if len(body) else None)
+        if operation == "table" and previous is not None and previous.tag == WORD_TAG + "tbl":
+            # Word can interpret adjacent tables as one table when converting to DOC.
+            previous.addnext(etree.Element(WORD_TAG + "p"))
+        if insertion is None:
             body.append(node)
+        else:
+            insertion.addprevious(node)
         return rewrite_package(archive, {path: root})
 
 

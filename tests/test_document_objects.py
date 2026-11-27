@@ -47,6 +47,23 @@ class DocumentObjectTests(unittest.TestCase):
               "-o", "sample.hwp"], folder)
         rhwp(["export-hwpx", str(folder / "sample.hwp"), str(folder / "sample.hwpx")], folder)
 
+    def test_adjacent_tables_stay_distinct_in_saved_doc(self):
+        path = self.folder / "sample.doc"
+        version = register_document(str(path), "Adjacent Word tables")["version"]
+        document_id, base = version["document_id"], version["id"]
+        session = CanvasSession()
+        self.addCleanup(session.close)
+        session.open(document_id, "main", base, 1)
+        for size in ([2, 3], [3, 4]):
+            session.page(number=1, operation="table", value=size)
+        updated = session.save("Add two tables", 1)["id"]
+        with store.database(readonly=True) as db:
+            saved = store.find_version(db, document_id, updated, "content")["content"]
+        with open_package(convert_format("doc", "docx", saved)) as archive:
+            root = parse_part(archive, "word/document.xml")
+            tables = root.findall(f".//{WORD_TAG}tbl")
+            self.assertEqual([len(node.findall(WORD_TAG + "tr")) for node in tables], [2, 3])
+
     def test_native_objects_save_reopen_and_render(self):
         for extension in ("doc", "docx", "hwp", "hwpx"):
             with self.subTest(extension=extension):
