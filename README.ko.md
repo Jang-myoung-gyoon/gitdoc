@@ -4,6 +4,10 @@
 
 한글, Word, PDF, PowerPoint, Excel을 GitDoc에서 열고, 지원하는 항목을 직접 편집하고, 버전을 관리합니다. 두 문서를 나란히 열어 변경 위치를 확인하고, 수정안을 검토하거나 별도 브랜치에서 병합할 수 있습니다. [기획서와 화면 시안](기획서.md)
 
+## GitDoc Hub
+
+[GitDoc Hub](hub/README.md)는 텍스트 문서 공동 편집, 저장소 초대, 버전 관리, 검토, MCP를 제공하는 웹 작업 공간입니다.
+
 ## 시작
 
 GitDoc은 Rust의 [eframe](https://github.com/emilk/egui/tree/main/crates/eframe)으로 macOS와 Windows에서 네이티브 창을 엽니다. Python 문서 엔진을 자식 프로세스로 시작해 표준 입출력으로 연결합니다. 데스크톱 앱과 MCP가 이 엔진과 SQLite 저장소를 공유합니다.

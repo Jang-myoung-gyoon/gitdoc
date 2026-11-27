@@ -1,0 +1,1 @@
+{"name":"gitdoc-hub","private":true,"type":"module","scripts":{"build":"node build.mjs","test":"node --test test/*.test.mjs","dev":"node --experimental-sqlite dev.mjs"},"dependencies":{"esbuild":"0.28.2","yjs":"13.6.33"}}

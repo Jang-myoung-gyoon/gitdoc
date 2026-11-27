@@ -4,6 +4,10 @@ English · [한국어](README.ko.md)
 
 GitDoc opens Hangul, Word, PDF, PowerPoint, and Excel files inside a desktop window. Compare versions side by side, make supported edits, and review proposals or merge branches in a local version history. [Project brief and mockups (Korean)](기획서.md)
 
+## GitDoc Hub
+
+The [GitDoc Hub](hub/README.md) is a separate hosted workspace for shared text documents, repository invitations, review, version history, and MCP.
+
 ## Getting started
 
 The macOS and Windows desktop window uses Rust and [eframe](https://github.com/emilk/egui/tree/main/crates/eframe). It starts the Python document engine as a child process and talks to it over standard input and output. The desktop app and MCP share the engine and SQLite repository.
