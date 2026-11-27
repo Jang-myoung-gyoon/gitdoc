@@ -188,7 +188,7 @@ impl GitDoc {
     }
     fn request(&mut self, op: &'static str, scope: u64, params: Value) -> bool {
         if self.bridge.send.send(Message { op, scope, params }).is_ok() {
-            if op != "changes" {
+            if !matches!(op, "page" | "changes") {
                 self.busy += 1;
             }
             true
@@ -307,21 +307,8 @@ impl GitDoc {
     }
 
     fn request_page(&mut self, page: usize) {
-        const PENDING_LIMIT: usize = 4;
-        if self.pane.previews.contains_key(&page)
-            || self
-                .pane
-                .previews
-                .values()
-                .filter(|preview| preview.is_none())
-                .count()
-                >= PENDING_LIMIT
-        {
-            return;
-        }
-        self.pane.previews.insert(page, None);
         let comparable = rows(&self.pane.data["counts"]).iter().all(|n| count(n) > 0);
-        self.request(
+        if self.request(
             "page",
             self.epoch,
             json!({"doc":self.doc,"ids":self.ids,"number":page,"comparable":comparable,
@@ -330,7 +317,9 @@ impl GitDoc {
                 "substitute_fonts":self.pane.data["substitute_fonts"],
                 "paths":self.pane.data["paths"],"pdfium_directory":self.pane.data["pdfium_directory"],
                 "pdf_notes":self.pane.data["pdf_notes"]}),
-        );
+        ) {
+            self.pane.previews.insert(page, None);
+        }
     }
 
     fn open_form(&mut self, action: Action, title: &'static str, values: Value) {
@@ -381,7 +370,7 @@ impl GitDoc {
     }
 
     fn receive(&mut self, ctx: &Context, frame: &eframe::Frame, reply: Reply) {
-        if reply.op != "changes" {
+        if !matches!(reply.op, "page" | "changes") {
             self.busy = self.busy.saturating_sub(1);
         }
         let wanted = match reply.op {
@@ -1034,7 +1023,10 @@ impl GitDoc {
             }
         }
         self.continuous_pages(ui, pages);
-        if comparison && self.pane.indexed_through < pages {
+        if comparison
+            && self.pane.indexed_through < pages
+            && self.pane.previews.values().all(Option::is_some)
+        {
             self.request_index();
         }
     }
@@ -1123,20 +1115,17 @@ impl GitDoc {
         }
         self.pane.paper_offset = Some(offset);
 
-        // Keep textures close to the viewport and render the next row ahead of scrolling.
-        let keep_from = visible.start.saturating_sub(1).max(1);
-        let keep_to = (visible.end + 2).min(pages);
-        self.pane
-            .previews
-            .retain(|number, preview| preview.is_none() || (keep_from..=keep_to).contains(number));
-        if let Some(page) = jump {
+        let order = paper::render_order(visible, pages, self.pane.page);
+        self.pane.previews.retain(|number, preview| {
+            preview.is_none() || order.clone().any(|page| page == *number)
+        });
+        // Re-evaluate priorities after every reply, so a jump never queues behind a set of neighbors.
+        if self.pane.previews.values().all(Option::is_some)
+            && let Some(page) = order
+                .into_iter()
+                .find(|page| !self.pane.previews.contains_key(page))
+        {
             self.request_page(page);
-        }
-        for index in visible.clone() {
-            self.request_page(index + 1);
-        }
-        if visible.end < pages {
-            self.request_page(visible.end + 1);
         }
     }
 

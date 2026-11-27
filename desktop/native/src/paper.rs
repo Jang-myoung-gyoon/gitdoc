@@ -43,6 +43,23 @@ pub fn visible(rows: &[PaperRow], top: f32, bottom: f32) -> Range<usize> {
     rows.partition_point(|row| row.bottom <= top)..rows.partition_point(|row| row.top < bottom)
 }
 
+/// Prioritize the selected page and visible rows before their immediate neighbors.
+pub fn render_order(
+    visible: Range<usize>,
+    pages: usize,
+    selected: usize,
+) -> impl Iterator<Item = usize> + Clone {
+    let neighbors = [
+        (visible.start > 0).then_some(visible.start),
+        (visible.end < pages).then_some(visible.end + 1),
+    ];
+    std::iter::once(selected)
+        .chain(visible.map(|index| index + 1))
+        .chain(neighbors.into_iter().flatten())
+        .enumerate()
+        .filter_map(move |(index, page)| (index == 0 || page != selected).then_some(page))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +79,15 @@ mod tests {
         assert_eq!(visible(&rows, 160.0, 300.0), 0..2);
         assert_eq!(visible(&rows, 170.0, 190.0), 1..1);
         assert_eq!(visible(&rows, 350.0, 500.0), 2..3);
+    }
+
+    #[test]
+    fn renders_visible_rows_before_prefetching_one_on_each_side() {
+        let order = |visible, selected| render_order(visible, 8, selected).collect::<Vec<_>>();
+        assert_eq!(order(2..4, 3), [3, 4, 2, 5]);
+        assert_eq!(order(2..4, 4), [4, 3, 2, 5]);
+        assert_eq!(order(0..1, 1), [1, 2]);
+        assert_eq!(order(7..8, 8), [8, 7]);
+        assert_eq!(order(4..4, 4), [4, 5]);
     }
 }

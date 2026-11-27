@@ -344,14 +344,13 @@ async function mountViewer(root) {
     });
     if (comparing) items.querySelector('[aria-current]')?.removeAttribute('aria-current');
     if (notes) showNotes(number);
-    showRow(number);
     updateControls();
     updateStatus();
   }
 
-  async function imageFor(index, number, signal) {
+  async function imageFor(index, number, signal, priority = 'low') {
     // A cancellable fetch releases queued work when the reader scrolls past it.
-    const response = await fetch(`${sides[index].url}/${number}.png`, { signal });
+    const response = await fetch(`${sides[index].url}/${number}.png`, { signal, priority });
     if (!response.ok) throw new Error('페이지 이미지를 열 수 없습니다.');
     const url = URL.createObjectURL(await response.blob());
     const image = new Image();
@@ -364,12 +363,13 @@ async function mountViewer(root) {
     }
   }
 
-  function showRow(number) {
+  function showRow(number, priority = 'high') {
     if (resident.has(number)) return resident.get(number).promise;
     const state = { done: false, controller: new AbortController(), rendered: [], regions: [] };
     resident.set(number, state);
     const cells = rows[number - 1].cells;
-    state.promise = Promise.allSettled(cells.map((cell, side) => cell && imageFor(side, cell.physicalPage, state.controller.signal)))
+    state.promise = Promise.allSettled(cells.map((cell, side) =>
+      cell && imageFor(side, cell.physicalPage, state.controller.signal, priority)))
       .then(results => {
         if (resident.get(number) !== state) return;
         state.done = true;
@@ -414,14 +414,32 @@ async function mountViewer(root) {
     rows[number - 1].cells.forEach(cell => cell?.sheet.replaceChildren());
   }
 
-  const observer = new IntersectionObserver(entries => {
-    for (const entry of entries) {
-      const number = Number(entry.target.dataset.pageNumber);
-      if (entry.isIntersecting) showRow(number);
-      else if (number !== pageNumber) hideRow(number);
+  function countRowsBefore(isBefore) {
+    let low = 0;
+    let high = total;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      const bounds = rows[middle].element.getBoundingClientRect();
+      if (isBefore(bounds)) low = middle + 1;
+      else high = middle;
     }
-  }, { root: scroll, rootMargin: '65% 0px' });
-  rows.forEach(row => observer.observe(row.element));
+    return low;
+  }
+
+  function renderViewport() {
+    if (!scroll.clientHeight) return;
+    const top = scroll.getBoundingClientRect().top + scroll.clientTop;
+    const bottom = top + scroll.clientHeight;
+    const first = countRowsBefore(bounds => bounds.bottom <= top) + 1;
+    const last = countRowsBefore(bounds => bounds.top < bottom);
+    for (const number of resident.keys()) {
+      if (number !== pageNumber && (number < first - 1 || number > last + 1)) hideRow(number);
+    }
+    showRow(pageNumber);
+    for (let number = first; number <= last; number += 1) showRow(number);
+    if (first > 1) showRow(first - 1, 'low');
+    if (last < total) showRow(last + 1, 'low');
+  }
 
   function topOf(element) {
     return scroll.scrollTop + element.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop;
@@ -431,14 +449,7 @@ async function mountViewer(root) {
     const bounds = scroll.getBoundingClientRect();
     if (scroll.scrollTop > 0 && scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 1) return total;
     const focus = bounds.top + Math.min(48, bounds.height / 4);
-    let low = 0;
-    let high = total;
-    while (low < high) {
-      const middle = (low + high) >> 1;
-      if (rows[middle].element.getBoundingClientRect().top <= focus) low = middle + 1;
-      else high = middle;
-    }
-    return Math.max(1, low);
+    return Math.max(1, countRowsBefore(row => row.top <= focus));
   }
 
   // Programmatic jumps clamp at the bottom and must keep the requested page active.
@@ -448,6 +459,7 @@ async function mountViewer(root) {
     scroll.scrollTo({ top, left });
     lastOffset = scroll.scrollTop;
     positioning = false;
+    renderViewport();
   }
 
   function jump(number) {
@@ -461,14 +473,9 @@ async function mountViewer(root) {
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = 0;
       if (positioning || Math.abs(scroll.scrollTop - lastOffset) < 0.5) return;
-      const old = pageNumber;
       lastOffset = scroll.scrollTop;
       activate(visiblePage());
-      if (old !== pageNumber) {
-        const bounds = scroll.getBoundingClientRect();
-        const row = rows[old - 1].element.getBoundingClientRect();
-        if (row.bottom < bounds.top - bounds.height || row.top > bounds.bottom + bounds.height) hideRow(old);
-      }
+      renderViewport();
     });
   }, { passive: true });
 
@@ -497,7 +504,10 @@ async function mountViewer(root) {
         const row = rows[number - 1];
         if (row.change) return pageChanges(null);
         const state = resident.get(number);
-        if (state?.done && !state.error) return { regions: state.regions, footerOnly: state.footerOnly };
+        if (state) {
+          await state.promise;
+          if (state.done && !state.error) return { regions: state.regions, footerOnly: state.footerOnly };
+        }
         const images = await Promise.all(row.cells.map((cell, index) => imageFor(index, cell.physicalPage)));
         return pageChanges(comparePixels(...images), footers[number - 1]);
       })());
@@ -602,6 +612,9 @@ async function mountViewer(root) {
   setZoom();
   const initialPage = Number(root.closest('[data-document-editor]')?.dataset.page || params.get('page') || 1);
   jump(Number.isInteger(initialPage) ? initialPage : 1);
+  const resize = new ResizeObserver(renderViewport);
+  resize.observe(scroll);
+  resize.observe(stack);
   const initialChange = Number(params.get('change'));
   if (comparable && Number.isInteger(initialChange) && initialChange > 0) {
     await focusRegion(pageNumber, initialChange - 1);
