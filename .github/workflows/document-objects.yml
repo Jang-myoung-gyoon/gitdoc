@@ -46,6 +46,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_document_objects.py -v
           python -m unittest discover -s tests -p test_presentation_edit.py -v
+          python -m unittest discover -s tests -p 'test_branch_*.py' -v
 
   desktop-toolbar:
     runs-on: macos-15

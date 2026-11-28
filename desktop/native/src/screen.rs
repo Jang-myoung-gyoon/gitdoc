@@ -45,6 +45,7 @@ fn saved_message(result: &Value) -> &'static str {
 enum Action {
     Register,
     Branch,
+    SplitBranch,
     Submit,
     Edit,
     Approve,
@@ -69,6 +70,7 @@ struct Form {
     replacement: String,
     page: usize,
     submitting: bool,
+    confirmed: bool,
     error: Option<String>,
     office: Option<Editor>,
     find_mode: bool,
@@ -91,6 +93,7 @@ impl Form {
             replacement: String::new(),
             page: 1,
             submitting: false,
+            confirmed: false,
             error: None,
             office: None,
             find_mode: false,
@@ -359,10 +362,7 @@ impl GitDoc {
 
     fn open_editor(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self
-            .record(self.head())
-            .map(|row| text(&row["extension"]))
-            .unwrap_or("");
+        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
         let format = match extension {
             "pptx" => Some(presentation::Format::Slides),
             "doc" | "docx" => Some(presentation::Format::Word),
@@ -388,7 +388,10 @@ impl GitDoc {
 
     fn open_editor_form(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
+        let extension = self
+            .record(self.head())
+            .map(|row| text(&row["extension"]))
+            .unwrap_or("");
         let mode = match extension {
             "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
@@ -555,11 +558,13 @@ impl GitDoc {
                     self.pane.index_failures += pages.saturating_sub(self.pane.indexed_through);
                     self.pane.indexed_through = pages;
                 }
-                if matches!(reply.op, "edit" | "rewind" | "edit_contents")
-                    && let Some(form) = self
-                        .form
-                        .as_mut()
-                        .filter(|form| form.submitting || form.mode == "blocks")
+                if matches!(
+                    reply.op,
+                    "edit" | "rewind" | "split_branch" | "edit_contents"
+                ) && let Some(form) = self
+                    .form
+                    .as_mut()
+                    .filter(|form| form.submitting || form.mode == "blocks")
                 {
                     form.submitting = false;
                     form.error = Some(error);
@@ -728,6 +733,12 @@ impl GitDoc {
                 );
                 self.notify("브랜치를 만들었습니다.", false);
             }
+            "split_branch" => {
+                self.form = None;
+                self.refresh();
+                self.open_doc(id(&result["document_id"]), Destination::default());
+                self.notify("선택한 브랜치를 새 문서로 분리했습니다.", false);
+            }
             "submit" | "edit" => {
                 if reply.op != "submit" {
                     self.form = None;
@@ -858,6 +869,7 @@ impl GitDoc {
         let mut branch = None;
         let mut selected = None;
         let mut rewind = None;
+        let mut origin = None;
         SidePanel::left("library")
             .resizable(true)
             .default_width(290.0)
@@ -921,6 +933,32 @@ impl GitDoc {
                         );
                     }
                 });
+                let branch_record = &self.detail["branch"];
+                if self.branch != "main" {
+                    let pending = rows(&self.detail["branches"])
+                        .iter().find(|row| row["id"] == branch_record["id"])
+                        .is_some_and(|row| count(&row["pending"]) > 0);
+                    if ui.add_enabled(!pending, Button::new("새 문서로 분리…"))
+                        .on_hover_text("현재 브랜치를 독립 문서의 main으로 옮깁니다.")
+                        .on_disabled_hover_text("검토 대기 중인 수정안을 먼저 승인하거나 반려하세요.")
+                        .clicked()
+                    {
+                        self.open_form(Action::SplitBranch, "새 문서로 분리", json!({
+                            "document_id": self.doc, "name": self.branch,
+                            "branch_id": id(&branch_record["id"]), "expected_head": self.head(),
+                            "source_title": self.detail["title"], "source_version": branch_record["version_label"]
+                        }));
+                    }
+                }
+                let split = &self.detail["split_origin"];
+                if id(&split["source_document_id"]) > 0 {
+                    ui.label(format!("분리 출처 · {} / {} · {}",
+                        text(&split["source_title"]), text(&split["source_branch"]),
+                        text(&split["source_version_label"])));
+                    if ui.link("분리 전 버전 보기").clicked() {
+                        origin = Some((id(&split["source_document_id"]), id(&split["source_head_id"])));
+                    }
+                }
                 if rows(&self.detail["branches"]).len() > 1 {
                     ui.horizontal_wrapped(|ui| {
                         ComboBox::from_id_salt("merge-branch")
@@ -1024,6 +1062,14 @@ impl GitDoc {
             self.open_form(Action::Rewind, title, json!({
                 "doc":self.doc, "branch":self.branch, "version":version, "base":self.head(), "label":label
             }));
+        } else if let Some((doc, version)) = origin {
+            self.open_doc(
+                doc,
+                Destination {
+                    ids: vec![version],
+                    ..Default::default()
+                },
+            );
         } else if chosen > 0 {
             self.open_doc(chosen, Destination::default());
         } else if let Some(branch) = branch {
@@ -2035,6 +2081,14 @@ impl GitDoc {
                     });
                     ui.text_edit_singleline(&mut form.name);
                 }
+                if form.action == Action::SplitBranch {
+                    ui.label(format!("{} / {} · {}", text(&form.values["source_title"]),
+                        text(&form.values["name"]), text(&form.values["source_version"])));
+                    let label = ui.label("새 문서 제목");
+                    ui.add(TextEdit::singleline(&mut form.name).char_limit(120)).labelled_by(label.id);
+                    ui.label("분리한 이력은 새 문서의 main에 저장됩니다. 기존 버전 ID로 원본 기록을 열 수 있습니다.");
+                    ui.checkbox(&mut form.confirmed, "원본 문서에서 이 브랜치를 제거합니다.");
+                }
                 if form.action == Action::Rewind {
                     ui.label(format!("{} 브랜치의 확정본을 {}으로 옮깁니다.",
                         text(&form.values["branch"]), text(&form.values["label"])));
@@ -2155,7 +2209,7 @@ impl GitDoc {
                     form.action,
                     Action::Submit | Action::Merge | Action::Restore
                 );
-                let required_name = matches!(form.action, Action::Register | Action::Branch);
+                let required_name = matches!(form.action, Action::Register | Action::Branch | Action::SplitBranch);
                 let mut submit_from_reason = false;
                 if required_reason || matches!(form.action, Action::Edit | Action::Approve | Action::Reject) {
                     let label = ui.label(if required_reason {
@@ -2176,12 +2230,14 @@ impl GitDoc {
                 let valid = (!form.needs_file() || form.file.is_some())
                     && (!required_reason || !form.reason.trim().is_empty())
                     && (!required_name || !form.name.trim().is_empty())
+                    && (form.action != Action::SplitBranch || form.confirmed)
                     && (form.mode != "blocks" || if form.find_mode {
                         !form.find.is_empty() && form.find != form.replacement
                     } else { form.office.as_ref().is_some_and(Editor::has_changes) });
                 ui.horizontal(|ui| {
                     save = ui.add_enabled(valid, Button::new(match form.action {
                         Action::Edit => "수정안 저장",
+                        Action::SplitBranch => "분리하기",
                         _ => "확인",
                     })).clicked() || valid && submit_from_reason;
                     cancel = ui.button("취소").clicked();
@@ -2190,7 +2246,8 @@ impl GitDoc {
             if form.submitting {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("수정안을 저장하는 중…");
+                    ui.label(if form.action == Action::SplitBranch { "브랜치를 분리하는 중…" }
+                             else { "수정안을 저장하는 중…" });
                 });
             }
             if let Some(error) = &form.error {
@@ -2211,6 +2268,14 @@ impl GitDoc {
                 Action::Branch => {
                     args["name"] = json!(form.name);
                     "branch"
+                }
+                Action::SplitBranch => {
+                    let values = args.as_object_mut().expect("split arguments");
+                    values.remove("source_title");
+                    values.remove("source_version");
+                    args["title"] = json!(form.name);
+                    args["confirmed"] = json!(form.confirmed);
+                    "split_branch"
                 }
                 Action::Submit => "submit",
                 Action::Edit => {
@@ -2258,7 +2323,10 @@ impl GitDoc {
             ) {
                 args["reason"] = json!(form.reason);
             }
-            if matches!(form.action, Action::Edit | Action::Rewind) {
+            if matches!(
+                form.action,
+                Action::Edit | Action::Rewind | Action::SplitBranch
+            ) {
                 let sent = self.request(operation, 0, args);
                 if let Some(form) = &mut self.form {
                     form.submitting = sent;
@@ -2401,6 +2469,85 @@ mod tests {
         assert_eq!(column_name(27), "AB");
         assert_eq!(cell_position("XFE1"), None);
         assert_eq!(cell_position("A0"), None);
+    }
+    #[test]
+    fn branch_split_sidebar_requires_confirmation_and_sends_checked_head() {
+        use std::sync::mpsc::channel;
+
+        let (send, requests) = channel();
+        let (_, read) = channel();
+        let mut app = GitDoc::new(Bridge { send, read }, Ok(Destination::default()));
+        while requests.try_recv().is_ok() {}
+        app.doc = 5;
+        app.branch = "draft".into();
+        app.detail = json!({
+            "title": "Original", "branch": {"id": 17, "head_id": 82, "version_label": "v1.2.0"},
+            "branches": [{"id": 13, "name": "main", "pending": 0}, {"id": 17, "name": "draft", "pending": 0}]
+        });
+        let ctx = Context::default();
+        fn frame(ctx: &Context, app: &mut GitDoc, events: Vec<Event>) -> FullOutput {
+            ctx.run(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(620.0, 690.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.sidebar(ui);
+                    app.edit_dialog(ui);
+                },
+            )
+        }
+        fn click(ctx: &Context, app: &mut GitDoc, label: &str) {
+            let output = frame(ctx, app, vec![]);
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|entry| match &entry.shape {
+                    Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("Missing {label}"));
+            for pressed in [true, false] {
+                frame(
+                    ctx,
+                    app,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        }
+        frame(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, "새 문서로 분리…");
+        assert!(app.form.is_some());
+        click(&ctx, &mut app, "취소");
+        assert!(app.form.is_none());
+        assert!(requests.try_recv().is_err());
+
+        click(&ctx, &mut app, "새 문서로 분리…");
+        app.form.as_mut().unwrap().name = "Independent".into();
+        click(&ctx, &mut app, "분리하기");
+        assert!(requests.try_recv().is_err());
+        click(&ctx, &mut app, "원본 문서에서 이 브랜치를 제거합니다.");
+        click(&ctx, &mut app, "분리하기");
+        let request = requests.try_recv().unwrap();
+        assert_eq!(request.op, "split_branch");
+        assert_eq!(
+            request.params,
+            json!({
+                "document_id": 5, "name": "draft", "branch_id": 17, "expected_head": 82,
+                "title": "Independent", "confirmed": true
+            })
+        );
     }
     #[test]
     fn aligns_sheets_by_name() {

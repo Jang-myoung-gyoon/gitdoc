@@ -19,8 +19,8 @@ from preview import PreviewError, page_dimensions, preview_path, preview_png, re
 from workbook import read_workbook
 from store import (
     VERSION_FIELDS, branch_history, branch_list, database,
-    find_branch, find_document, find_version, initialize, merge_state,
-    search_documents, text_diff,
+    detached_branch_document, find_branch, find_document, find_version, initialize, merge_state,
+    search_documents, text_diff, view_branch,
 )
 from workflow import MissingEntity, review_revision
 
@@ -107,6 +107,14 @@ def index():
     return render_template("index.html", documents=documents, query=query)
 
 
+def viewing_branch(db, document_id, opened):
+    name = request.args.get("branch")
+    active = view_branch(db, document_id, name, opened)
+    if active is None and name and (detached := detached_branch_document(db, document_id, name)):
+        abort(400, description=f"분리된 브랜치입니다. 새 문서 ID: {detached['document_id']}")
+    return require(active)
+
+
 @app.get("/documents/<int:document_id>")
 def detail(document_id):
     with database(readonly=True) as db:
@@ -115,8 +123,7 @@ def detail(document_id):
         if open_id is None and "version" in request.args:
             abort(400, description="문서 버전 ID를 확인하세요.")
         opened = version(db, document_id, open_id) if open_id is not None else None
-        default_branch = opened["branch_name"] if opened else "main"
-        active = branch(db, document_id, request.args.get("branch", default_branch))
+        active = viewing_branch(db, document_id, opened)
         branches = branch_list(db, document_id)
         versions = branch_history(db, active)
         current = version(db, document_id, active["head_id"])
@@ -157,7 +164,7 @@ def compare(document_id):
         if target is None:
             abort(400, description="비교할 버전을 선택하세요.")
         updated = version(db, document_id, target, VERSION_FIELDS + ", extracted")
-        active = branch(db, document_id, request.args.get("branch", updated["branch_name"]))
+        active = viewing_branch(db, document_id, updated)
         base = request.args.get("base", type=int) or updated["base_id"] or active["head_id"]
         original = version(db, document_id, base, VERSION_FIELDS + ", extracted")
         current = original if base == active["head_id"] else (

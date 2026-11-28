@@ -2,7 +2,7 @@
 
 from urllib.parse import quote, urlencode
 
-from store import database, find_branch, find_document, find_version
+from store import database, detached_branch_document, find_document, find_version, view_branch
 
 
 def document_path(document_id=None, *, base=None, target=None, version=None, branch=None,
@@ -39,10 +39,15 @@ def checked_document_path(document_id=None, *, base=None, target=None, version=N
         with database(readonly=True) as db:
             if not find_document(db, document_id):
                 raise ValueError("문서를 찾을 수 없습니다.")
+            opened = None
             for version_id in (base, target, version):
-                if version_id is not None and not find_version(db, document_id, version_id):
-                    raise ValueError("이 문서의 버전을 찾을 수 없습니다.")
-            if branch and not find_branch(db, document_id, branch):
+                if version_id is not None:
+                    opened = find_version(db, document_id, version_id)
+                    if opened is None:
+                        raise ValueError("이 문서의 버전을 찾을 수 없습니다.")
+            if branch and not view_branch(db, document_id, branch, opened):
+                if detached := detached_branch_document(db, document_id, branch):
+                    raise ValueError(f"분리된 브랜치입니다. 새 문서 ID: {detached['document_id']}")
                 raise ValueError("브랜치를 찾을 수 없습니다.")
     return document_path(document_id, branch=branch, base=base, target=target, version=version,
                          page=page, change=change, sheet=sheet, cell=cell, row_key=row_key, view=view)

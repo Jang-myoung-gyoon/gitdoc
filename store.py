@@ -34,7 +34,9 @@ VERSION_FIELDS = """
     id, document_id, number, version_label, change_scale, change_basis, filename, extension, size, sha256, reason, status,
     base_id, restored_from, created_at, review_note, reviewed_at, extraction_note,
     branch_id, merge_parent_id, page_base_count, page_insert_before, page_insert_count, page_delete_at,
-    (SELECT name FROM branches WHERE branches.id = versions.branch_id) AS branch_name,
+    COALESCE((SELECT source_name FROM branch_splits WHERE source_branch_id = versions.branch_id),
+             (SELECT name FROM branches WHERE branches.id = versions.branch_id)) AS branch_name,
+    (SELECT document_id FROM branch_splits WHERE source_branch_id = versions.branch_id) AS split_document_id,
     (SELECT number FROM versions AS source WHERE source.id = versions.restored_from) AS restored_number,
     (SELECT version_label FROM versions AS source WHERE source.id = versions.restored_from) AS restored_version_label
 """
@@ -85,6 +87,14 @@ def initialize():
                 id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES documents(id),
                 name TEXT NOT NULL COLLATE NOCASE, head_id INTEGER REFERENCES versions(id),
                 UNIQUE (document_id, name)
+            )
+        """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS branch_splits (
+                document_id INTEGER PRIMARY KEY REFERENCES documents(id),
+                source_branch_id INTEGER NOT NULL UNIQUE REFERENCES branches(id),
+                source_name TEXT NOT NULL COLLATE NOCASE,
+                source_head_id INTEGER NOT NULL REFERENCES versions(id)
             )
         """)
         db.execute("""
@@ -173,6 +183,7 @@ def find_branch(db, document_id, name):
     return db.execute("""
         SELECT b.*, v.version_label FROM branches b LEFT JOIN versions v ON v.id = b.head_id
         WHERE b.document_id = ? AND b.name = ?
+          AND NOT EXISTS (SELECT 1 FROM branch_splits WHERE source_branch_id = b.id)
     """,
                       (document_id, name)).fetchone()
 
@@ -182,6 +193,7 @@ def branch_list(db, document_id):
         SELECT b.*, v.number, v.version_label, (SELECT COUNT(*) FROM versions p
                                WHERE p.branch_id = b.id AND p.status = 'pending') AS pending
         FROM branches b JOIN versions v ON v.id = b.head_id WHERE b.document_id = ?
+          AND NOT EXISTS (SELECT 1 FROM branch_splits WHERE source_branch_id = b.id)
         ORDER BY b.name != 'main', b.name
     """, (document_id,)).fetchall()
 
@@ -298,3 +310,32 @@ def text_diff(original, updated, limit=600, max_chars=120000):
         lines.append(line)
         remaining -= len(line)
     return lines, False
+
+
+def split_origin(db, document_id):
+    return db.execute("""
+        SELECT b.document_id AS source_document_id, d.title AS source_title,
+               s.source_name AS source_branch, s.source_head_id, v.version_label AS source_version_label
+        FROM branch_splits s JOIN branches b ON b.id = s.source_branch_id
+        JOIN documents d ON d.id = b.document_id JOIN versions v ON v.id = s.source_head_id
+        WHERE s.document_id = ?
+    """, (document_id,)).fetchone()
+
+
+def detached_branch_document(db, document_id, name):
+    return db.execute("""
+        SELECT s.document_id, s.source_head_id FROM branch_splits s JOIN branches b ON b.id = s.source_branch_id
+        WHERE b.document_id = ? AND s.source_name = ? ORDER BY s.source_branch_id DESC LIMIT 1
+    """, (document_id, name)).fetchone()
+
+
+def view_branch(db, document_id, name=None, version=None):
+    # A version-ID link addresses immutable history even after its branch is split.
+    if version and version["split_document_id"] is not None and (
+            name is None or name.lower() == version["branch_name"].lower()):
+        name = "main"
+    active = find_branch(db, document_id, name or (version["branch_name"] if version else "main"))
+    if active is None and name and version and (split := detached_branch_document(db, document_id, name)):
+        if version["id"] == split["source_head_id"]:
+            return find_branch(db, document_id, "main")
+    return active

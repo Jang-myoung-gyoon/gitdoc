@@ -138,6 +138,8 @@ Spreadsheet units are cell values and extracted formulas keyed by sheet and addr
 
 In the desktop version history, right-click a commit to rewind the current branch to that version or to remove that commit and the newer commits from the branch. GitDoc asks for confirmation and creates a `recovery-…` branch at the old head. A regular restore instead records the old contents as a new version. The rewind is also available through `reset_document_branch`.
 
+Select a non-main branch under **브랜치** and choose **새 문서로 분리…**. Enter a title and confirm removal of that branch from the original document. The new document has its own `main`, starting at `v1.0.0` from the split point, followed by the copied versions, with a link to its origin. Old links that specify a version ID still open the original record. Pending reviews and branch dependencies or merge history outside the transferable range must be resolved before splitting. The MCP tool is `split_document_branch` and requires the branch ID, expected head ID and explicit confirmation.
+
 Open **텍스트 수정** from an approved version to change its text beside the preview. Saving opens the comparison with the previous version. If the head changes while editing, start again from the latest version.
 
 Enable **설정 → 수정안 검토 사용** in the desktop app to save new desktop edits and submissions as pending drafts. A yellow background in the version history identifies pending drafts, which can be approved or rejected. Review is off by default, so new desktop versions are approved immediately. Existing pending drafts keep their status. MCP and CLI draft tools continue to create pending revisions.

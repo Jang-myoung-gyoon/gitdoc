@@ -23,11 +23,12 @@ from page_text import page_text
 from preview import CACHE, PreviewError, page_dimensions, page_sizes, poppler_available, preview_path, preview_png, unembedded_fonts
 from store import (
     VERSION_FIELDS, branch_history, branch_list, create_document, database, desktop_review_enabled, find_branch,
-    find_document, find_version, first_parent_ids, initialize, merge_state, new_branch, search_documents, set_desktop_review, text_diff,
+    detached_branch_document, find_document, find_version, first_parent_ids, initialize, merge_state, new_branch,
+    search_documents, set_desktop_review, split_origin, text_diff, view_branch,
 )
 from uploads import load_local_file, prepare_upload
 from workbook import read_workbook
-from workflow import merge_revision, require, reset_branch, restore_revision, review_revision, save_document_edit, save_proposal
+from workflow import merge_revision, require, reset_branch, restore_revision, review_revision, save_document_edit, save_proposal, split_branch
 
 
 def item(db, doc, version, fields=VERSION_FIELDS):
@@ -42,13 +43,19 @@ def library(query=""):
 def detail(doc, branch=None, version=None):
     with database() as db:
         document = require(find_document(db, doc), "문서")
-        if branch is None and version is not None:
-            branch = item(db, doc, version)["branch_name"]
-        active = require(find_branch(db, doc, branch or "main"), "브랜치")
+        opened = item(db, doc, version) if version is not None else None
+        active = view_branch(db, doc, branch, opened)
+        if active is None and branch and (detached := detached_branch_document(db, doc, branch)):
+            raise ValueError(f"분리된 브랜치입니다. 새 문서 ID: {detached['document_id']}")
+        active = require(active, "브랜치")
+        history = [dict(row) for row in branch_history(db, active)]
+        if opened and opened["split_document_id"] is not None and all(row["id"] != version for row in history):
+            history.append(dict(opened))
+        origin = split_origin(db, doc)
         return {
             "title": document["title"], "branch": dict(active),
             "branches": [dict(row) for row in branch_list(db, doc)],
-            "versions": [dict(row) for row in branch_history(db, active)],
+            "versions": history, "split_origin": dict(origin) if origin else None,
             "first_parents": first_parent_ids(db, active["head_id"]),
         }
 
@@ -316,7 +323,7 @@ canvas_editor = CanvasSession()
 OPERATIONS = {
     "workspace": desktop_workspace, "desktop_review": set_desktop_review, "library": library, "detail": detail, "branch_compare": branch_comparison,
     "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
-    "branch": create_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,
+    "branch": create_branch, "split_branch": split_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,
     "restore": restore, "rewind": rewind, "save": save_file, "print": print_preview, "merge": merge,
     "browser": open_browser_view, "font_raster": font_raster,
     "deck_open": canvas_editor.open, "deck_page": canvas_editor.page,
