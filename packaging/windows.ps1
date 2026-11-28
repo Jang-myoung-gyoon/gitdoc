@@ -83,6 +83,6 @@ $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
 if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
 if (-not (Test-Path $iscc)) { throw "Inno Setup 6 (iscc) is required." }
 $root = (Get-Location).Path
-& $iscc /Qp "/DAppVersion=$version" "/DSourceDir=$root\$stage" "/DOutputDir=$root\dist" packaging\gitdoc.iss
+& $iscc /Qp "/DAppVersion=$version" "/DSourceDir=$root\$stage" "/DOutputDir=$root\dist" "/DProductIcon=$root\desktop\icons\gitdoc.ico" packaging\gitdoc.iss
 Check "Inno Setup failed"
 Write-Output "dist\GitDoc-$version-windows-x64-setup.exe"

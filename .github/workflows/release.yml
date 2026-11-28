@@ -97,6 +97,8 @@ jobs:
           hdiutil detach -quiet "$RUNNER_TEMP/gitdoc-image"
           bundle="$RUNNER_TEMP/Applications/GitDoc.app"
           codesign --verify --deep --strict "$bundle"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$bundle/Contents/Info.plist")" = GitDoc.icns
+          cmp desktop/icons/GitDoc.icns "$bundle/Contents/Resources/GitDoc.icns"
           for name in GitDoc gitdoc-desktop gitdoc-pdf gitdoc-ocr; do
             test "$(lipo -archs "$bundle/Contents/MacOS/$name")" = arm64
           done
@@ -177,6 +179,7 @@ jobs:
           }
           $run = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$install`"" -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "setup exited with $($run.ExitCode)" }
+          ./packaging/check-windows-icon.ps1 -Executables @($setup, "$install\gitdoc-desktop.exe", "$install\unins000.exe")
           if ($migrate) {
             $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6A2E4C0B-3C0F-4F6E-9B57-7D1B6C1F5E21}_is1'
             $registration = Get-ItemProperty $uninstallKey

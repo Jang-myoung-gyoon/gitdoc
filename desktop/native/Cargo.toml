@@ -5,6 +5,9 @@ edition = "2024"
 license = "MIT"
 default-run = "gitdoc-desktop"
 
+[build-dependencies]
+embed-resource = "3.0.12"
+
 [dependencies]
 eframe = { version = "0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }

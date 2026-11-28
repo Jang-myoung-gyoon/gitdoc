@@ -74,6 +74,8 @@ The macOS signing and notarization steps run on version-tag pushes in the upstre
 
 To build locally, run `sh packaging/macos.sh` on an Apple Silicon Mac or `./packaging/windows.ps1` in PowerShell 7 with Inno Setup 6 installed. Output goes to `dist/`. The local macOS bundle uses ad-hoc signing.
 
+The [product icon source](static/gitdoc.svg) is shared by the web header and favicon, native app, and desktop packages. To regenerate the checked-in PNG, ICO, and ICNS, install `resvg` 0.45.1 on macOS and run `python packaging/generate-icons.py` in the project environment with Pillow installed.
+
 ## Browser viewer
 
 The desktop app and web viewer share the same document workspace. Check the workspace label and ID in both headers. Select **브라우저에서 보기** to open the current version or comparison in your default browser. To open it in Codex's built-in browser, paste the address from **웹 링크 복사**. Use **웹 문서함 링크 복사** to open the workspace library instead. Document links carry over the branch, versions, page or changed region, and spreadsheet position. Reload the browser to see changes saved from the desktop app or command-line tools. Compare a pending draft with the current branch head and choose **검토 및 확정** to approve it in the same workspace.

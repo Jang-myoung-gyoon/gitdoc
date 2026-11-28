@@ -144,6 +144,7 @@ struct Pane {
 pub struct GitDoc {
     bridge: Bridge,
     updates: Updates,
+    brand_icon: TextureHandle,
     busy: usize,
     epoch: u64,
     doc: i64,
@@ -171,10 +172,16 @@ pub struct GitDoc {
 }
 
 impl GitDoc {
-    pub fn new(bridge: Bridge, destination: Result<Destination, String>, updates: Updates) -> Self {
+    pub fn new(
+        bridge: Bridge,
+        destination: Result<Destination, String>,
+        updates: Updates,
+        brand_icon: TextureHandle,
+    ) -> Self {
         let mut app = Self {
             bridge,
             updates,
+            brand_icon,
             busy: 0,
             epoch: 0,
             doc: 0,
@@ -806,6 +813,7 @@ impl GitDoc {
         TopBottomPanel::top("title").show(ctx, |ui| {
             ui.add_space(5.0);
             ui.horizontal(|ui| {
+                ui.image((self.brand_icon.id(), vec2(24.0, 24.0)));
                 ui.heading("GitDoc");
                 ui.separator();
                 ui.label(&self.workspace);

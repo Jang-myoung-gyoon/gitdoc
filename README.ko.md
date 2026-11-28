@@ -74,6 +74,8 @@ macOS 서명 및 공증 단계는 원본 저장소의 버전 태그 푸시에서
 
 로컬에서는 Apple Silicon Mac에서 `sh packaging/macos.sh`, Inno Setup 6을 설치한 PowerShell 7에서 `./packaging/windows.ps1`을 실행합니다. 결과물은 `dist/`에 생깁니다. 로컬 macOS 번들은 ad-hoc 서명됩니다.
 
+웹 헤더와 파비콘, 데스크톱 앱과 설치 패키지는 [제품 아이콘 SVG](static/gitdoc.svg)를 공유합니다. PNG, ICO, ICNS를 다시 만들려면 macOS에 `resvg` 0.45.1을 설치하고 Pillow가 있는 프로젝트 환경에서 `python packaging/generate-icons.py`를 실행하세요.
+
 ## 브라우저 뷰어
 
 데스크톱 앱에서 **브라우저에서 보기**를 누르면 현재 버전 또는 두 버전 비교가 기본 브라우저에서 열립니다. 보고 있던 페이지나 시트의 선택 셀도 이어서 볼 수 있습니다.

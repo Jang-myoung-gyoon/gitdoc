@@ -16,7 +16,7 @@ body { margin: 0; }
 .top { background: var(--paper); border-bottom: 1px solid var(--line); }
 .top .wrap { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-weight: 800; }
-.mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: white; font-size: 19px; }
+.mark { flex: none; display: block; }
 main { padding-block: 38px 64px; }
 h1, h2, p { margin-top: 0; }
 h1 { font-size: clamp(29px, 5vw, 44px); letter-spacing: -0.04em; margin-bottom: 9px; overflow-wrap: anywhere; }

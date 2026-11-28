@@ -43,6 +43,13 @@ jobs:
           workspaces: desktop/native
       - name: Test the Windows desktop update controls
         run: cargo test --locked --manifest-path desktop/native/Cargo.toml updates::tests
+      - name: Verify the native application icon
+        run: |
+          $manifest = 'desktop/native/Cargo.toml'
+          cargo build --locked --manifest-path $manifest --bin gitdoc-desktop
+          if ($LASTEXITCODE -ne 0) { throw "Windows application build failed" }
+          $metadata = cargo metadata --locked --no-deps --format-version 1 --manifest-path $manifest | ConvertFrom-Json
+          ./packaging/check-windows-icon.ps1 -Executables @("$($metadata.target_directory)\debug\gitdoc-desktop.exe")
   macos:
     runs-on: macos-15
     timeout-minutes: 20

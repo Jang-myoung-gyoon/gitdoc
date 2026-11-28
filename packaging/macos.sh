@@ -30,6 +30,7 @@ assemble() {
     mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/app/desktop" dist/cache
 
     cp desktop/Info.plist "$bundle/Contents/Info.plist"
+    cp desktop/icons/GitDoc.icns "$bundle/Contents/Resources/"
     plist() { /usr/libexec/PlistBuddy -c "$1" "$bundle/Contents/Info.plist"; }
     plist "Set :CFBundleShortVersionString $version"
     plist "Set :CFBundleVersion $version"

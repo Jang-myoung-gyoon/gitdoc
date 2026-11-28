@@ -54,12 +54,14 @@ Set-Content (Join-Path $old "app\version.txt") 'old' -Encoding ascii
 Set-Content (Join-Path $new "app\version.txt") 'new' -Encoding ascii
 
 function Build-Fixture($source, $version, $recipe) {
-    & $iscc /Qp "/DAppVersion=$version" "/DSourceDir=$source" "/DOutputDir=$testRoot" $recipe | Out-Host
+    $icon = (Resolve-Path desktop\icons\gitdoc.ico).Path
+    & $iscc /Qp "/DAppVersion=$version" "/DSourceDir=$source" "/DOutputDir=$testRoot" "/DProductIcon=$icon" $recipe | Out-Host
     if ($LASTEXITCODE) { throw "Inno fixture build failed." }
     return Join-Path $testRoot "GitDoc-$version-windows-x64-setup.exe"
 }
 $prior = Build-Fixture $old '0.1.3' "packaging\gitdoc.iss"
 $success = Build-Fixture $new '0.1.4' "packaging\gitdoc.iss"
+& "$PSScriptRoot\check-windows-icon.ps1" -Executables @($success)
 $brokenRecipe = Join-Path $testRoot "failing.iss"
 Get-Content packaging\gitdoc.iss | Set-Content $brokenRecipe
 @'
@@ -92,6 +94,7 @@ try {
     $initial = Start-Process $prior -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES',$dirArg -PassThru
     if (!$initial.WaitForExit(30000)) { throw 'Old fixture setup timed out.' }
     if ($initial.ExitCode -ne 0) { throw "Old fixture did not install." }
+    & "$PSScriptRoot\check-windows-icon.ps1" -Executables @("$install\unins000.exe")
     $env:GITDOC_UPDATE_PATH = $install
     $env:GITDOC_UPDATE_MODE = "verify"
     $env:GITDOC_UPDATE_PARENT = "2147483647"

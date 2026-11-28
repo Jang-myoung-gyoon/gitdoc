@@ -8,6 +8,9 @@
 #ifndef OutputDir
   #define OutputDir "..\dist"
 #endif
+#ifndef ProductIcon
+  #define ProductIcon AddBackslash(SourcePath) + "..\desktop\icons\gitdoc.ico"
+#endif
 
 [Setup]
 AppId={{6A2E4C0B-3C0F-4F6E-9B57-7D1B6C1F5E21}
@@ -25,6 +28,7 @@ OutputBaseFilename=GitDoc-{#AppVersion}-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile={#ProductIcon}
 UninstallDisplayIcon={app}\gitdoc-desktop.exe
 ChangesAssociations=yes
 

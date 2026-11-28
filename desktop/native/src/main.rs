@@ -253,10 +253,15 @@ fn main() -> eframe::Result {
     let setup = env::args()
         .nth(1)
         .map_or_else(|| Ok(Destination::default()), |arg| destination(&arg));
+    let icon = std::sync::Arc::new(
+        eframe::icon_data::from_png_bytes(include_bytes!("../../../static/gitdoc-64.png"))
+            .expect("GitDoc icon must be a valid PNG"),
+    );
     eframe::run_native(
         "GitDoc",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
+                .with_icon(icon.clone())
                 .with_inner_size([1360.0, 920.0])
                 .with_min_inner_size([800.0, 570.0]),
             ..Default::default()
@@ -265,7 +270,15 @@ fn main() -> eframe::Result {
             configure(&creation.egui_ctx);
             let updates = updates::Updates::new(&root, &python, &creation.egui_ctx);
             let bridge = bridge::Bridge::start(root, python, creation.egui_ctx.clone());
-            Ok(Box::new(GitDoc::new(bridge, setup, updates)))
+            let brand_icon = creation.egui_ctx.load_texture(
+                "GitDoc mark",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [icon.width as usize, icon.height as usize],
+                    &icon.rgba,
+                ),
+                egui::TextureOptions::LINEAR,
+            );
+            Ok(Box::new(GitDoc::new(bridge, setup, updates, brand_icon)))
         }),
     )
 }

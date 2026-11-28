@@ -4,10 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}문서 버전 관리{% endblock %}</title>
+  <link rel="icon" type="image/png" sizes="64x64" href="{{ url_for('static', filename='gitdoc-64.png') }}">
+  <link rel="icon" type="image/svg+xml" sizes="any" href="{{ url_for('static', filename='gitdoc.svg') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
-  <header class="top"><div class="wrap"><a class="brand" href="{{ url_for('index') }}"><span class="mark" aria-hidden="true">▤</span> 문서 버전 관리</a><span class="subtle" title="로컬 작업 공간">{{ workspace.workspace_name }} · {{ workspace.workspace_id[:8] }}</span></div></header>
+  <header class="top"><div class="wrap"><a class="brand" href="{{ url_for('index') }}"><img class="mark" src="{{ url_for('static', filename='gitdoc.svg') }}" width="30" height="30" alt="">문서 버전 관리</a><span class="subtle" title="로컬 작업 공간">{{ workspace.workspace_name }} · {{ workspace.workspace_id[:8] }}</span></div></header>
   <main class="wrap {% block main_class %}{% endblock %}">
     {% block main %}{% endblock %}
   </main>
