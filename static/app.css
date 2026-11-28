@@ -282,5 +282,10 @@ body.document-reader { height: 100dvh; overflow: clip; }
   .reader-controls [data-sheet-tabs] { max-width: 68px; }
 }
 @media (max-width: 370px) {
+  .reader-controls .reader-home, .reader-controls .reader-more > summary { width: 19px; padding-inline: 0; }
+  .reader-controls .viewer-navigation button { width: 17px; padding-inline: 0; }
+  .reader-controls .viewer-navigation input { width: 29px; }
+  .reader-controls [data-zoom] { width: 43px; }
+  .reader-identity > .screen-title, .reader-filename { min-width: 12px; }
   .reader-controls [data-cell-form] button { display: none; }
 }

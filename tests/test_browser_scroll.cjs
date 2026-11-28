@@ -77,7 +77,8 @@ async function checkWheel(page, url, compare, width, height) {
   assert.deepEqual(before.outer, [0, 0]);
   assert.ok(before.toolbar[3] <= 36);
   assert.equal(before.identity.length, 4);
-  assert.ok(before.identity.every(part => part[0] > 0 && part[1] >= 0 && part[2] <= before.toolbar[3]));
+  assert.ok(before.identity.every(part => part[0] > 0 && part[1] >= 0 && part[2] <= before.toolbar[3]),
+    width + 'x' + height + ' toolbar geometry: ' + JSON.stringify(before.identity));
   assert.match(before.identity[1][4], compare ? /v1\.0\.0.*→/ : /확정본\s+v1\.0\.0/);
   assert.equal(before.identity[2][4], 'main');
   if (width <= 390) {
