@@ -184,6 +184,7 @@ async function mountViewer(root) {
   const highlight = root.querySelector('[data-highlight]');
   const zoom = root.querySelector('[data-zoom]');
   const notes = root.querySelector('[data-pdf-notes]');
+  const notesButton = root.querySelector('[data-notes-button]');
   const comparing = sides.length === 2;
   const infos = await Promise.all(sides.map(async side => {
     try {
@@ -214,6 +215,7 @@ async function mountViewer(root) {
   if (!total) {
     const errors = [...new Set(infos.map(info => info.error).filter(Boolean))];
     status.textContent = errors.join(' ') || '미리보기를 열 수 없습니다. 원본을 다운로드해 확인할 수 있습니다.';
+    root.querySelector('[data-reader-alert]').textContent = status.textContent;
     scroll.hidden = true;
     return;
   }
@@ -332,6 +334,7 @@ async function mountViewer(root) {
   async function showNotes(number) {
     const current = ++noteRequest;
     notes.hidden = true;
+    notesButton.hidden = true;
     try {
       const response = await fetch(`${notes.dataset.pdfNotes}/${number}`);
       if (!response.ok || current !== noteRequest) return;
@@ -343,6 +346,7 @@ async function mountViewer(root) {
         return item;
       }));
       notes.hidden = !entries.length;
+      notesButton.hidden = notes.hidden;
     } catch {
       // Keep the page available if its annotations cannot be read.
     }

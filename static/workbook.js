@@ -121,9 +121,12 @@ function changesFor(name, left, right) {
 }
 
 async function mountWorkbook(root) {
-  const sides = Array.from(root.querySelectorAll('[data-workbook]'), node => ({
-    url: node.dataset.workbook, scroll: node.querySelector('.viewer-scroll'),
-    viewLink: node.querySelector('[data-view-link]'), version: versionLocation(node),
+  const scroll = root.querySelector('[data-sheet-scroll]');
+  const panes = scroll.querySelector('.sheet-panes');
+  const links = root.querySelectorAll('[data-sheet-view-link]');
+  const sides = Array.from(root.querySelectorAll('[data-workbook]'), (node, index) => ({
+    node, url: node.dataset.workbook,
+    viewLink: links[index], version: versionLocation(node),
   }));
   const setEditLocation = editLocationControl(root);
   const status = root.querySelector('[data-status]');
@@ -147,9 +150,21 @@ async function mountWorkbook(root) {
     name, comparing ? changesFor(name, ...books.map(book => book.get(name))) : [],
   ]));
   const changes = names.flatMap(name => sheetChanges.get(name));
-  const buttons = new Map();
   let activeSheet;
   let current = -1;
+
+  function updateHorizontalOffset() {
+    panes.style.setProperty('--sheet-offset', scroll.scrollLeft + 'px');
+  }
+
+  function layoutSheets() {
+    // A shared track drives both tables while their panes remain side by side.
+    panes.style.setProperty('--sheet-width', scroll.clientWidth + 'px');
+    const overflow = Math.max(0, ...sides.map(({ node }) =>
+      (node.querySelector('table')?.offsetWidth || 0) - node.clientWidth));
+    scroll.style.setProperty('--sheet-overflow', overflow + 'px');
+    updateHorizontalOffset();
+  }
 
   function identifyCell(side, name, displayedAddress) {
     const sheet = books[side].get(name);
@@ -177,11 +192,9 @@ async function mountWorkbook(root) {
     const row = Math.max(1, (cell?.row || 1) - 5);
     const col = Math.max(1, (cell?.col || 1) - 2);
     const changed = new Set(sheetChanges.get(name).map(change => change.address));
-    sides.forEach(({ scroll }, side) => {
-      scroll.replaceChildren(grid(books[side].get(name), row, col, changed,
+    sides.forEach(({ node }, side) => {
+      node.replaceChildren(grid(books[side].get(name), row, col, changed,
         selectedSide === null || selectedSide === side ? cell : null));
-      scroll.scrollTo(0, 0);
-      scroll.querySelector('.selected-cell')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const link = sides[side].viewLink;
       if (link) {
         const url = new URL(link.href);
@@ -191,7 +204,18 @@ async function mountWorkbook(root) {
         link.href = url;
       }
     });
-    for (const [sheet, button] of buttons) button.setAttribute('aria-pressed', String(sheet === name));
+    scroll.scrollTo(0, 0);
+    layoutSheets();
+    const selected = root.querySelector('.selected-cell');
+    if (selected) {
+      const cell = selected.getBoundingClientRect();
+      const pane = selected.closest('[data-workbook]').getBoundingClientRect();
+      const viewport = scroll.getBoundingClientRect();
+      scroll.scrollTo(Math.max(0, cell.right - pane.right),
+        Math.max(0, cell.bottom - viewport.top - scroll.clientHeight));
+      updateHorizontalOffset();
+    }
+    tabs.value = name;
     form.elements.cell.value = address;
     identifyCell(selectedSide ?? (books.at(-1).has(name) ? sides.length - 1 : 0), name, address);
     const label = address ? `${name} · ${address}` : name;
@@ -213,14 +237,11 @@ async function mountWorkbook(root) {
   }
 
   for (const name of names) {
-    const button = document.createElement('button');
-    button.className = 'secondary';
-    button.type = 'button';
-    button.textContent = name;
-    button.addEventListener('click', () => show(name));
-    buttons.set(name, button);
-    tabs.append(button);
+    tabs.add(new Option(name, name));
   }
+  tabs.addEventListener('change', () => show(tabs.value));
+  scroll.addEventListener('scroll', updateHorizontalOffset, { passive: true });
+  new ResizeObserver(layoutSheets).observe(scroll);
   if (comparing) {
     let shown = 0;
     const more = document.createElement('button');
@@ -264,16 +285,9 @@ async function mountWorkbook(root) {
   if (comparing) {
     prev.addEventListener('click', () => jump(current < 0 ? changes.length - 1 : current - 1));
     next.addEventListener('click', () => jump(current + 1));
-    let synchronizing = false;
-    sides.forEach(({ scroll }, index) => scroll.addEventListener('scroll', () => {
-      if (synchronizing) return;
-      synchronizing = true;
-      sides[1 - index].scroll.scrollTo(scroll.scrollLeft, scroll.scrollTop);
-      requestAnimationFrame(() => { synchronizing = false; });
-    }, { passive: true }));
   }
-  sides.forEach(({ scroll }, side) => {
-    scroll.addEventListener('click', event => {
+  sides.forEach(({ node }, side) => {
+    node.addEventListener('click', event => {
       const target = event.target.closest('td[data-address]');
       if (!target) return;
       const address = target.dataset.address;
@@ -299,6 +313,6 @@ async function mountWorkbook(root) {
 
 for (const root of document.querySelectorAll('[data-workbook-viewer]')) {
   mountWorkbook(root).catch(error => {
-    root.querySelector('[data-status]').textContent = error.message || '시트를 읽을 수 없습니다.';
+    root.querySelector('[data-reader-alert]').textContent = error.message || '시트를 읽을 수 없습니다.';
   });
 }

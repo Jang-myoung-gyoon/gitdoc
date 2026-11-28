@@ -13,7 +13,6 @@
 {% macro toolbar(doc, active, current, branches, versions, opened=none, before=none, after=none, approval=none) %}
 <nav class="document-actions" aria-label="문서 탐색">
   <button class="secondary" type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="branches-dialog">브랜치 <small>{{ active.name }}</small></button>
-  <button class="secondary" type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="history-dialog">버전 이력</button>
   {% if approval %}
   <button type="button" data-open-document-dialog aria-haspopup="dialog" aria-controls="approval-dialog">검토 및 확정</button>
   {% elif after and after.status == 'pending' and before.id != after.base_id %}
