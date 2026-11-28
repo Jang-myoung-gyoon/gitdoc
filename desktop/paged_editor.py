@@ -23,7 +23,9 @@ from desktop.hangul_cells import (
     replace_cell, verify_cell, verify_grid, verify_span,
 )
 from desktop.hangul_format import CHARACTER, OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
-from desktop.shape_editor import apply_shape, prepare_legacy_shapes, shape_catalog
+from desktop.shape_editor import (
+    HWP_UNITS_PER_MM, apply_shape, prepare_legacy_shapes, shape_catalog, verify_inline_hwp,
+)
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
 from page_text import embedded_text
 from preview import PreviewError, page_dimensions, preview_path, preview_png, rhwp_command, run_converter
@@ -337,6 +339,7 @@ class PagedEditor:
         self.tables = []
         self.cell_catalog = None
         self.shapes = []
+        self.page_shapes = []
         self.shape_xml = None
         self.hangul_formatting = set()
         self.hangul_fonts = []
@@ -356,7 +359,7 @@ class PagedEditor:
     def close(self):
         self.directory.cleanup()
 
-    def render(self, data, number):
+    def render(self, data, number, *, keep_inline_shape=None):
         extension = "docx" if self.extension == "doc" else self.extension
         key = hashlib.sha256(data).hexdigest()
         if extension in HANGUL_EXTENSIONS:
@@ -374,6 +377,7 @@ class PagedEditor:
         shapes, shape_xml = self.shapes, self.shape_xml
         formatting, hangul_fonts = self.hangul_formatting, self.hangul_fonts
         changed = key != self.current_key
+        inline_limits = {}
         native_cells = None if changed else self.cell_catalog
         with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
             folder = Path(work)
@@ -388,6 +392,19 @@ class PagedEditor:
                     shape_xml = content if (shapes or formatting) and extension == "hwp" else None
                 placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number-1), "--json"], folder))["pages"][0]
                 objects, tables, page_cells = hwp_locations(source, number, placement, texts)
+                if len(placement["columns"]) == 1:
+                    for item in placement["columns"][0]["items"]:
+                        if item["kind"] != "fullParagraph" or item.get("isEndnote"):
+                            continue
+                        segments = item.get("lineSegs") or {}
+                        edges = [segments.get(key) or {} for key in ("first", "last")]
+                        area = placement["bodyArea"]
+                        widths = [area["width"] * 25.4 / 96]
+                        widths.extend(edge["segmentWidth"] / HWP_UNITS_PER_MM for edge in edges
+                                      if edge.get("segmentWidth", 0) > 0)
+                        width_limit = min(widths)
+                        height_limit = area["height"] * 25.4 / 96
+                        inline_limits[(placement["section"], item["paraIndex"])] = (width_limit, height_limit)
                 if tables and native_cells is None:
                     native_cells = {}
                     if self.hwp_shapes_allowed:
@@ -418,6 +435,15 @@ class PagedEditor:
                 else:
                     tables = self.tables
                 objects = locations[number-1]
+        page_shapes = [
+            dict(shape, inline_limits=inline_limits[tuple(shape["address"][:2])])
+            if len(shape["address"]) == 3 else shape
+            for shape in shapes
+            if len(shape["address"]) == 2 or tuple(shape["address"][:2]) in inline_limits
+        ]
+        if keep_inline_shape is not None and not any(
+                shape["address"] == keep_inline_shape for shape in page_shapes):
+            raise ValueError("도형을 현재 쪽의 같은 문단 안에 배치할 수 없어 변경을 적용하지 않았습니다.")
         png = Path(self.directory.name)/"document.png"
         png.write_bytes(preview_png(pdf, number, prefer_pdfium=True))
         fonts = use_rendered_fonts(objects, pdf, number, Path(self.directory.name) / "fonts")
@@ -426,11 +452,12 @@ class PagedEditor:
         self.page_objects = objects
         self.page_count = count
         self.tables, self.shapes, self.shape_xml = tables, shapes, shape_xml
+        self.page_shapes = page_shapes
         self.cell_catalog = native_cells
         self.texts, self.locations = texts, locations
         self.hangul_formatting, self.hangul_fonts = formatting, hangul_fonts
         return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
-                "objects": objects, "tables": tables, "shapes": shapes, "hangul_fonts": hangul_fonts, "image": str(png), "fonts": fonts}
+                "objects": objects, "tables": tables, "shapes": self.page_shapes, "hangul_fonts": hangul_fonts, "image": str(png), "fonts": fonts}
 
     def page(self, number, operation=None, text_edit=None, target=None, value=None, selection=None, **_):
         index = self.position
@@ -447,7 +474,10 @@ class PagedEditor:
             updated = source
         if len(updated) > MAX_FILE:
             raise ValueError("문서가 최대 파일 크기를 초과했습니다.")
-        result = self.render(updated, number)
+        selected_shape = None
+        if operation in ("shape_up", "shape_down", "shape_size") and len(value["address"]) == 3:
+            selected_shape = value["address"]
+        result = self.render(updated, number, keep_inline_shape=selected_shape)
         if index == self.position and updated != source:
             del self.states[index+1:]
             self.states.append(updated)
@@ -457,6 +487,8 @@ class PagedEditor:
         self.position = index
         if self.extension in HANGUL_EXTENSIONS and operation in CHARACTER and selection:
             result["hangul_selection"] = selection
+        if selected_shape is not None:
+            result["shape_selection"] = selected_shape
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
 
     def change_grid(self, source, chosen, coordinate, value):
@@ -568,19 +600,28 @@ class PagedEditor:
             return convert_format("hwpx", "hwp", changed) if self.extension == "hwp" else changed
         if operation in SHAPE_EDITS:
             address = value.get("address") if isinstance(value, dict) else None
-            if (text_edit or not isinstance(address, list) or len(address) != 2
-                    or any(type(i) is not int for i in address) or value.get("digest") != self.current_key
-                    or not any(shape["address"] == address for shape in self.shapes)):
+            chosen = next((shape for shape in self.page_shapes if shape["address"] == address), None)
+            if (text_edit or not isinstance(address, list) or any(type(i) is not int for i in address)
+                    or value.get("digest") != self.current_key or chosen is None):
                 raise ValueError("편집할 도형을 다시 선택하세요.")
             size = value.get("size")
             if (operation == "shape_size" and (not isinstance(size, list) or len(size) != 2
                     or not all(type(number) is int and 2 <= number <= limit for number, limit in zip(size, (180, 250))))):
                 raise ValueError("도형 너비는 2~180 mm, 높이는 2~250 mm로 입력하세요.")
+            inline = len(address) == 3
+            if inline and operation == "shape_size" and any(
+                    dimension > limit for dimension, limit in zip(size, chosen["inline_limits"])):
+                raise ValueError("도형 크기가 현재 본문 영역을 벗어납니다.")
             changed = apply_shape(self.shape_xml if self.extension == "hwp" else source,
                                   address, operation, size, hangul=self.extension in HANGUL_EXTENSIONS,
                                   binary_word=self.extension == "doc")
             if self.extension == "hwp":
-                return convert_format("hwpx", "hwp", changed)
+                converted = convert_format("hwpx", "hwp", changed)
+                if inline:
+                    message = "HWP 변환 중 다른 문서 데이터가 달라져 도형 편집을 적용하지 않았습니다."
+                    verify_hwp_streams(source, io.BytesIO(converted), address[0], message)
+                    verify_inline_hwp(changed, convert_format("hwp", "hwpx", converted), address[0])
+                return converted
             return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
         if operation in ("edit_table_cell", "edit_table_grid", "edit_table_span") and self.extension in HANGUL_EXTENSIONS:
             if not isinstance(value, dict):
