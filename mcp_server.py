@@ -11,6 +11,7 @@ from browser_viewer import viewer_url, workspace_info
 from delimited import aligned_rows, key_columns, lines as table_lines, sheet as table_sheet, table_rows
 from desktop.bridge import content, edit_contents, page_path, save_file, versions
 from desktop.exporting import export_formats
+from blank_documents import BLANK_FORMATS, create_blank
 from desktop_link import checked_document_path, desktop_url, document_path
 from document_render import describe_page, preview_layout, render_page, use_pdfium, visual_difference
 from editing import MODES, cell_position, read_pdf_notes
@@ -137,7 +138,7 @@ def get_document_capabilities() -> dict[str, object]:
     """Identify the workspace and list GitDoc's registration, direct-edit and export formats."""
     edits = {"replace": ["replace_text"], "cell": ["edit_cell"],
              "page": ["right", "left", "note", "insert", "delete"]}
-    return {**workspace_info(), "formats": {
+    return {**workspace_info(), "blank_formats": BLANK_FORMATS, "formats": {
         extension: {"direct_edits": edits.get(MODES.get(extension), []) + (
                         ["edit_blocks"] if extension in ("docx", "pptx") else []),
                     "export_formats": export_formats(extension)}
@@ -398,6 +399,13 @@ def register_document(file_path: str, title: str) -> dict[str, object]:
         document_id = create_document(db, title.strip(), upload)
         current = find_document(db, document_id)["current_id"]
     return version_result(document_id, current)
+
+
+@server.tool(annotations=write, structured_output=True)
+def create_blank_document(title: str, extension: Literal["docx", "pptx", "xlsx", "pdf", "hwp", "hwpx"]) -> dict[str, object]:
+    """Create a blank file in the current GitDoc workspace at v1.0.0."""
+    result = create_blank(title, extension)
+    return {**version_result(result["document_id"], result["version_id"]), **result}
 
 
 @server.tool(annotations=write, structured_output=True)
