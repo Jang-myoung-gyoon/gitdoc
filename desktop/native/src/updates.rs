@@ -187,17 +187,18 @@ impl Updates {
                                 notes
                             });
                         });
-                    if !can_install {
-                        ui.label("이 설치본에는 Windows 업데이트 서명자가 설정되어 있지 않습니다.");
-                    }
-                    if ui
-                        .add_enabled(*can_install, egui::Button::new("다운로드 및 설치"))
-                        .clicked()
-                    {
+                    if *can_install && ui.button("다운로드 및 설치").clicked() {
                         install = Some(Request::Install {
                             version: version.clone(),
                             digest: digest.clone(),
                         });
+                    }
+                    if !can_install && self.windows {
+                        ui.label("Windows 설치 파일은 GitHub에서 받아 직접 설치하세요.");
+                        ui.hyperlink_to(
+                            "공식 Windows 다운로드",
+                            format!("https://github.com/Jang-myoung-gyoon/gitdoc/releases/tag/v{version}"),
+                        );
                     }
                 }
                 State::Installed => {
@@ -380,7 +381,7 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("Missing control {label}"));
             for pressed in [true, false] {
-                frame(
+                let output = frame(
                     updates,
                     vec![
                         egui::Event::PointerMoved(pos),
@@ -392,7 +393,11 @@ mod tests {
                         },
                     ],
                 );
+                if !pressed {
+                    return output;
+                }
             }
+            unreachable!();
         };
         frame(&mut updates, vec![]);
         click(&mut updates, "업데이트 확인…");
@@ -405,7 +410,14 @@ mod tests {
         };
         updates.state = result(false);
         updates.busy = false;
-        click(&mut updates, "다운로드 및 설치");
+        let link = click(&mut updates, "공식 Windows 다운로드");
+        assert!(link.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::OpenUrl(url)
+                if url.url == "https://github.com/Jang-myoung-gyoon/gitdoc/releases/tag/v0.1.4")
+        }));
+        assert!(!link.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(value) if value.galley.job.text == "다운로드 및 설치")
+        }));
         assert!(work.try_recv().is_err());
         updates.state = result(true);
         assert!(work.try_recv().is_err());

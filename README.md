@@ -60,7 +60,7 @@ The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a d
 
 ### Desktop updates
 
-Starting with the first updater-enabled release, use **Settings → Check for updates** to review a stable release and approve its installation. Install that first release over GitDoc 0.1.3 once to activate this feature. Keep the existing install location and workspace. See the [desktop update release checklist](docs/desktop-updates.md) for signing and publication requirements.
+Use **Settings → Check for updates** to review a stable release. On macOS, approve installation from the app. On Windows, follow the official GitHub link and run the installer manually while Windows releases are unsigned. Install this release over GitDoc 0.1.3 at the existing location to keep your workspace. See the [desktop update release checklist](docs/desktop-updates.md) for signing and publication requirements.
 
 ### Cutting a release
 
