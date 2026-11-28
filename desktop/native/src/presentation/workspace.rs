@@ -638,6 +638,64 @@ mod tests {
     }
 
     #[test]
+    fn hangul_ribbon_reselects_and_moves_the_exact_inline_shape() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 720.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "before-move".into();
+        let first = json!({"address":[0,0,0], "character":3, "kind":"rectangle",
+                           "size":[12,8], "move_up":true, "move_down":true, "resize":true});
+        let mut second = json!({"address":[0,0,1], "character":4, "kind":"rectangle",
+                                "size":[12,8], "move_up":true, "move_down":true, "resize":true});
+        editor.page_shapes = serde_json::from_value(json!([first, second])).unwrap();
+        frame(&ctx, &mut editor, size, vec![]);
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let menu = find_text(&display.shapes, "도형 선택");
+        assert!(click(&ctx, &mut editor, size, menu).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let row = find_text(
+            &display.shapes,
+            "사각형 · 구역 1 · 문단 1 · 도형 2 · 4번째 글자 뒤 · 12×8 mm",
+        );
+        assert!(click(&ctx, &mut editor, size, row).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let backward = find_text(&display.shapes, "← 한 글자 앞");
+        assert!(
+            matches!(click(&ctx, &mut editor, size, backward), Some(Command::Page(params))
+            if params["operation"] == "shape_up" && params["value"]["address"] == json!([0,0,1]))
+        );
+
+        let image =
+            std::env::temp_dir().join(format!("gitdoc-inline-shape-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255; 4]))
+            .save(&image)
+            .unwrap();
+        second["character"] = json!(3);
+        second["move_up"] = json!(false);
+        let result = editor.update(
+            &ctx,
+            &json!({
+                "page":1, "count":1, "image":image, "edit_digest":"after-move",
+                "shapes":[first, second], "shape_selection":[0,0,1], "dirty":true, "undo":true
+            }),
+        );
+        std::fs::remove_file(image).unwrap();
+        result.unwrap();
+        assert_eq!(editor.selected_shape, Some(1));
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let backward = find_text(&display.shapes, "← 한 글자 앞");
+        assert!(click(&ctx, &mut editor, size, backward).is_none());
+        editor.shape_size = [22, 10];
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let resize = find_text(&display.shapes, "크기 적용");
+        assert!(
+            matches!(click(&ctx, &mut editor, size, resize), Some(Command::Page(params))
+            if params["operation"] == "shape_size"
+                && params["value"] == json!({"address":[0,0,1], "digest":"after-move", "size":[22,10]}))
+        );
+    }
+
+    #[test]
     fn hangul_formatting_tab_routes_a_narrow_toolbar_click_to_the_selected_paragraph() {
         let ctx = Context::default();
         let size = vec2(560.0, 650.0);

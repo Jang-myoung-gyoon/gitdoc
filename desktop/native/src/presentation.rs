@@ -287,7 +287,16 @@ impl Editor {
             serde_json::from_value(result["hangul_fonts"].clone()).unwrap_or_default();
         self.page_tables = serde_json::from_value(result["tables"].clone()).unwrap_or_default();
         self.page_shapes = serde_json::from_value(result["shapes"].clone()).unwrap_or_default();
-        self.selected_shape = None;
+        self.selected_shape = serde_json::from_value::<Vec<u32>>(result["shape_selection"].clone())
+            .ok()
+            .and_then(|address| {
+                self.page_shapes
+                    .iter()
+                    .position(|shape| shape.address == address)
+            });
+        if let Some(index) = self.selected_shape {
+            self.shape_size = self.page_shapes[index].size;
+        }
         self.edit_digest = result["edit_digest"].as_str().unwrap_or_default().into();
         self.selected_table = None;
         self.selected_cell = None;
