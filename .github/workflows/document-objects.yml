@@ -75,6 +75,8 @@ jobs:
           node-version: "22"
       - name: Install browser test dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
           python -m pip install -r requirements.txt -r requirements-mcp.txt openpyxl==3.1.5
           npm install --prefix "$RUNNER_TEMP/gitdoc-browser" --no-save --no-package-lock playwright@1.63.0
           node "$RUNNER_TEMP/gitdoc-browser/node_modules/playwright/cli.js" install --with-deps chromium
