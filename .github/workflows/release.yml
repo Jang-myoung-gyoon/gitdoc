@@ -44,17 +44,25 @@ jobs:
       - name: Check the release updater key configuration
         if: env.GITDOC_DISTRIBUTION == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'codex/release-'))
         env:
-          GITDOC_SPARKLE_PUBLIC_KEY: ${{ vars.GITDOC_SPARKLE_PUBLIC_KEY }}
-          GITDOC_SPARKLE_PRIVATE_SEED: ${{ secrets.GITDOC_SPARKLE_PRIVATE_SEED }}
+          GITDOC_SPARKLE_PUBLIC_KEY: ${{ vars.GITDOC_SPARKLE_PUBLIC_KEY || vars.SPARKLE_PUBLIC_KEY || secrets.GITDOC_SPARKLE_PUBLIC_KEY || secrets.SPARKLE_PUBLIC_KEY }}
+          GITDOC_SPARKLE_PRIVATE_SEED: ${{ secrets.GITDOC_SPARKLE_PRIVATE_SEED || secrets.SPARKLE_PRIVATE_KEY || secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
         run: |
           set -eu
-          : "${GITDOC_SPARKLE_PUBLIC_KEY:?missing repository variable GITDOC_SPARKLE_PUBLIC_KEY}"
-          : "${GITDOC_SPARKLE_PRIVATE_SEED:?missing repository secret GITDOC_SPARKLE_PRIVATE_SEED}"
+          missing=0
+          if [ -z "$GITDOC_SPARKLE_PUBLIC_KEY" ]; then
+            echo '::error::Missing Sparkle public key for GitHub Actions (GITDOC_SPARKLE_PUBLIC_KEY).'
+            missing=1
+          fi
+          if [ -z "$GITDOC_SPARKLE_PRIVATE_SEED" ]; then
+            echo '::error::Missing Sparkle seed for GitHub Actions (GITDOC_SPARKLE_PRIVATE_SEED).'
+            missing=1
+          fi
+          test "$missing" = 0
           printf '%s\n' "$GITDOC_SPARKLE_PRIVATE_SEED" | swift packaging/sparkle-key.swift "$GITDOC_SPARKLE_PUBLIC_KEY"
           printf '%s\n' 'Sparkle release key configuration verified.'
       - name: Assemble the macOS app
         env:
-          GITDOC_SPARKLE_PUBLIC_KEY: ${{ vars.GITDOC_SPARKLE_PUBLIC_KEY }}
+          GITDOC_SPARKLE_PUBLIC_KEY: ${{ vars.GITDOC_SPARKLE_PUBLIC_KEY || vars.SPARKLE_PUBLIC_KEY || secrets.GITDOC_SPARKLE_PUBLIC_KEY || secrets.SPARKLE_PUBLIC_KEY }}
         run: sh packaging/macos.sh --assemble-only
       - name: Build the ad-hoc disk image
         if: env.GITDOC_DISTRIBUTION != 'true'
@@ -76,7 +84,7 @@ jobs:
       - name: Generate the signed macOS appcast
         if: env.GITDOC_DISTRIBUTION == 'true'
         env:
-          GITDOC_SPARKLE_PRIVATE_SEED: ${{ secrets.GITDOC_SPARKLE_PRIVATE_SEED }}
+          GITDOC_SPARKLE_PRIVATE_SEED: ${{ secrets.GITDOC_SPARKLE_PRIVATE_SEED || secrets.SPARKLE_PRIVATE_KEY || secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
         run: sh packaging/sparkle-appcast.sh
       - name: Smoke test the disk image
         run: |
