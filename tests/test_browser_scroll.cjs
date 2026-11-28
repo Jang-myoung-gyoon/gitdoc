@@ -1,4 +1,4 @@
-/* End-to-end scroll ownership checks using actual GitDoc PDF and XLSX routes. */
+/* End-to-end scroll ownership checks using actual GitDoc PDF, XLSX and HWP routes. */
 const assert = require('node:assert/strict');
 const {spawn} = require('node:child_process');
 const {mkdtempSync, rmSync} = require('node:fs');
@@ -67,10 +67,33 @@ async function readyPage(page) {
   await page.locator('.paper-row img, .sheet-table').first().waitFor();
 }
 
-async function checkWheel(page, url, compare, width, height) {
+async function renderedHangulPage(page, number, sides) {
+  await page.waitForFunction(({number, sides}) => {
+    const images = Array.from(document.querySelectorAll(`.paper-row[data-page-number="${number}"] img`));
+    return images.length === sides && images.every(image => image.complete && image.naturalWidth > 0);
+  }, {number, sides}, {timeout: 20000});
+  const visibleInk = await page.locator(`.paper-row[data-page-number="${number}"] img`).evaluateAll(images =>
+    images.every(image => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 160;
+      canvas.height = 226;
+      const context = canvas.getContext('2d');
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      return data.some((opacity, index) => index % 4 === 3 && opacity > 220 && data[index - 1] < 180);
+    }));
+  assert.ok(visibleInk, `Rendered HWP page ${number} should contain visible text`);
+}
+
+async function checkWheel(page, url, compare, width, height, hwp) {
   await page.setViewportSize({width, height});
   await page.goto(url);
-  await readyPage(page);
+  if (hwp) {
+    await renderedHangulPage(page, 1, compare ? 2 : 1);
+    assert.equal(await page.locator('.paper-row').count(), hwp.pages);
+  } else {
+    await readyPage(page);
+  }
   const before = await readPosition(page, compare);
   assert.ok(before.ratio >= .9, width + 'x' + height + ' coverage ' + before.ratio);
   assert.equal(before.scrollers.length, 1, JSON.stringify(before));
@@ -81,6 +104,13 @@ async function checkWheel(page, url, compare, width, height) {
     width + 'x' + height + ' toolbar geometry: ' + JSON.stringify(before.identity));
   assert.match(before.identity[1][4], compare ? /v1\.0\.0.*→/ : /확정본\s+v1\.0\.0/);
   assert.equal(before.identity[2][4], 'main');
+  if (hwp) {
+    assert.equal(before.identity[0][4], hwp.title);
+    assert.equal(before.identity[3][4], hwp.filenames[Number(compare)]);
+    if (!compare && width === 1440 && process.env.GITDOC_BROWSER_SCREENSHOTS) {
+      await page.screenshot({path: join(process.env.GITDOC_BROWSER_SCREENSHOTS, 'gitdoc-hwp-reader-desktop.png')});
+    }
+  }
   if (width <= 390) {
     assert.ok(before.identity[0][3] > before.identity[0][0]);
     assert.ok(before.identity[3][3] > before.identity[3][0]);
@@ -100,6 +130,7 @@ async function checkWheel(page, url, compare, width, height) {
     const node = document.querySelector(selector);
     return node.scrollTop + node.clientHeight >= node.scrollHeight - 2;
   }, scope);
+  if (hwp) await renderedHangulPage(page, hwp.pages, compare ? 2 : 1);
   await page.mouse.wheel(0, 500);
   stable(before, await readPosition(page, compare));
 
@@ -112,7 +143,8 @@ async function checkWheel(page, url, compare, width, height) {
   stable(before, await readPosition(page, compare));
   await page.locator('.reader-more summary').click();
   stable(before, await readPosition(page, compare));
-  assert.ok((await page.locator('.reader-details').textContent()).includes(before.identity[3][4]));
+  const details = await page.locator('.reader-details').textContent();
+  assert.ok(details.includes(before.identity[0][4]) && details.includes(before.identity[3][4]));
   return before.ratio;
 }
 
@@ -124,13 +156,14 @@ async function run(config) {
     page.setDefaultTimeout(6500);
     for (const [width, height] of sizes) {
       const ratios = [];
-      for (const type of ['pdf', 'xlsx']) {
+      for (const type of ['pdf', 'xlsx', 'hwp']) {
         for (const [index, route] of config.routes[type].entries()) {
-          const result = await checkWheel(page, config.origin + route, index === 1, width, height);
+          const result = await checkWheel(page, config.origin + route, index === 1, width, height,
+            type === 'hwp' ? config.hwp : undefined);
           ratios.push((result * 100).toFixed(2) + '%');
         }
       }
-      console.log(width + 'x' + height + ': PDF, PDF compare, XLSX, XLSX compare ' + ratios.join(', '));
+      console.log(width + 'x' + height + ': PDF, PDF compare, XLSX, XLSX compare, HWP, HWP compare ' + ratios.join(', '));
     }
 
     // Both compared sheets use the same vertical and horizontal position.
@@ -174,19 +207,32 @@ async function run(config) {
 
     const phone = await browser.newContext({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
     const mobile = await phone.newPage();
-    const mobileReply = await mobile.goto(config.origin + config.routes.pdf[0]);
-    assert.match(mobileReply.headers()['content-security-policy'], /frame-ancestors 'none'/);
-    assert.equal(await mobile.locator('iframe').count(), 0);
-    await readyPage(mobile);
-    const beforeTouch = await readPosition(mobile, false);
     const touch = await phone.newCDPSession(mobile);
-    await touch.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x: 191, y: 642}]});
-    for (const y of [605, 545, 488, 402, 290]) {
-      await touch.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x: 191, y}]});
+    for (const type of ['pdf', 'hwp']) {
+      const mobileReply = await mobile.goto(config.origin + config.routes[type][0]);
+      assert.match(mobileReply.headers()['content-security-policy'], /frame-ancestors 'none'/);
+      assert.equal(await mobile.locator('iframe').count(), 0);
+      if (type === 'hwp') await renderedHangulPage(mobile, 1, 1);
+      else await readyPage(mobile);
+      const beforeTouch = await readPosition(mobile, false);
+      assert.ok(beforeTouch.ratio >= .9);
+      assert.equal(beforeTouch.scrollers.length, 1);
+      assert.equal(beforeTouch.owner[1], 0);
+      await touch.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x: 191, y: 642}]});
+      for (const y of [605, 545, 488, 402, 290]) {
+        await touch.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x: 191, y}]});
+      }
+      await touch.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+      await mobile.waitForFunction(selector => document.querySelector(selector).scrollTop > 0, scope);
+      if (type === 'hwp') {
+        await renderedHangulPage(mobile, 2, 1);
+        if (process.env.GITDOC_BROWSER_SCREENSHOTS) {
+          await mobile.screenshot({path: join(process.env.GITDOC_BROWSER_SCREENSHOTS, 'gitdoc-hwp-reader-mobile.png')});
+        }
+        console.log('HWP touch at 390x844: ' + (beforeTouch.ratio * 100).toFixed(2) + '%');
+      }
+      stable(beforeTouch, await readPosition(mobile, false));
     }
-    await touch.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
-    await mobile.waitForFunction(selector => document.querySelector(selector).scrollTop > 0, scope);
-    stable(beforeTouch, await readPosition(mobile, false));
     console.log('Shared sheet positioning, toolbar actions, and mobile touch scrolling passed.');
   } finally {
     await browser.close();

@@ -36,6 +36,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libreoffice-writer libreoffice-impress poppler-utils
+      - &install-rhwp
+        name: Install rhwp 0.9.0 for native Hangul tests
+        run: |
           archive="$RUNNER_TEMP/rhwp.tar.gz"
           curl --fail --location --retry 3 -o "$archive" "https://github.com/edwardkim/rhwp/releases/download/v0.9.0/rhwp-v0.9.0-linux-x86_64.tar.gz"
           echo "837910d858162537f3f04b35ae8f5ad65fb42cc8e3582b1e174ce605b6ac7952  $archive" | sha256sum --check
@@ -76,9 +79,10 @@ jobs:
       - name: Install browser test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y poppler-utils
+          sudo apt-get install -y poppler-utils fonts-nanum
           python -m pip install -r requirements.txt -r requirements-mcp.txt openpyxl==3.1.5
           npm install --prefix "$RUNNER_TEMP/gitdoc-browser" --no-save --no-package-lock playwright@1.63.0
           node "$RUNNER_TEMP/gitdoc-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - *install-rhwp
       - name: Test scroll ownership in the real document viewer
         run: NODE_PATH="$RUNNER_TEMP/gitdoc-browser/node_modules" node tests/test_browser_scroll.cjs
