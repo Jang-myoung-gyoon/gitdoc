@@ -1,6 +1,7 @@
-"""Edit standalone, inline shapes addressed by their source paragraph."""
+"""Edit shapes addressed by their source paragraph and inline order."""
 
 import re
+import unicodedata
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -9,6 +10,7 @@ from lxml import etree
 from desktop.document_objects import (
     DRAWING, DRAWING_WORD, HANGUL, LEGACY_PATHS, VML, VML_OFFICE, WORD_SHAPE, WORD_TAG,
 )
+from desktop.hangul_format import property_signature
 from editing import office_parts, open_package, parse_part, rewrite_package
 
 WORD_PART = "word/document.xml"
@@ -138,7 +140,12 @@ def standalone_hangul_shape(paragraph):
     runs = [child for child in paragraph if child.tag != HANGUL + "linesegarray"]
     if len(runs) != 1 or runs[0].tag != HANGUL + "run" or len(runs[0]) != 1:
         return None
-    shape = runs[0][0]
+    return hangul_shape(paragraph, runs[0][0])
+
+
+def hangul_shape(paragraph, shape):
+    if not isinstance(shape.tag, str):
+        return None
     tag = shape.tag.removeprefix(HANGUL)
     if tag not in HWP_GEOMETRY or shape.get("lock", "0") != "0" or shape.get("groupLevel", "0") != "0":
         return None
@@ -156,6 +163,90 @@ def standalone_hangul_shape(paragraph):
         return None
     kind = {"rect": "rectangle", "ellipse": "ellipse", "polygon": "polygon"}[tag]
     return Shape(kind, paragraph, width, height, hangul=shape)
+
+
+INLINE_PLACEMENT = "이 도형은 같은 본문 문단의 일반 글자 사이에서만 이동할 수 있습니다."
+
+
+def inline_hangul_nodes(paragraph):
+    return [node for run in paragraph.findall(HANGUL + "run") for node in run]
+
+
+def inline_hangul_shapes(paragraph):
+    if any(paragraph.get(flag, "0") != "0" for flag in ("pageBreak", "columnBreak", "merged")):
+        return
+    if any(child.tag not in (HANGUL + "run", HANGUL + "linesegarray") for child in paragraph):
+        return
+    nodes = inline_hangul_nodes(paragraph)
+    if not any(node.tag == HANGUL + "t" and node.text for node in nodes):
+        return
+    geometry = (node for node in nodes if isinstance(node.tag, str) and node.tag.removeprefix(HANGUL) in HWP_GEOMETRY)
+    for index, node in enumerate(geometry):
+        if shape := hangul_shape(paragraph, node):
+            yield index, shape
+
+
+def inline_neighbor(shape, direction):
+    nodes = inline_hangul_nodes(shape.paragraph)
+    index = nodes.index(shape.hangul) + direction
+    while 0 <= index < len(nodes):
+        node = nodes[index]
+        if node.tag != HANGUL + "t" or len(node):
+            return None
+        if text := node.text:
+            # Keep combining marks, Jamo sequences, emoji and other clusters intact.
+            if all((unicodedata.category(char)[0] in "LNP" or char == " ")
+                   and not (0x1100 <= ord(char) <= 0x11ff or 0xa960 <= ord(char) <= 0xa97f
+                            or 0xd7b0 <= ord(char) <= 0xd7ff) for char in text):
+                return node
+            return None
+        index += direction
+    return None
+
+
+def remove_line_segments(paragraph):
+    if (segments := paragraph.find(HANGUL + "linesegarray")) is not None:
+        paragraph.remove(segments)
+
+
+def isolate_run_node(node):
+    run = node.getparent()
+    index = run.index(node)
+    for children, insert in ((run[:index], run.addprevious), (run[index+1:], run.addnext)):
+        if children:
+            fragment = run.makeelement(run.tag, attrib=dict(run.attrib))
+            fragment.extend(children)
+            insert(fragment)
+    return run
+
+
+def edit_inline_hangul(shape, operation):
+    paragraph, element = shape.paragraph, shape.hangul
+    run = element.getparent()
+    if operation == "delete_shape":
+        run.remove(element)
+        if not len(run):
+            paragraph.remove(run)
+    else:
+        before = operation == "shape_up"
+        other = inline_neighbor(shape, -1 if before else 1)
+        if other is None:
+            raise ValueError(INLINE_PLACEMENT)
+        own = isolate_run_node(element)
+        adjacent = isolate_run_node(other)
+        split = len(other.text) - 1 if before else 1
+        first, last = other.text[:split], other.text[split:]
+        if first and last:
+            tail = deepcopy(adjacent)
+            tail[0].text = last
+            other.text = first
+            adjacent.addnext(tail)
+            adjacent.addnext(own)
+        elif before:
+            adjacent.addprevious(own)
+        else:
+            adjacent.addnext(own)
+    remove_line_segments(paragraph)
 
 
 def can_resize(shape):
@@ -216,7 +307,10 @@ def shapes_in(root, hangul, binary_word=False):
     for index, paragraph in enumerate(parent.findall((HANGUL if hangul else WORD_TAG) + "p")):
         shape = standalone_hangul_shape(paragraph) if hangul else standalone_word_shape(paragraph, binary_word)
         if shape is not None:
-            yield index, shape
+            yield (index,), shape
+        elif hangul:
+            for position, shape in inline_hangul_shapes(paragraph):
+                yield (index, position), shape
 
 
 def shape_catalog(data, *, hangul, binary_word=False):
@@ -229,17 +323,43 @@ def shape_catalog(data, *, hangul, binary_word=False):
             parts = sorted((int(match[1]), name) for name in archive.namelist()
                            if (match := re.fullmatch(r"Contents/section(\d+)\.xml", name)))
         return [
-            {"address": [section, index], "kind": shape.kind, "size": [round(shape.width), round(shape.height)],
-             "move_up": movable_neighbor(shape.paragraph, shape.paragraph.getprevious(), hangul, binary_word),
-             "move_down": movable_neighbor(shape.paragraph, shape.paragraph.getnext(), hangul, binary_word),
-             "resize": can_resize(shape)}
+            {"address": [section, *index], "kind": shape.kind, "size": [round(shape.width), round(shape.height)],
+             "move_up": shape_can_move(shape, index, -1, hangul, binary_word),
+             "move_down": shape_can_move(shape, index, 1, hangul, binary_word),
+             "resize": can_resize(shape),
+             **({"character": inline_character(shape)} if len(index) == 2 else {})}
             for section, part in parts
             for index, shape in shapes_in(parse_part(archive, part), hangul, binary_word)
         ]
 
 
+def inline_character(shape):
+    offset = 0
+    for node in inline_hangul_nodes(shape.paragraph):
+        if node is shape.hangul:
+            return offset
+        if node.tag == HANGUL + "t":
+            offset += len("".join(node.itertext()))
+    raise ValueError(INLINE_PLACEMENT)
+
+
+def verify_inline_hwp(expected, reopened, section):
+    part = f"Contents/section{section}.xml"
+    with open_package(expected) as before, open_package(reopened) as after:
+        if property_signature(parse_part(before, part)) != property_signature(parse_part(after, part)):
+            raise ValueError("HWP에 저장한 도형과 주변 본문을 확인할 수 없어 변경을 적용하지 않았습니다.")
+
+
+def shape_can_move(shape, index, direction, hangul, binary_word):
+    if len(index) == 2:
+        return inline_neighbor(shape, direction) is not None
+    neighbor = shape.paragraph.getprevious() if direction < 0 else shape.paragraph.getnext()
+    return movable_neighbor(shape.paragraph, neighbor, hangul, binary_word)
+
+
 def apply_shape(data, address, operation, size, *, hangul, binary_word=False):
-    section, index = address
+    section, *indices = address
+    index = tuple(indices)
     part = f"Contents/section{section}.xml" if hangul else WORD_PART
     with open_package(data) as archive:
         if not hangul:
@@ -249,7 +369,9 @@ def apply_shape(data, address, operation, size, *, hangul, binary_word=False):
         if shape is None:
             raise ValueError("편집할 인라인 도형을 다시 선택하세요.")
         paragraph = shape.paragraph
-        if operation == "delete_shape":
+        if len(index) == 2 and operation in ("delete_shape", "shape_up", "shape_down"):
+            edit_inline_hangul(shape, operation)
+        elif operation == "delete_shape":
             paragraph.getparent().remove(paragraph)
         elif operation in ("shape_up", "shape_down"):
             neighbor = paragraph.getprevious() if operation == "shape_up" else paragraph.getnext()
@@ -331,6 +453,4 @@ def resize_hangul(node, size):
         for point in node:
             if point.tag.rsplit("}", 1)[-1] in point_tags:
                 point.set(axis, str(round(int(point.get(axis)) * dimension / old)))
-    paragraph = node.getparent().getparent()
-    if (line_segments := paragraph.find(HANGUL + "linesegarray")) is not None:
-        paragraph.remove(line_segments)
+    remove_line_segments(node.getparent().getparent())

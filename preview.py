@@ -99,17 +99,20 @@ def rhwp_command():
     return executable("rhwp", "DOCVERS_RHWP", DATA / "tools/rhwp/rhwp")
 
 
-def convert(source, destination, extension, *, page_range=None, hidden_slides=False):
+def convert(source, destination, extension, *, page_range=None, hidden_slides=False, hangul_editor=False):
     folder = source.parent
     env = font_environment(CACHE)
     if extension in ("hwp", "hwpx"):
         command = rhwp_command()
         args = [command, "export-pdf", str(source), "-o", str(destination), "--profile", "screen"]
+        if hangul_editor:
+            args.extend(["--backend", "direct"])
         for directory in font_directories():
             args.extend(["--font-path", str(directory)])
-        for kind in ("serif", "sans", "mono"):
-            if family := generic_fallback(kind, east_asian=True):
-                args.extend([f"--fallback-{kind}", family])
+        if not hangul_editor:
+            for kind in ("serif", "sans", "mono"):
+                if family := generic_fallback(kind, east_asian=True):
+                    args.extend([f"--fallback-{kind}", family])
     else:
         command = executable("soffice", "DOCVERS_SOFFICE", BUNDLED_BIN / "soffice")
         profile = office_profile(folder, office_replacements(source))
@@ -170,8 +173,9 @@ def publish_preview(extension, digest, staged):
     return False
 
 
-def preview_path(extension, digest, load_content):
-    path = preview_cache_path(extension, digest)
+def preview_path(extension, digest, load_content, *, hangul_editor=False):
+    cache_digest = f"{digest}-hangul-editor" if hangul_editor else digest
+    path = preview_cache_path(extension, cache_digest)
     if path.is_file():
         return path
     with WORKERS:
@@ -189,7 +193,7 @@ def preview_path(extension, digest, load_content):
                 if extension in DELIMITED_EXTENSIONS:
                     data = normalized_table(extension, data)
                 source.write_bytes(data)
-                convert(source, output, extension)
+                convert(source, output, extension, hangul_editor=hangul_editor)
             if not output.is_file() or not 0 < output.stat().st_size <= MAX_PREVIEW:
                 raise PreviewError("미리보기를 생성할 수 없거나 변환 결과가 너무 큽니다.")
             read_page_dimensions(output)

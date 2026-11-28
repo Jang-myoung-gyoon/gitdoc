@@ -4,7 +4,8 @@ use serde_json::{Value, json};
 
 #[derive(serde::Deserialize)]
 pub(super) struct PageShape {
-    pub(super) address: [u32; 2],
+    pub(super) address: Vec<u32>,
+    character: Option<usize>,
     pub(super) kind: String,
     pub(super) size: [u32; 2],
     pub(super) move_up: bool,
@@ -24,14 +25,25 @@ impl PageShape {
     }
 
     fn location(&self, format: Format) -> String {
-        if format == Format::Hangul {
-            format!(
-                "구역 {} · 문단 {}",
-                self.address[0] + 1,
-                self.address[1] + 1
-            )
-        } else {
-            format!("본문 문단 {}", self.address[1] + 1)
+        match self.address.as_slice() {
+            [section, paragraph, index] if format == Format::Hangul => {
+                let position = match self.character {
+                    Some(0) => "문단 시작".into(),
+                    Some(offset) => format!("{offset}번째 글자 뒤"),
+                    None => "문단 안".into(),
+                };
+                format!(
+                    "구역 {} · 문단 {} · 도형 {} · {position}",
+                    section + 1,
+                    paragraph + 1,
+                    index + 1
+                )
+            }
+            [section, paragraph] if format == Format::Hangul => {
+                format!("구역 {} · 문단 {}", section + 1, paragraph + 1)
+            }
+            [_, paragraph] => format!("본문 문단 {}", paragraph + 1),
+            _ => "위치 확인 필요".into(),
         }
     }
 }
@@ -74,7 +86,7 @@ impl Editor {
                 });
             })
             .response
-            .on_hover_text("크기와 원본 문단 번호로 본문의 도형을 구분합니다.");
+            .on_hover_text("문단과 글자 위치, 크기로 본문의 도형을 구분합니다.");
 
             let Some(shape) = self
                 .selected_shape
@@ -92,21 +104,25 @@ impl Editor {
             let move_tools = |ui: &mut Ui, action: &mut Option<(&str, Value)>| {
                 ui.separator();
                 ui.label("배치");
-                for (enabled, label, name, tooltip) in [
+                let inline = shape.address.len() == 3;
+                let (back, forward, help) = if inline {
                     (
-                        shape.move_up,
+                        "← 한 글자 앞",
+                        "→ 한 글자 뒤",
+                        "선택한 도형을 같은 문단 안에서 한 글자 옮깁니다. 다른 개체나 특수 문자 구간은 넘을 수 없습니다.",
+                    )
+                } else {
+                    (
                         "↑ 문단 위로",
-                        "shape_up",
-                        "앞 문단과 도형의 순서를 바꿉니다.",
-                    ),
-                    (
-                        shape.move_down,
                         "↓ 문단 아래로",
-                        "shape_down",
-                        "다음 문단과 도형의 순서를 바꿉니다.",
-                    ),
+                        "이웃 문단과 도형의 순서를 바꿉니다.",
+                    )
+                };
+                for (enabled, label, name) in [
+                    (shape.move_up, back, "shape_up"),
+                    (shape.move_down, forward, "shape_down"),
                 ] {
-                    button(ui, ready && enabled, label, tooltip, || {
+                    button(ui, ready && enabled, label, help, || {
                         *action = Some((name, shape_value.clone()))
                     });
                 }
