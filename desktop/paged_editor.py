@@ -640,9 +640,14 @@ class PagedEditor:
             if self.extension in HANGUL_EXTENSIONS:
                 identity = (target or {}).get("id")
                 selected = next((item for item in self.page_objects if item["id"] == identity), None)
-                if (not self.hwp_shapes_allowed or text_edit or not selected or not selected.get("glyph_boxes")
-                        or not isinstance(selection, list)
-                        or len(selection) != 2 or type(selection[0]) is not int or type(selection[1]) is not int
+                if not self.hwp_shapes_allowed:
+                    raise ValueError("보호된 한글 문서에는 표나 도형을 삽입할 수 없습니다.")
+                if text_edit:
+                    raise ValueError("입력 중인 본문을 먼저 반영한 뒤 표나 도형을 삽입하세요.")
+                if selected and not selected.get("glyph_boxes"):
+                    raise ValueError("이 문단은 화면의 글자 위치와 원본을 정확히 연결할 수 없습니다.")
+                if (not selected or not isinstance(selection, list) or len(selection) != 2
+                        or any(type(offset) is not int for offset in selection)
                         or selection[0] != selection[1] or not 0 <= selection[0] <= len(selected["text"])):
                     raise ValueError("한글 본문에 커서를 놓아 표나 도형을 삽입할 위치를 지정하세요.")
                 section, paragraph = identity >> 32, (identity & 0xffffffff) - 1

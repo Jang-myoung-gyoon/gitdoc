@@ -93,6 +93,11 @@ class DocumentObjectTests(unittest.TestCase):
                             canvas.page(number=1, operation=operation, value=value, target=target, selection=selection)
                         self.assertEqual(canvas.working.data, original)
                     offset = 6
+                    with patch.dict(paragraph, glyph_boxes=[]):
+                        with self.assertRaisesRegex(ValueError, "글자 위치"):
+                            canvas.page(number=1, operation=operation, value=value,
+                                        target=target, selection=[offset, offset])
+                        self.assertEqual(canvas.working.data, original)
                     changed = canvas.page(number=1, operation=operation, value=value,
                                           target=target, selection=[offset, offset])
                     inserted_image = self.image(changed)
