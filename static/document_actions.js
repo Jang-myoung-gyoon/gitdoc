@@ -1,11 +1,32 @@
 const actionPositions = new WeakMap();
 
+for (const scroller of document.querySelectorAll('[data-paper-scroll], [data-sheet-scroll]')) {
+  scroller.addEventListener('keydown', event => {
+    if (event.target !== scroller || !['Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    scroller.scrollTo({ top: event.key === 'Home' ? 0 : scroller.scrollHeight });
+  });
+}
+
 function openDocumentDialog(dialog, opener = null) {
   if (dialog.open) return;
   const position = { top: window.scrollY, left: window.scrollX, behavior: 'instant' };
   actionPositions.set(dialog, { position, opener });
   dialog.showModal();
   window.scrollTo(position);
+}
+
+// A fixed toolbar can open history even when the overflow menu is collapsed.
+for (const dialog of document.querySelectorAll('.reader-more .document-dialog')) {
+  document.body.append(dialog);
+}
+for (const drawer of document.querySelectorAll('.reader-more')) {
+  drawer.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && drawer.open && !document.querySelector('dialog[open]')) {
+      drawer.open = false;
+      drawer.querySelector('summary').focus();
+    }
+  });
 }
 
 for (const button of document.querySelectorAll('[data-open-document-dialog]')) {

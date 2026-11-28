@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/document-objects.yml"
       - "desktop/**"
+      - "static/**"
+      - "templates/**"
       - "*.py"
       - "tests/**"
       - "requirements*.txt"
@@ -13,6 +15,8 @@ on:
     paths:
       - ".github/workflows/document-objects.yml"
       - "desktop/**"
+      - "static/**"
+      - "templates/**"
       - "*.py"
       - "tests/**"
       - "requirements*.txt"
@@ -56,3 +60,23 @@ jobs:
           workspaces: desktop/native
       - name: Test the desktop editor controls
         run: cargo test --locked --manifest-path desktop/native/Cargo.toml
+
+  browser-reader:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install -r requirements.txt -r requirements-mcp.txt openpyxl==3.1.5
+          npm install --prefix "$RUNNER_TEMP/gitdoc-browser" --no-save --no-package-lock playwright@1.63.0
+          node "$RUNNER_TEMP/gitdoc-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Test scroll ownership in the real document viewer
+        run: NODE_PATH="$RUNNER_TEMP/gitdoc-browser/node_modules" node tests/test_browser_scroll.cjs
