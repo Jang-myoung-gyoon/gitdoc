@@ -8,6 +8,7 @@ $new = Join-Path $testRoot "new"
 $install = Join-Path $testRoot "installed"
 $data = Join-Path $testRoot "user-data"
 $marker = Join-Path $testRoot "restarted.txt"
+$env:GITDOC_UPDATE_TEST_FAILURE_MARKER = Join-Path $testRoot "failure-stage.txt"
 $env:GITDOC_UPDATE_TEST_RESTART_MARKER = $marker
 $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
 if (!$iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
@@ -68,7 +69,10 @@ procedure FixtureExit(ExitCode: Cardinal);
 external 'ExitProcess@kernel32.dll stdcall';
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then FixtureExit(27);
+  if CurStep = ssPostInstall then begin
+    SaveStringToFile(GetEnv('GITDOC_UPDATE_TEST_FAILURE_MARKER'), 'post-install copy complete', False);
+    FixtureExit(27);
+  end;
 end;
 '@ | Add-Content $brokenRecipe
 $broken = Build-Fixture $old '0.1.5' $brokenRecipe
@@ -143,6 +147,7 @@ try {
     }
     Write-Output 'Checking failure recovery after fixture files were copied.'
     Exercise-Fixture $broken 'new|failed'
+    if (!(Test-Path $env:GITDOC_UPDATE_TEST_FAILURE_MARKER)) { throw "The injected post-install failure did not run." }
     if ((Get-ItemProperty $uninstall).DisplayVersion -ne '0.1.4') {
         throw "Recovery did not restore the prior uninstall registration."
     }

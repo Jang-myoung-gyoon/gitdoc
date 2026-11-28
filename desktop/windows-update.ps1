@@ -122,8 +122,8 @@ try {
     Set-Location $env:TEMP
     if (!$keepBackup) {
         Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-        if ((Test-Path -LiteralPath $application)
-            -and !(Get-Process -Name gitdoc-desktop -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $application })) {
+        $running = Get-Process -Name gitdoc-desktop -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $application }
+        if ((Test-Path -LiteralPath $application) -and !$running) {
             $env:GITDOC_UPDATE_RESTART_STATUS = if ($installed) { "installed" } else { "failed" }
             Start-Process -FilePath $application -WorkingDirectory $install
         }
