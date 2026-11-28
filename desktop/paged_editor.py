@@ -245,14 +245,35 @@ def hangul_xml(source):
     return target.read_bytes()
 
 
-def insert_hangul_object(folder, extension, data, operation, value, section, paragraph):
+def hangul_insert_order(data, section):
+    with open_package(data) as archive:
+        body = parse_part(archive, f"Contents/section{section}.xml")
+    runs = []
+    objects = []
+    paragraphs = []
+    offset = 0
+    for paragraph in body.findall("{*}p"):
+        paragraphs.append(offset)
+        for run in paragraph.findall("{*}run"):
+            for node in run:
+                kind = node.tag.rsplit("}", 1)[-1]
+                if kind == "t":
+                    value = "".join(node.itertext())
+                    offset += len(value)
+                    runs.append(value)
+                elif kind in ("tbl", "rect", "ellipse", "polygon", "line"):
+                    objects.append((offset, kind))
+    return "".join(runs), objects, paragraphs
+
+
+def insert_hangul_object(folder, extension, data, operation, value, section, paragraph, caret, body_text):
     source = folder/f"document.{extension}"
     source.write_bytes(data)
-    # Insert after the anchor so rhwp keeps any section start on its existing paragraph.
-    if operation == "shape":
-        paragraph += 1
-    coordinates = ["--section", str(section), "--para", str(paragraph)]
-    flags = [*coordinates, "--offset", "0"]
+    original_xml = hangul_xml(source)
+    standalone = operation == "shape" and caret == len(body_text)
+    native_paragraph = paragraph + int(standalone)
+    coordinates = ["--section", str(section), "--para", str(native_paragraph)]
+    flags = [*coordinates, "--offset", str(0 if standalone else caret)]
     if operation == "table":
         rows, columns = value
         flags += ["--rows", str(rows), "--cols", str(columns)]
@@ -264,18 +285,34 @@ def insert_hangul_object(folder, extension, data, operation, value, section, par
         with open_package(data):
             pass
     try:
-        if operation == "shape":
-            paragraph_file = folder/f"object-paragraph.{extension}"
-            rhwp(["edit", "insert-paragraph", str(source), *coordinates, "-o", str(paragraph_file)], folder)
-            source = paragraph_file
+        if standalone:
+            # At a paragraph end, preserve the existing standalone shape tools.
+            paragraph_source = folder / f"object-paragraph.{extension}"
+            rhwp(["edit", "insert-paragraph", str(source), *coordinates, "-o", str(paragraph_source)], folder)
+            source = paragraph_source
         rhwp(["edit", f"insert-{operation}", str(source), *flags, "-o", str(destination)], folder)
     except PreviewError as error:
         raise ValueError("한글 개체를 삽입할 수 없습니다. 설치한 rhwp의 삽입 명령과 문서 편집 권한을 확인하세요.") from error
-    if value not in ("triangle", "arrow"):
-        return destination.read_bytes()
-    # rhwp inserts an open triangle. Write a closed, native polygon through HWPX.
-    updated = close_hangul_polygon(hangul_xml(source), hangul_xml(destination), section, paragraph, value)
-    return convert_format("hwpx", "hwp", updated) if extension == "hwp" else updated
+    updated_xml = hangul_xml(destination)
+    result = destination.read_bytes()
+    if value in ("triangle", "arrow"):
+        # rhwp inserts an open triangle. Write a closed, native polygon through HWPX.
+        polygon_source = hangul_xml(source) if standalone else original_xml
+        updated_xml = close_hangul_polygon(polygon_source, updated_xml, section, native_paragraph, value)
+        result = convert_format("hwpx", "hwp", updated_xml) if extension == "hwp" else updated_xml
+        if extension == "hwp":
+            destination.write_bytes(result)
+            updated_xml = hangul_xml(destination)
+    before, controls, paragraphs = hangul_insert_order(original_xml, section)
+    after, inserted, _ = hangul_insert_order(updated_xml, section)
+    kind = "tbl" if operation == "table" else {"rectangle": "rect", "ellipse": "ellipse",
+                                               "triangle": "polygon", "arrow": "polygon"}[value]
+    boundary = (paragraphs[paragraph] + caret, kind)
+    expected = list(controls)
+    expected.append(boundary)
+    if before != after or sorted(expected) != sorted(inserted):
+        raise ValueError("삽입 위치와 주변 본문을 확인할 수 없어 변경을 적용하지 않았습니다.")
+    return result
 
 
 class PagedEditor:
@@ -297,7 +334,6 @@ class PagedEditor:
         self.locations = []
         self.page_objects = []
         self.page_count = 0
-        self.hangul_anchor = None
         self.tables = []
         self.cell_catalog = None
         self.shapes = []
@@ -323,12 +359,18 @@ class PagedEditor:
     def render(self, data, number):
         extension = "docx" if self.extension == "doc" else self.extension
         key = hashlib.sha256(data).hexdigest()
-        pdf = preview_path(extension, key, lambda: data)
+        if extension in HANGUL_EXTENSIONS:
+            try:
+                pdf = preview_path(extension, key, lambda: data, hangul_editor=True)
+            except PreviewError:
+                pdf = preview_path(extension, key, lambda: data)
+        else:
+            pdf = preview_path(extension, key, lambda: data)
         sizes = page_dimensions(pdf)
         count = len(sizes)
         number = max(1, min(count, number))
         width, height = sizes[number-1]
-        texts, locations, anchor = self.texts, self.locations, self.hangul_anchor
+        texts, locations = self.texts, self.locations
         shapes, shape_xml = self.shapes, self.shape_xml
         formatting, hangul_fonts = self.hangul_formatting, self.hangul_fonts
         changed = key != self.current_key
@@ -345,13 +387,6 @@ class PagedEditor:
                     formatting, hangul_fonts = formatting_catalog(content) if self.hwp_shapes_allowed else (set(), [])
                     shape_xml = content if (shapes or formatting) and extension == "hwp" else None
                 placement = json.loads(rhwp(["dump-pages", str(source), "-p", str(number-1), "--json"], folder))["pages"][0]
-                section = placement["section"]
-                anchor = next(
-                    ((section, item["paraIndex"])
-                     for column in placement["columns"] for item in column["items"]
-                     if "paraIndex" in item and not item.get("isEndnote")
-                     and (section, item["paraIndex"]) in texts),
-                    (section, 0) if count == 1 and (section, 0) in texts else None)
                 objects, tables, page_cells = hwp_locations(source, number, placement, texts)
                 if tables and native_cells is None:
                     native_cells = {}
@@ -392,7 +427,7 @@ class PagedEditor:
         self.page_count = count
         self.tables, self.shapes, self.shape_xml = tables, shapes, shape_xml
         self.cell_catalog = native_cells
-        self.texts, self.locations, self.hangul_anchor = texts, locations, anchor
+        self.texts, self.locations = texts, locations
         self.hangul_formatting, self.hangul_fonts = formatting, hangul_fonts
         return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
                 "objects": objects, "tables": tables, "shapes": shapes, "hangul_fonts": hangul_fonts, "image": str(png), "fonts": fonts}
@@ -524,6 +559,8 @@ class PagedEditor:
                     selection = None
             else:
                 selection = None
+            if operation == "color" and selection is None:
+                raise ValueError("글자 색을 바꿀 범위를 먼저 선택하세요.")
             changed = format_paragraph(data, section, paragraph, operation, value,
                                        selection=selection, original=text)
             if changed == data:
@@ -600,16 +637,20 @@ class PagedEditor:
                 return output.read_bytes()
         if operation in ("table", "shape"):
             value = insertion_value(operation, value)
+            if self.extension in HANGUL_EXTENSIONS:
+                identity = (target or {}).get("id")
+                selected = next((item for item in self.page_objects if item["id"] == identity), None)
+                if (not self.hwp_shapes_allowed or text_edit or not selected or not selected.get("glyph_boxes")
+                        or not isinstance(selection, list)
+                        or len(selection) != 2 or type(selection[0]) is not int or type(selection[1]) is not int
+                        or selection[0] != selection[1] or not 0 <= selection[0] <= len(selected["text"])):
+                    raise ValueError("한글 본문에 커서를 놓아 표나 도형을 삽입할 위치를 지정하세요.")
+                section, paragraph = identity >> 32, (identity & 0xffffffff) - 1
+                with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+                    return insert_hangul_object(Path(work), self.extension, source, operation, value,
+                                                section, paragraph, selection[0], selected["text"])
             if text_edit:
                 source = self.apply(source, None, text_edit, None, None)
-            if self.extension in HANGUL_EXTENSIONS:
-                selected = None if target is None else next(
-                    (item["id"] for item in self.page_objects if item["id"] == target.get("id")), None)
-                anchor = (selected >> 32, (selected & 0xffffffff) - 1) if selected else self.hangul_anchor
-                if anchor is None:
-                    raise ValueError("이 페이지에서 삽입 위치를 확인할 수 없습니다. 본문 문단이 있는 페이지를 선택하세요.")
-                with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
-                    return insert_hangul_object(Path(work), self.extension, source, operation, value, *anchor)
             candidates = [item["id"] for item in self.page_objects]
             if target and target.get("id") in candidates:
                 candidates.insert(0, target["id"])

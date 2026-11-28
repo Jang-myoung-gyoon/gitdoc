@@ -69,7 +69,8 @@ class HangulFormattingTests(unittest.TestCase):
                                   if i["text"]=="둘째 문단" and i["hangul_format"])
                     for op, value in [("bold", None), ("italic", None), ("underline", None), ("size", 14),
                                       ("color", "1852A3"), ("align", "center"), ("spacing", 180)]:
-                        canvas.page(number=1, operation=op, target=target, value=value)
+                        selection = [0, len("둘째 문단")] if op == "color" else None
+                        canvas.page(number=1, operation=op, target=target, value=value, selection=selection)
                     before_undo = canvas.working.data
                     canvas.page(number=1, operation="undo")
                     self.assertNotEqual(canvas.working.data, before_undo)
@@ -132,14 +133,19 @@ class HangulFormattingTests(unittest.TestCase):
         for selection in ([True, 3], [-1, 3], [3, 1], [2, len(text)+1]):
             with self.assertRaises(ValueError):
                 canvas.page(number=1, operation="bold", target=target, selection=selection)
+        for empty in (None, [2, 2]):
+            with self.assertRaisesRegex(ValueError, "글자 색"):
+                canvas.page(number=1, operation="color", target=target, value="00796F", selection=empty)
+        self.assertEqual(canvas.working.data, data)
         selection = [1, 7]
+        canvas.page(number=1, operation="color", target=target, value="00796F", selection=selection)
         result = canvas.page(number=1, operation="bold", target=target, selection=selection)
         self.assertEqual(result["hangul_selection"], selection)
         canvas.page(number=1, operation="size", target=target, selection=selection, value=16)
         expected = character_styles(data, extension)
         for i in range(*selection):
-            char, color, _, _ = expected[1][i]
-            expected[1][i] = (char, color, True, "1600")
+            char, _, _, _ = expected[1][i]
+            expected[1][i] = (char, "#00796F", True, "1600")
         self.assertTrue(canvas.page(number=1, operation="undo")["redo"])
         self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
         proposal = canvas.save("Format selected characters", 1)

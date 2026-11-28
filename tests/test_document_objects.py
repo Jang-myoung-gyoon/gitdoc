@@ -68,10 +68,75 @@ class DocumentObjectTests(unittest.TestCase):
             tables = root.findall(f".//{WORD_TAG}tbl")
             self.assertEqual([len(node.findall(WORD_TAG + "tr")) for node in tables], [2, 3])
 
+    def test_hangul_objects_insert_at_the_middle_of_rendered_text(self):
+        text = "앞문장ABC뒷문장" + " 한글과 Latin 글자가 함께 있는 문장" * 8
+        rhwp(["edit", "insert-text", "blank.hwp", "--text", text, "-o", "caret.hwp"], self.folder)
+        rhwp(["export-hwpx", "caret.hwp", "caret.hwpx"], self.folder)
+        for extension in ("hwp", "hwpx"):
+            path = self.folder / f"caret.{extension}"
+            original = path.read_bytes()
+            for operation, value, kind in (("table", [2, 3], "tbl"), ("shape", "arrow", "polygon")):
+                with self.subTest(extension=extension, operation=operation):
+                    entry = register_document(str(path), f"Caret {extension} {operation}")["version"]
+                    doc, base = entry["document_id"], entry["id"]
+                    canvas = CanvasSession()
+                    self.addCleanup(canvas.close)
+                    initial = canvas.open(doc, "main", base, 1)
+                    original_image = self.image(initial)
+                    paragraph = next(item for item in initial["objects"] if item["text"] == text)
+                    boxes = paragraph["glyph_boxes"]
+                    self.assertTrue({0, 3, 4, 5, 6}.issubset(index for index, _ in boxes))
+                    self.assertGreater(boxes[-1][1][1], boxes[0][1][1])
+                    target = {"id": paragraph["id"]}
+                    for selection in (None, [2, 5]):
+                        with self.assertRaisesRegex(ValueError, "커서"):
+                            canvas.page(number=1, operation=operation, value=value, target=target, selection=selection)
+                        self.assertEqual(canvas.working.data, original)
+                    offset = 6
+                    changed = canvas.page(number=1, operation=operation, value=value,
+                                          target=target, selection=[offset, offset])
+                    inserted_image = self.image(changed)
+                    self.assertIsNotNone(ImageChops.difference(original_image, inserted_image).getbbox())
+                    self.assertFalse(canvas.page(number=1, operation="undo")["dirty"])
+                    self.assertEqual(canvas.working.data, original)
+                    self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
+                    proposal = canvas.save("Insert at the caret", 1)["id"]
+                    with store.database(readonly=True) as db:
+                        before = store.find_version(db, doc, base, "content")["content"]
+                        saved = store.find_version(db, doc, proposal, "content, extension")
+                    self.assertEqual(before, original)
+                    self.assertEqual(saved["extension"], extension)
+                    package = saved["content"]
+                    if extension == "hwp":
+                        package = convert_format("hwp", "hwpx", package)
+                    with open_package(package) as archive:
+                        body = parse_part(archive, "Contents/section0.xml")
+                    parts = [node for paragraph in body.findall(HANGUL + "p")
+                             for run in paragraph.findall(HANGUL + "run") for node in run]
+                    objects = [index for index, node in enumerate(parts) if node.tag == HANGUL + kind]
+                    self.assertEqual(len(objects), 1)
+                    before_text = "".join(node.text or "" for node in parts[:objects[0]] if node.tag == HANGUL + "t")
+                    after_text = "".join(node.text or "" for node in parts[objects[0]+1:] if node.tag == HANGUL + "t")
+                    self.assertEqual((before_text, after_text), (text[:offset], text[offset:]))
+                    review_revision(doc, proposal, "approve", base)
+                    reopened = canvas.open(doc, "main", proposal, 1)
+                    if operation == "table":
+                        self.assertEqual(len(reopened["tables"]), 1)
+                    self.assertIsNone(ImageChops.difference(self.image(reopened), inserted_image).getbbox())
+
     def test_native_objects_save_reopen_and_render(self):
         for extension in ("doc", "docx", "hwp", "hwpx"):
             with self.subTest(extension=extension):
                 self.check_format(extension)
+
+    def insert(self, session, extension, operation, value, offset=None):
+        options = {}
+        if extension in ("hwp", "hwpx"):
+            item = next(item for item in session.working.page_objects if "GitDoc" in item["text"])
+            if offset is None:
+                offset = len(item["text"])
+            options = {"target": {"id": item["id"]}, "selection": [offset, offset]}
+        return session.page(number=1, operation=operation, value=value, **options)
 
     def check_format(self, extension):
         path = self.folder / f"sample.{extension}"
@@ -85,14 +150,14 @@ class DocumentObjectTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             session.page(number=1, operation="table", value=[0, 3])
         self.assertEqual(session.working.position, 0)
-        inserted = session.page(number=1, operation="table", value=[2, 3])
+        inserted = self.insert(session, extension, "table", [2, 3])
         self.assertIsNotNone(ImageChops.difference(self.image(inserted), initial_image).getbbox())
         self.assertFalse(session.page(number=1, operation="undo")["dirty"])
         redo = session.page(number=1, operation="redo")
         self.assertTrue(redo["dirty"])
         previous_image = self.image(redo)
         for shape in WORD_SHAPES:
-            edited = session.page(number=1, operation="shape", value=shape)
+            edited = self.insert(session, extension, "shape", shape)
             changed_image = self.image(edited)
             self.assertIsNotNone(ImageChops.difference(previous_image, changed_image).getbbox(), shape)
             previous_image = changed_image
@@ -122,9 +187,9 @@ class DocumentObjectTests(unittest.TestCase):
                 session = CanvasSession()
                 self.addCleanup(session.close)
                 session.open(document_id, "main", base, 1)
-                first = session.page(number=1, operation="table", value=[2, 3])
+                first = self.insert(session, extension, "table", [2, 3])
                 stale = {"address": first["tables"][0]["address"], "digest": first["edit_digest"]}
-                session.page(number=1, operation="table", value=[3, 4])
+                self.insert(session, extension, "table", [3, 4])
                 added = session.save("Create two tables", 1)["id"]
                 review_revision(document_id, added, "approve", base)
                 existing = session.open(document_id, "main", added, 1)
@@ -161,9 +226,9 @@ class DocumentObjectTests(unittest.TestCase):
         session = CanvasSession()
         self.addCleanup(session.close)
         session.open(document, "main", original, 1)
-        session.page(number=1, operation="table", value=[2, 3])
+        self.insert(session, extension, "table", [2, 3])
         for kind in ("rectangle", "rectangle", "arrow"):
-            session.page(number=1, operation="shape", value=kind)
+            self.insert(session, extension, "shape", kind)
         base = session.save("Create a table and three adjacent shapes", 1)["id"]
         review_revision(document, base, "approve", original)
         before = session.open(document, "main", base, 1)
