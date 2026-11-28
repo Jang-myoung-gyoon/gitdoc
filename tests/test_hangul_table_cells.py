@@ -244,6 +244,114 @@ class HangulTableCellTests(unittest.TestCase):
         _, image = render_document_page(doc, proposal["id"])
         self.assertTrue(image.data.startswith(b"\x89PNG"))
 
+    def test_subdivide_one_regular_cell_in_both_formats(self):
+        try:
+            rhwp_command()
+        except PreviewError as error:
+            self.skipTest(str(error))
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            self.fixture(folder)
+            self.subdivision_fixture(folder)
+            with patch.object(store, "DATABASE", folder/"subdivision.sqlite3"):
+                store.initialize()
+                store.set_desktop_review(True)
+                for extension in ("hwp", "hwpx"):
+                    with self.subTest(extension=extension):
+                        self.exercise_subdivision(folder, extension)
+
+    @staticmethod
+    def subdivision_fixture(folder):
+        rhwp(["edit", "set-column-widths", "source.hwp", "--table", "1",
+              "--widths", "10000,12000,10000", "-o", "split-widths.hwp"], folder)
+        rhwp(["edit", "apply-char-format-in-cell", "split-widths.hwp", "--table", "1",
+              "--row", "1", "--col", "1", "--props", '{"bold":true}', "-o", "split-style.hwp"], folder)
+        source = "split-style.hwp"
+        for col in range(3):
+            modified = "subdivision.hwp" if col == 2 else f"split-height-{col}.hwp"
+            rhwp(["edit", "set-cell-props", source, "--table", "1", "--row", "1", "--col", str(col),
+                  "--props", '{"height":6000,"verticalAlign":2}', "-o", modified], folder)
+            source = modified
+        rhwp(["export-hwpx", "subdivision.hwp", "subdivision.hwpx"], folder)
+
+    def exercise_subdivision(self, folder, extension):
+        original = folder/f"subdivision.{extension}"
+        record = register_document(str(original), f"Subdivision {extension}")["version"]
+        doc, base = record["document_id"], record["id"]
+        canvas = CanvasSession()
+        self.addCleanup(canvas.close)
+        opened = canvas.open(doc, "main", base, 1)
+        before_raster = Image.open(opened["image"]).convert("RGB")
+        table = opened["tables"][1]
+        self.assertTrue(table["subdivision"])
+        address = table["address"]
+        payload = {"address": address, "digest": opened["edit_digest"], "coordinate": [1, 1],
+                   "rows": 2, "columns": 3}
+
+        def split(**changes):
+            return canvas.page(number=1, operation="edit_table_subdivision", value=dict(payload, **changes))
+
+        for bad in ({"rows": 1, "columns": 1}, {"rows": 0}, {"columns": 7}, {"rows": True},
+                    {"coordinate": [1, 6]}, {"digest": "stale"}, {"end": [1, 2]}):
+            with self.assertRaises(ValueError):
+                split(**bad)
+            self.assertEqual(canvas.working.data, original.read_bytes())
+        with self.assertRaisesRegex(ValueError, "원래 셀의 크기"):
+            split(coordinate=[0, 1], rows=2, columns=1)
+        self.assertEqual(canvas.working.data, original.read_bytes())
+
+        for rows, cols in ((1, 2), (3, 1), (2, 3)):
+            edited = split(rows=rows, columns=cols)
+            self.assertEqual(edited["table_selection"], {"address": address, "coordinate": [1, 1]})
+            result = edited["tables"][1]
+            self.assertEqual((result["rows"], result["columns"]), (rows + 1, cols + 2))
+            self.assertFalse(result["subdivision"])
+            self.assertIsNotNone(ImageChops.difference(before_raster, Image.open(edited["image"]).convert("RGB")).getbbox())
+            with self.assertRaisesRegex(ValueError, "병합·보호"):
+                split(digest=edited["edit_digest"], coordinate=[0, 1])
+            self.assertFalse(canvas.page(number=1, operation="undo")["dirty"])
+            self.assertEqual(canvas.working.data, original.read_bytes())
+        self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
+        result = canvas.save("Subdivide a styled regular cell", 1)
+        with store.database(readonly=True) as db:
+            self.assertEqual(store.find_version(db, doc, base, "content")["content"], original.read_bytes())
+            new = store.find_version(db, doc, result["id"], "content, extension")
+        self.assertEqual(new["extension"], extension)
+        self.assertTrue(matches_format(extension, new["content"]))
+        saved = folder/f"saved-split.{extension}"
+        saved.write_bytes(new["content"])
+        before_grid, after_grid = exported_tables(original), exported_tables(saved)
+        self.assertEqual(after_grid[0], before_grid[0])
+        self.assertEqual(table_layout_state(saved, 0), table_layout_state(original, 0))
+        after_spans = {(cell["row"], cell["col"]): (cell["rowSpan"], cell["colSpan"])
+                       for cell in after_grid[1]["cells"]}
+        self.assertEqual(after_spans, {
+            (0, 0): (1, 1), (0, 1): (1, 3), (0, 4): (1, 1),
+            (1, 0): (2, 1), (1, 4): (2, 1),
+            (1, 1): (1, 1), (1, 2): (1, 1), (1, 3): (1, 1),
+            (2, 1): (1, 1), (2, 2): (1, 1), (2, 3): (1, 1),
+        })
+        before, after = table_layout_state(original, 1), table_layout_state(saved, 1)
+        for previous, unchanged in (
+            ((0, 0), (0, 0)), ((0, 1), (0, 1)), ((0, 2), (0, 4)),
+            ((1, 0), (1, 0)), ((1, 2), (1, 4)),
+        ):
+            self.assertEqual(after[unchanged], before[previous])
+        source = before[1, 1]
+        self.assertNotEqual(source["text"][0][0][1], before[1, 0]["text"][0][0][1])
+        for row in (1, 2):
+            for col in (1, 2, 3):
+                expected = dict(source, width=4000, height=3000)
+                if (row, col) != (1, 1):
+                    expected["text"] = [[("", source["text"][0][0][1])]]
+                self.assertEqual(after[row, col], expected)
+        review_revision(doc, result["id"], "approve", base)
+        reopened = canvas.open(doc, "main", result["id"], 1)
+        self.assertEqual(len(reopened["tables"][1]["cells"]), 11)
+        self.assertEqual(get_preview_info(doc, result["id"], base)["page_counts"], [1, 1])
+        _, image = render_document_page(doc, result["id"])
+        self.assertTrue(image.data.startswith(b"\x89PNG"))
+
     def test_native_row_and_column_edits_move_only_the_intended_cells(self):
         try:
             rhwp_command()
@@ -407,6 +515,11 @@ class HangulTableCellTests(unittest.TestCase):
                                     "address": table["address"], "coordinate": [1, 1], "end": [1, 2],
                                     "digest": opened["edit_digest"], "change": "merge",
                                 })
+                        if not filename.startswith("source."):
+                            self.assertFalse(table["subdivision"])
+                            with self.assertRaises(ValueError):
+                                editor.page(1, "edit_table_subdivision", value={"address": table["address"],
+                                    "coordinate": [1, 1], "digest": opened["edit_digest"], "rows": 2, "columns": 2})
                         if filename in ("protected.hwpx", "nested.hwpx"):
                             self.assertFalse(table["layout_grid"])
                             with self.assertRaises(ValueError):

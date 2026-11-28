@@ -289,7 +289,7 @@ impl Editor {
             button(
                 ui,
                 editable && cell.split,
-                "셀 나누기",
+                "병합 셀 나누기",
                 "기존 줄·칸 경계로 나누고 내용은 왼쪽 위 셀에 둡니다.",
                 || {
                     *action = Some((
@@ -309,6 +309,31 @@ impl Editor {
             "선택한 셀의 한 줄 텍스트를 바꿉니다. 입력 중인 본문은 먼저 반영하세요.",
             || self.cell_draft = text.map(|text| CellDraft { text, focus: true }),
         );
+        if let Some(cell) = selection {
+            let enabled = editable && table.subdivision;
+            ui.add_enabled_ui(enabled, |ui| {
+                ui.menu_button("행·열로 나누기", |ui| {
+                    ui.label("원래 내용은 왼쪽 위 셀에 남습니다.");
+                    for (index, label) in ["나눌 행 수", "나눌 열 수"].into_iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            let title = ui.label(label);
+                            ui.add(DragValue::new(&mut self.subdivision_counts[index]).range(1..=6))
+                                .labelled_by(title.id);
+                        });
+                    }
+                    let [rows, columns] = self.subdivision_counts;
+                    if ui.add_enabled(rows > 1 || columns > 1, Button::new("나누기 적용"))
+                        .on_hover_text("선택한 셀 안에 새 경계를 만듭니다.").clicked() {
+
+                        *action = Some(("edit_table_subdivision", json!({
+                            "address":table.address, "digest":self.edit_digest, "coordinate":cell.coordinate,
+                            "rows":rows, "columns":columns
+                        })));
+                        ui.close();
+                    }
+                }).response.on_disabled_hover_text("병합·보호되지 않은 일반 표에서 한 셀을 선택하세요.");
+            });
+        }
     }
 
     pub(super) fn restore_table_selection(&mut self, selection: &Value) {
