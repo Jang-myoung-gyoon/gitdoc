@@ -46,6 +46,27 @@ fn library_heading(ui: &mut Ui) -> (Response, Response) {
     .inner
 }
 
+fn blank_format(ui: &mut Ui, format: &mut String) {
+    ui.label("파일 형식");
+    ComboBox::from_id_salt("blank-format")
+        .selected_text(format.to_ascii_uppercase())
+        .show_ui(ui, |ui| {
+            for (extension, label) in [
+                ("docx", "DOCX · 문서"),
+                ("pptx", "PPTX · 프레젠테이션"),
+                ("xlsx", "XLSX · 스프레드시트"),
+                ("pdf", "PDF · 페이지"),
+                ("hwp", "HWP · 한글"),
+                ("hwpx", "HWPX · 한글"),
+            ] {
+                ui.selectable_value(format, extension.into(), label);
+            }
+        });
+    if matches!(format.as_str(), "hwp" | "hwpx") {
+        ui.weak("한글 빈 문서를 만들려면 rhwp 0.9.0 이상이 필요합니다.");
+    }
+}
+
 fn saved_message(result: &Value) -> &'static str {
     if result["status"] == "pending" {
         "수정안을 검토 대기로 저장했습니다."
@@ -2072,15 +2093,7 @@ impl GitDoc {
                     ui.text_edit_singleline(&mut form.name);
                 }
                 if form.action == Action::CreateBlank {
-                    ui.label("파일 형식");
-                    ComboBox::from_id_salt("blank-format")
-                        .selected_text(form.kind.to_ascii_uppercase())
-                        .show_ui(ui, |ui| {
-                            for (name, label) in [("docx", "DOCX · 문서"), ("pptx", "PPTX · 프레젠테이션"),
-                                                  ("xlsx", "XLSX · 스프레드시트"), ("pdf", "PDF · 페이지")] {
-                                ui.selectable_value(&mut form.kind, name.into(), label);
-                            }
-                        });
+                    blank_format(ui, &mut form.kind);
                 }
                 if form.action == Action::Rewind {
                     ui.label(format!("{} 브랜치의 확정본을 {}으로 옮깁니다.",
@@ -2486,6 +2499,38 @@ mod tests {
         };
         assert!(!frame(vec![Event::PointerMoved(point), mouse(true)]).0);
         assert!(frame(vec![mouse(false)]).0);
+    }
+
+    #[test]
+    fn new_document_format_menu_selects_both_hangul_extensions() {
+        let ctx = Context::default();
+        let frame = |format: &mut String, events| {
+            ctx.run(RawInput { events, ..RawInput::default() }, |ctx| {
+                CentralPanel::default().show(ctx, |ui| blank_format(ui, format));
+            })
+        };
+        let text_center = |output: &FullOutput, title: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                epaint::Shape::Text(text) if text.galley.job.text == title =>
+                    Some(text.pos + text.galley.size() / 2.0),
+                _ => None,
+            }).unwrap_or_else(|| panic!("Missing format control {title}"))
+        };
+        let click = |format: &mut String, point| {
+            for pressed in [true, false] {
+                frame(format, vec![Event::PointerMoved(point), Event::PointerButton {
+                    pos: point, pressed, button: PointerButton::Primary, modifiers: Modifiers::NONE,
+                }]);
+            }
+        };
+        let mut format = "docx".to_owned();
+        for (active, label, expected) in [("DOCX", "HWP · 한글", "hwp"), ("HWP", "HWPX · 한글", "hwpx")] {
+            let popup = text_center(&frame(&mut format, vec![]), active);
+            click(&mut format, popup);
+            let option = text_center(&frame(&mut format, vec![]), label);
+            click(&mut format, option);
+            assert_eq!(format, expected);
+        }
     }
 
     #[test]

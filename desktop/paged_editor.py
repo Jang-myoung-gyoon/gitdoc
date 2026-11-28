@@ -111,10 +111,12 @@ def hwp_locations(source, page, placement, text):
               for column in placement["columns"] for item in column["items"]
               if item["kind"] == "table" and not item.get("isEndnote")}
     lines = defaultdict(list)
+    empty_lines = {}
     tables = []
     for column in body.get("children", []):
         for item in column.get("children", []):
             if item["type"] == "TextLine" and "pi" in item:
+                empty_lines.setdefault(item["pi"], item["bbox"])
                 for run in item.get("children", []):
                     if run["type"] == "TextRun" and run.get("text"):
                         lines[item["pi"]].append(run)
@@ -151,16 +153,26 @@ def hwp_locations(source, page, placement, text):
             items.append({"id": hwp_id(section, paragraph), "name": value[:60], "text": value,
                           "box": [ink[0], ink[1], max(ink[2], .85), ink[3]], "ink": ink,
                           "size": max(8, min(40, (positions[0][3]-positions[0][1])*height*.75))})
+    if text == {(section, 0): ""} and not tables and full == {0} and 0 in empty_lines:
+        box = empty_lines[0]
+        x, y, w, h = (box[key] for key in ("x", "y", "w", "h"))
+        if min(width, height, w, h) > 0:
+            bounds = [x/width, y/height, (x+w)/width, (y+h)/height]
+            items.append({"id": hwp_id(section, 0), "name": "빈 문단", "text": "", "box": bounds,
+                          "ink": [bounds[0], bounds[1], (x + min(w, h * 2))/width, bounds[3]],
+                          "size": max(8, min(40, h * .75))})
     return items, tables
 
 
 def change_hwp(source, original, value, section, paragraph):
     folder = source.parent
-    matches = json.loads(rhwp(["search", str(source), original, "--json"], folder))["matches"]
-    address = [m for m in matches if m["section"] == section and m["paragraph"] == paragraph]
-    if len(address) != 1:
-        raise ValueError("한글 원본에서 선택한 문단을 정확히 확인할 수 없습니다.")
-    address = address[0]
+    offset = 0
+    if original:
+        matches = json.loads(rhwp(["search", str(source), original, "--json"], folder))["matches"]
+        address = [m for m in matches if m["section"] == section and m["paragraph"] == paragraph]
+        if len(address) != 1:
+            raise ValueError("한글 원본에서 선택한 문단을 정확히 확인할 수 없습니다.")
+        offset = address[0]["charOffset"]
     left = 0
     for a, b in zip(original, value):
         if a != b:
@@ -176,7 +188,7 @@ def change_hwp(source, original, value, section, paragraph):
     if not before and not after:
         return source.read_bytes()
     flags = ["--section", str(section), "--para", str(paragraph),
-             "--offset", str(address["charOffset"]+left)]
+             "--offset", str(offset+left)]
     if before:
         output = folder/f"deleted{source.suffix}"
         rhwp(["edit", "delete-text", str(source), *flags, "--count", str(len(before)), "-o", str(output)], folder)
@@ -400,7 +412,9 @@ class PagedEditor:
         if self.extension in HANGUL_EXTENSIONS:
             section, paragraph = identity >> 32, (identity & 0xffffffff) - 1
             original = self.texts.get((section, paragraph))
-            if not original or edited is None:
+            if original is None or edited is None or (
+                not original and not any(item["id"] == identity for item in self.page_objects)
+            ):
                 raise ValueError("편집할 한글 문단을 확인하세요.")
             with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
                 folder = Path(work)
