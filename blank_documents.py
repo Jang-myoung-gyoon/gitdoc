@@ -15,25 +15,51 @@ from pypdf import PdfWriter
 from desktop_link import desktop_url, document_path
 from editing import WORD, open_package, parse_part, rewrite_package
 from preview import PreviewError, rhwp_command, run_converter
-from store import create_document, database, find_document
+from store import DATA, create_document, database, find_document, user_data
 from uploads import prepare_upload
 
 BLANK_FORMATS = ("docx", "pptx", "xlsx", "pdf", "hwp", "hwpx")
-RHWP_REQUIRED = "한글 빈 문서를 만들려면 rhwp 0.9.0 이상을 설치하고 GitDoc에서 찾을 수 있게 설정하세요."
+RHWP_MINIMUM = (0, 9, 0)
+RHWP_REQUIRED = (
+    "한글 빈 문서에는 rhwp 0.9.0 이상이 필요합니다. PATH 또는 GitDoc 데이터 폴더의 "
+    "tools/rhwp/rhwp (Windows는 rhwp.exe)에 설치하거나 DOCVERS_RHWP에 실행 파일 경로를 지정하세요."
+)
+
+
+def blank_rhwp_command(folder, env):
+    override = env.get("DOCVERS_RHWP")
+    candidates = [override] if override else []
+    if not override:
+        try:
+            candidates.append(rhwp_command())
+        except PreviewError:
+            pass
+        name = "rhwp.exe" if os.name == "nt" else "rhwp"
+        for root in (DATA, user_data()):
+            fallback = root / "tools" / "rhwp" / name
+            if fallback.is_file():
+                candidates.append(str(fallback))
+    for command in dict.fromkeys(candidates):
+        try:
+            output = run_converter([command, "--version"], folder, env=env)
+        except PreviewError:
+            continue
+        version = re.fullmatch(rb"rhwp v(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?", output.strip())
+        if version and tuple(map(int, version.groups())) >= RHWP_MINIMUM:
+            return command
+    if override:
+        raise ValueError(
+            "DOCVERS_RHWP에 지정한 도구를 실행할 수 없거나 rhwp 0.9.0 이상인지 확인할 수 없습니다. "
+            "지원 버전의 실행 파일을 지정하거나 이 설정을 해제하세요."
+        )
+    raise ValueError(RHWP_REQUIRED)
 
 
 def blank_hangul(extension):
     env = dict(os.environ, RHWP_WEBFONT_OFFLINE="1")
     with TemporaryDirectory(prefix="gitdoc-blank-hangul-") as directory:
         folder = Path(directory)
-        try:
-            command = rhwp_command()
-            output = run_converter([command, "--version"], folder, env=env)
-        except PreviewError as error:
-            raise ValueError(RHWP_REQUIRED) from error
-        version = re.search(rb"^rhwp v(\d+)\.(\d+)\.(\d+)", output)
-        if not version or tuple(map(int, version.groups())) < (0, 9, 0):
-            raise ValueError(RHWP_REQUIRED)
+        command = blank_rhwp_command(folder, env)
 
         spec = folder / "blank.json"
         hwpx = folder / "blank.hwpx"

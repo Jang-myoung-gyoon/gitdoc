@@ -14,7 +14,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 import store
-from blank_documents import BLANK_FORMATS
+from blank_documents import BLANK_FORMATS, blank_rhwp_command
 from desktop.bridge import CanvasSession, create_blank, edit, library, view
 from editing import WORD, open_package, parse_part
 from mcp_server import create_blank_document, get_preview_info, list_branches, render_document_page
@@ -100,14 +100,47 @@ class BlankDocumentTests(unittest.TestCase):
         self.assertEqual(library(),[])
 
     def test_missing_or_old_rhwp_does_not_register_a_document(self):
-        with patch("blank_documents.rhwp_command", side_effect=PreviewError("missing")):
+        root = store.DATABASE.parent
+        with patch.dict(os.environ, {"DOCVERS_RHWP": ""}), patch("blank_documents.DATA", root/"source"), \
+                patch("blank_documents.user_data", return_value=root/"installed"), \
+                patch("blank_documents.rhwp_command", side_effect=PreviewError("missing")):
             for extension in ("hwp", "hwpx"):
-                with self.assertRaisesRegex(ValueError, "rhwp 0.9.0"):
+                with self.assertRaisesRegex(ValueError, r"rhwp 0\.9\.0.*tools/rhwp/rhwp"):
                     create_blank("새 한글", extension)
-        with patch("blank_documents.rhwp_command", return_value="fixture-rhwp"), \
-                patch("blank_documents.run_converter", return_value=b"rhwp v0.8.7\n"):
-            with self.assertRaisesRegex(ValueError, "rhwp 0.9.0"):
-                create_blank("새 한글", "hwp")
+        self.assertEqual(library(), [])
+
+    def test_hangul_creation_skips_old_path_and_respects_explicit_override(self):
+        root = store.DATABASE.parent
+        installed = root/"installed"
+        fallback = installed/"tools/rhwp"/("rhwp.exe" if os.name == "nt" else "rhwp")
+        fallback.parent.mkdir(parents=True)
+        fallback.touch()
+        versions = {"on-PATH": b"rhwp v0.8.7\n", str(fallback): b"rhwp v0.9.0\n",
+                    "test-prerelease": b"rhwp v0.9.0-rc.1\n", "explicit": b"rhwp v0.9.1\n"}
+
+        def probe(args, _folder, env):
+            if args[0] not in versions:
+                raise PreviewError("missing")
+            return versions[args[0]]
+
+        with patch("blank_documents.DATA", root/"source"), patch("blank_documents.user_data", return_value=installed), \
+                patch("blank_documents.rhwp_command", return_value="on-PATH"), \
+                patch("blank_documents.run_converter", side_effect=probe) as run:
+            self.assertEqual(blank_rhwp_command(root, {}), str(fallback))
+            self.assertEqual([item.args[0][0] for item in run.call_args_list], ["on-PATH", str(fallback)])
+            run.reset_mock()
+            self.assertEqual(blank_rhwp_command(root, {"DOCVERS_RHWP": "explicit"}), "explicit")
+            self.assertEqual([item.args[0][0] for item in run.call_args_list], ["explicit"])
+            for bad in ("on-PATH", "broken", "test-prerelease"):
+                with self.subTest(override=bad), patch.dict(os.environ, {"DOCVERS_RHWP": bad}):
+                    run.reset_mock()
+                    with self.assertRaisesRegex(ValueError, r"DOCVERS_RHWP.*rhwp 0\.9\.0"):
+                        create_blank("새 한글", "hwp")
+                    self.assertEqual([item.args[0][0] for item in run.call_args_list], [bad])
+            versions["on-PATH"] = b"rhwp v0.9.1\n"
+            run.reset_mock()
+            self.assertEqual(blank_rhwp_command(root, {}), "on-PATH")
+            self.assertEqual([item.args[0][0] for item in run.call_args_list], ["on-PATH"])
         self.assertEqual(library(), [])
 
     def test_hangul_desktop_canvas_and_mcp_protocol_round_trip(self):
