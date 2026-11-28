@@ -91,6 +91,8 @@ struct PageTable {
     editable_grid: bool,
     #[serde(default)]
     layout_grid: bool,
+    #[serde(default)]
+    subdivision: bool,
 }
 
 struct Text {
@@ -162,6 +164,7 @@ pub struct Editor {
     selected_cell: Option<usize>,
     cell_range_end: Option<usize>,
     cell_dimensions_mm: [u32; 2],
+    subdivision_counts: [u32; 2],
     cell_draft: Option<table_cells::CellDraft>,
     grid_removal: Option<table_cells::GridRemoval>,
     reveal_table: bool,
@@ -220,6 +223,7 @@ impl Editor {
             selected_cell: None,
             cell_range_end: None,
             cell_dimensions_mm: [25, 10],
+            subdivision_counts: [2, 2],
             cell_draft: None,
             grid_removal: None,
             reveal_table: false,
@@ -503,6 +507,7 @@ impl Editor {
                     | "edit_table_grid"
                     | "edit_table_span"
                     | "edit_table_layout"
+                    | "edit_table_subdivision"
                     | "delete_shape"
                     | "shape_up"
                     | "shape_down"

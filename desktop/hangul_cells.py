@@ -19,6 +19,9 @@ CELL_LAYOUT_COMMANDS = {
     "horizontal": ("left", "center", "right"),
     "vertical": ("TOP", "CENTER", "BOTTOM"),
 }
+MAX_SUBDIVISION = 6
+UNSAFE_SUBDIVISION = "행·열로 나누기는 병합·보호되지 않은 일반 표에서만 사용할 수 있습니다."
+SUBDIVISION_MISMATCH = "나눈 셀이나 주변 셀의 구조와 서식을 확인할 수 없어 변경을 적용하지 않았습니다."
 STALE_CELL = "편집할 표 셀을 다시 선택하세요."
 UNSAFE_SPAN = "병합·나누기는 보호되지 않은 일반 셀에서만 사용할 수 있습니다."
 SPAN_STYLES = "선택한 셀의 테두리·여백·정렬 또는 머리글이 달라 서식을 보존한 채 합칠 수 없습니다."
@@ -111,9 +114,10 @@ def cell_catalog(data, tables):
             if native is not None:
                 supported = {coordinate: element.text or ""
                              for coordinate, element, _ in source_cells(native, table)}
+                grid = editable_grid(native, table, supported)
                 catalog[(*address, table["control"])] = (
-                    supported, editable_grid(native, table, supported), splittable_cells(native, table),
-                    layout_cells(native, table),
+                    supported, grid, splittable_cells(native, table), layout_cells(native, table),
+                    grid and native.get("cellSpacing", "0") == "0",
                 )
     return catalog
 
@@ -552,11 +556,11 @@ def preserve_ids(original, root, part, new_cells):
         next_id += 1
 
 
-def preserve_cells(surviving):
+def preserve_cells(surviving, *, update_spans=False):
     for old_cell, new_cell in surviving:
-        old_address = old_cell.find(HANGUL + "cellAddr")
-        new_address = new_cell.find(HANGUL + "cellAddr")
-        old_address.attrib.update(new_address.attrib)
+        fields = ("cellAddr", "cellSpan") if update_spans else ("cellAddr",)
+        for field in fields:
+            old_cell.find(HANGUL + field).attrib.update(new_cell.find(HANGUL + field).attrib)
         new_cell.getparent().replace(new_cell, old_cell)
 
 
@@ -695,3 +699,128 @@ def verify_span(source, staged, before, after, start, end, splitting, binary):
         replacement.tail = table.tail
         table.getparent().replace(table, replacement)
         return rewrite_package(original, {part: root})
+
+
+def subdivision_axes(coordinate, selected, counts):
+    address = tuple(value + (count - 1 if value > pivot else 0)
+                    for value, pivot, count in zip(coordinate, selected, counts))
+    span = tuple(count if value == pivot else 1 for value, pivot, count in zip(coordinate, selected, counts))
+    return address, span
+
+
+def subdivision_children(start, counts):
+    return {(row, col) for row in range(start[0], start[0]+counts[0])
+            for col in range(start[1], start[1]+counts[1])}
+
+
+def verify_subdivision(source, staged, before, after, start, counts, binary):
+    part = section_part(before["section"])
+    expected_size = tuple(before[key] + count - 1 for key, count in zip(("rows", "cols"), counts))
+    if (after["rows"], after["cols"]) != expected_size:
+        raise ValueError(SUBDIVISION_MISMATCH)
+    with open_package(source) as original, open_package(staged) as candidate:
+        root, changed = parse_part(original, part), parse_part(candidate, part)
+        table, replacement = source_table(root, before), source_table(changed, after)
+        if (table is None or replacement is None or not ordinary_table(replacement, after)
+                or table.get("cellSpacing", "0") != "0"):
+            raise ValueError(UNSAFE_SUBDIVISION)
+        old, new = grid_cells(table), grid_cells(replacement)
+        if not editable_grid(table, before, {key: text.text or "" for key, text, _ in source_cells(table, before)}):
+            raise ValueError(UNSAFE_SUBDIVISION)
+
+        original_frame, new_frame = (node.find(HANGUL + "sz") for node in (table, replacement))
+        # Splitting can refresh the rendered frame height. Width and all other table settings stay fixed.
+        height = new_frame.get("height", "")
+        if not height.isascii() or not height.isdecimal() or int(height) <= 0:
+            raise ValueError(SUBDIVISION_MISMATCH)
+        original_frame.set("height", height)
+        table.set("rowCnt", str(expected_size[0]))
+        table.set("colCnt", str(expected_size[1]))
+        if xml_signature(table, skip={HANGUL + "tr"}) != xml_signature(replacement, skip={HANGUL + "tr"}):
+            raise ValueError(SUBDIVISION_MISMATCH)
+
+        children = subdivision_children(start, counts)
+        survivors = {}
+        after_spans = {(cell["row"], cell["col"]): (cell["rowSpan"], cell["colSpan"]) for cell in after["cells"]}
+        if len(after_spans) != len(after["cells"]) or after_spans.keys() != new.keys():
+            raise ValueError(SUBDIVISION_MISMATCH)
+        caches = {HANGUL + "linesegarray"}
+        for coordinate, old_cell in old.items():
+            if coordinate == start:
+                continue
+            address, span = subdivision_axes(coordinate, start, counts)
+            actual = new.get(address)
+            if actual is None or after_spans[address] != span:
+                raise ValueError(SUBDIVISION_MISMATCH)
+            expected = deepcopy(old_cell)
+            expected.find(HANGUL + "cellAddr").attrib.update({"rowAddr": str(address[0]), "colAddr": str(address[1])})
+            expected.find(HANGUL + "cellSpan").attrib.update({"rowSpan": str(span[0]), "colSpan": str(span[1])})
+            if xml_signature(expected, skip=caches, synthetic_ids=True) != xml_signature(actual, skip=caches, synthetic_ids=True):
+                raise ValueError(SUBDIVISION_MISMATCH)
+            survivors[address] = (old_cell, actual)
+        if new.keys() != survivors.keys() | children or any(after_spans[key] != (1, 1) for key in children):
+            raise ValueError(SUBDIVISION_MISMATCH)
+
+        source_cell = old[start]
+        target_paragraphs = plain_paragraphs(source_cell)
+        if len(target_paragraphs) != 1:
+            raise ValueError(UNSAFE_SUBDIVISION)
+        paragraph = target_paragraphs[0]
+        blank = deepcopy(paragraph)
+        blank.find(f"{HANGUL}run/{HANGUL}t").text = None
+        appearance = cell_appearance(source_cell)
+        for key in children:
+            cell = new[key]
+            paragraphs = plain_paragraphs(cell)
+            if not paragraphs or cell_appearance(cell) != appearance:
+                raise ValueError(SUBDIVISION_MISMATCH)
+            if tuple(cell.find(HANGUL + "cellSpan").get(axis) for axis in ("rowSpan", "colSpan")) != ("1", "1"):
+                raise ValueError(SUBDIVISION_MISMATCH)
+            expected = paragraph if key == start else blank
+            if paragraph_signatures(paragraphs) != paragraph_signatures([expected]):
+                raise ValueError(SUBDIVISION_MISMATCH)
+        verify_subdivision_sizes(table, source_cell, new, start, counts)
+
+        if binary:
+            table.getparent().remove(table)
+            replacement.getparent().remove(replacement)
+            if xml_signature(root, synthetic_ids=True) != xml_signature(changed, synthetic_ids=True):
+                raise ValueError(SUBDIVISION_MISMATCH)
+            return None
+
+        if xml_signature(parse_part(original, HEADER)) != xml_signature(parse_part(candidate, HEADER)):
+            raise ValueError(SUBDIVISION_MISMATCH)
+        preserve_ids(original, root, part, [new[key] for key in sorted(children - {start})])
+        first = plain_paragraphs(new[start])[0]
+        if (identity := paragraph.get("id")) is not None:
+            first.set("id", identity)
+        else:
+            first.attrib.pop("id", None)
+        preserve_cells(survivors.values(), update_spans=True)
+        replacement.tail = table.tail
+        table.getparent().replace(table, replacement)
+        return rewrite_package(original, {part: root})
+
+
+def verify_subdivision_sizes(table, source_cell, cells, start, counts):
+    size = source_cell.find(HANGUL + "cellSz")
+    margin = source_cell.find(HANGUL + "cellMargin") if source_cell.get("hasMargin", "0") == "1" else None
+    if margin is None:
+        margin = table.find(HANGUL + "inMargin")
+    for axis, dimension in enumerate(("height", "width")):
+        strips = [set() for _ in range(counts[axis])]
+        for coordinate in subdivision_children(start, counts):
+            length = cells[coordinate].find(HANGUL + "cellSz").get(dimension, "")
+            if not length.isascii() or not length.isdecimal() or int(length) <= 0:
+                raise ValueError(SUBDIVISION_MISMATCH)
+            strips[coordinate[axis]-start[axis]].add(int(length))
+        if any(len(values) != 1 for values in strips):
+            raise ValueError(SUBDIVISION_MISMATCH)
+        lengths = [next(iter(values)) for values in strips]
+        if sum(lengths) != int(size.get(dimension)) or max(lengths)-min(lengths) >= counts[axis]:
+            raise ValueError(SUBDIVISION_MISMATCH)
+        edges = ("top", "bottom") if axis == 0 else ("left", "right")
+        padding = sum(int(margin.get(edge, "0")) for edge in edges) if margin is not None else 0
+        minimum = max(round(2 * HWP_UNITS_PER_MM), padding + round(HWP_UNITS_PER_MM))
+        if counts[axis] > 1 and min(lengths) < minimum:
+            raise ValueError("나눈 셀에 2 mm 이상과 안쪽 여백을 확보하려면 원래 셀의 크기를 먼저 늘리세요.")

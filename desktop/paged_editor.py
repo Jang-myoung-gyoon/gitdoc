@@ -19,9 +19,10 @@ from desktop.document_objects import (
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from desktop.hangul_cells import (
-    CELL_LAYOUT_COMMANDS, GRID_MISMATCH, GRID_OPERATIONS, LAYOUT_MISMATCH, SPAN_MISMATCH,
-    STALE_CELL, UNSAFE_GRID, UNSAFE_LAYOUT, UNSAFE_SIZE, cell_catalog, cell_value, format_cells,
-    replace_cell, verify_cell, verify_cell_layout, verify_grid, verify_span,
+    CELL_LAYOUT_COMMANDS, GRID_MISMATCH, GRID_OPERATIONS, LAYOUT_MISMATCH, MAX_SUBDIVISION, SPAN_MISMATCH,
+    STALE_CELL, SUBDIVISION_MISMATCH, UNSAFE_GRID, UNSAFE_LAYOUT, UNSAFE_SIZE, UNSAFE_SUBDIVISION,
+    cell_catalog, cell_value, format_cells, replace_cell, subdivision_axes, subdivision_children,
+    verify_cell, verify_cell_layout, verify_grid, verify_span, verify_subdivision,
 )
 from desktop.hangul_format import CHARACTER, OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
 from desktop.shape_editor import (
@@ -418,7 +419,8 @@ class PagedEditor:
                             pass
                 for table in tables:
                     address = tuple(table["address"])
-                    supported, grid, spans, layout = (native_cells or {}).get(address, ({}, False, {}, {}))
+                    supported, grid, spans, layout, subdivision = (native_cells or {}).get(
+                        address, ({}, False, {}, {}, False))
                     cells = []
                     for coordinate, box in sorted(page_cells[address].items()):
                         if box is None or (coordinate not in supported and coordinate not in spans and coordinate not in layout):
@@ -433,6 +435,7 @@ class PagedEditor:
                         cells.append(cell)
                     table["cells"] = cells
                     table["editable_grid"] = grid and len(table["cells"]) == table["rows"] * table["columns"]
+                    table["subdivision"] = subdivision and table["editable_grid"]
                     table["layout_grid"] = (len(layout) == table["rows"] * table["columns"]
                                             and len(table["cells"]) == len(layout)
                                             and all(span == (1, 1) for span in layout.values()))
@@ -503,10 +506,16 @@ class PagedEditor:
         if operation in ("shape_up", "shape_down", "shape_size") and len(value["address"]) == 3:
             selected_shape = value["address"]
         layout = None
-        if operation == "edit_table_layout":
+        if operation in ("edit_table_layout", "edit_table_subdivision"):
             chosen = next(table for table in self.tables if table["address"] == value["address"])
-            layout = {"address": value["address"], "coordinates": {tuple(c["coordinate"]) for c in chosen["cells"]},
-                      "sizing": value["change"] in ("width", "height")}
+            coordinates = {tuple(cell["coordinate"]) for cell in chosen["cells"]}
+            if operation == "edit_table_subdivision":
+                start = tuple(value["coordinate"])
+                counts = (value["rows"], value["columns"])
+                coordinates = {subdivision_axes(cell, start, counts)[0] for cell in coordinates - {start}}
+                coordinates.update(subdivision_children(start, counts))
+            layout = {"address": value["address"], "coordinates": coordinates,
+                      "sizing": operation == "edit_table_subdivision" or value.get("change") in ("width", "height")}
         result = self.render(updated, number, keep_inline_shape=selected_shape, table_layout=layout)
         if index == self.position and updated != source:
             del self.states[index+1:]
@@ -606,6 +615,36 @@ class PagedEditor:
                     raise ValueError("칸을 추가하면 표가 쪽 너비를 벗어납니다.")
             return output.read_bytes()
 
+    def subdivide_cell(self, source, chosen, coordinate, value):
+        if not chosen["subdivision"] or value.get("end") is not None:
+            raise ValueError(UNSAFE_SUBDIVISION)
+        counts = (value.get("rows"), value.get("columns"))
+        if (any(type(count) is not int or not 1 <= count <= MAX_SUBDIVISION for count in counts)
+                or counts == (1, 1)):
+            raise ValueError("나눌 행·열 수를 각각 1~6으로 지정하세요. 적어도 한쪽은 2 이상이어야 합니다.")
+        if (chosen["rows"]+counts[0]-1) * (chosen["columns"]+counts[1]-1) > 1000:
+            raise ValueError("나눈 뒤 표의 격자가 1,000칸을 초과할 수 없습니다.")
+
+        with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+            folder = Path(work)
+            document, output = (folder/f"{name}.{self.extension}" for name in ("document", "edited"))
+            document.write_bytes(source)
+            row, col = coordinate
+            args = ["--row", str(row), "--col", str(col), "--rows", str(counts[0]), "--cols", str(counts[1]),
+                    "--equal-row-height"]
+            native, modified, after = edit_native_table(document, output, chosen["address"], "split-cell-into", args,
+                                                        message=SUBDIVISION_MISMATCH, allow_resize=True)
+            binary = self.extension == "hwp"
+            rewritten = verify_subdivision(hangul_xml(document), hangul_xml(output), native, modified,
+                                           tuple(coordinate), counts, binary)
+            if binary:
+                verify_hwp_streams(source, output, native["section"], SUBDIVISION_MISMATCH)
+            else:
+                output.write_bytes(rewritten)
+                if exported_tables(output) != after:
+                    raise ValueError(SUBDIVISION_MISMATCH)
+            return output.read_bytes()
+
     def change_span(self, source, chosen, coordinate, selected, value):
         change = value.get("change")
         if change == "merge":
@@ -695,7 +734,8 @@ class PagedEditor:
                     verify_inline_hwp(changed, convert_format("hwp", "hwpx", converted), address[0])
                 return converted
             return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
-        if operation in ("edit_table_cell", "edit_table_grid", "edit_table_span", "edit_table_layout") and self.extension in HANGUL_EXTENSIONS:
+        if (operation in ("edit_table_cell", "edit_table_grid", "edit_table_span", "edit_table_layout",
+                          "edit_table_subdivision") and self.extension in HANGUL_EXTENSIONS):
             if not isinstance(value, dict):
                 raise ValueError(STALE_CELL)
             address, coordinate = value.get("address"), value.get("coordinate")
@@ -706,6 +746,8 @@ class PagedEditor:
             selected = next((cell for cell in chosen.get("cells", []) if cell["coordinate"] == coordinate), None)
             if selected is None:
                 raise ValueError(STALE_CELL)
+            if operation == "edit_table_subdivision":
+                return self.subdivide_cell(source, chosen, coordinate, value)
             if operation == "edit_table_layout":
                 if not selected.get("layout"):
                     raise ValueError(UNSAFE_LAYOUT)

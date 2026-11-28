@@ -830,6 +830,7 @@ mod tests {
                     cells: vec![],
                     editable_grid: false,
                     layout_grid: false,
+                    subdivision: false,
                 },
                 PageTable {
                     address: address.clone(),
@@ -840,6 +841,7 @@ mod tests {
                     cells: vec![],
                     editable_grid: false,
                     layout_grid: false,
+                    subdivision: false,
                 },
             ];
             frame(&ctx, &mut editor, size, vec![]);
@@ -1031,6 +1033,39 @@ mod tests {
     }
 
     #[test]
+    fn hangul_subdivision_ribbon_sends_counts_for_one_cell() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "subdivision-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address":[0,2,1], "box":[0.1,0.44,0.8,0.54], "rows":1, "columns":2,
+            "subdivision":true, "editable_grid":true,
+            "cells":[{"coordinate":[0,0], "text":"A", "box":[0.1,0.44,0.45,0.54]},
+                     {"coordinate":[0,1], "text":"B", "box":[0.45,0.44,0.8,0.54]}]
+        }]))
+        .unwrap();
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        editor.select_table_at(canvas, Some(pos2(67.0, 50.0)), false);
+        frame(&ctx, &mut editor, size, vec![]);
+        editor.subdivision_counts = [1, 1];
+        assert!(press(&mut editor, "행·열로 나누기").is_none());
+        assert!(press(&mut editor, "나누기 적용").is_none());
+        editor.subdivision_counts = [3, 2];
+        assert!(press(&mut editor, "행·열로 나누기").is_none());
+        assert!(
+            matches!(press(&mut editor, "나누기 적용"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_subdivision" && params["value"] ==
+                json!({"address":[0,2,1], "coordinate":[0,1], "digest":"subdivision-snapshot",
+                       "rows":3, "columns":2}))
+        );
+    }
+
+    #[test]
     fn hangul_cell_layout_ribbon_sends_range_alignment_and_dimensions() {
         let ctx = Context::default();
         let size = vec2(560.0, 650.0);
@@ -1125,7 +1160,7 @@ mod tests {
         }])).unwrap();
         editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), false);
         assert!(
-            matches!(press(&mut editor, "셀 나누기"), Some(Command::Page(params))
+            matches!(press(&mut editor, "병합 셀 나누기"), Some(Command::Page(params))
             if params["operation"] == "edit_table_span" && params["value"] == json!({
                 "address": [0, 2, 1], "coordinate": [0, 0], "digest": "span-snapshot", "change": "split"
             }))
