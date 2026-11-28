@@ -106,8 +106,10 @@ impl Editor {
     fn hangul_format_tools(&mut self, ui: &mut Ui, action: &mut Option<(&str, Value)>) {
         let enabled = self.can_format_hangul();
         let color_range = self
-            .selection(ui.ctx())
-            .is_some_and(|[start, end]| start < end);
+            .text
+            .as_ref()
+            .and_then(|edit| edit.rendered_range)
+            .is_some_and(|range| !range.is_empty());
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong("글자");
@@ -155,7 +157,7 @@ impl Editor {
                         }
                     })
                     .response
-                    .on_disabled_hover_text("색을 바꿀 글자를 먼저 선택하세요.");
+                    .on_disabled_hover_text("화면에서 위치를 확인할 수 있는 본문 글자를 먼저 선택하세요.");
                 });
             });
             ui.horizontal_wrapped(|ui| {
