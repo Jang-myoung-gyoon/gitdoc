@@ -105,6 +105,11 @@ impl Editor {
 
     fn hangul_format_tools(&mut self, ui: &mut Ui, action: &mut Option<(&str, Value)>) {
         let enabled = self.can_format_hangul();
+        let color_range = self
+            .text
+            .as_ref()
+            .and_then(|edit| edit.rendered_range)
+            .is_some_and(|range| !range.is_empty());
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong("글자");
@@ -137,18 +142,22 @@ impl Editor {
                         *action = Some((operation, Value::Null))
                     });
                 }
-                ui.menu_button("글자 색", |ui| {
-                    for (name, value) in [
-                        ("검정", "000000"),
-                        ("파랑", "1852A3"),
-                        ("빨강", "B03040"),
-                        ("초록", "24704D"),
-                    ] {
-                        if ui.button(name).clicked() {
-                            *action = Some(("color", json!(value)));
-                            ui.close();
+                ui.add_enabled_ui(color_range, |ui| {
+                    ui.menu_button("글자 색", |ui| {
+                        for (name, value) in [
+                            ("검정", "000000"),
+                            ("파랑", "1852A3"),
+                            ("빨강", "B03040"),
+                            ("초록", "24704D"),
+                        ] {
+                            if ui.button(name).clicked() {
+                                *action = Some(("color", json!(value)));
+                                ui.close();
+                            }
                         }
-                    }
+                    })
+                    .response
+                    .on_disabled_hover_text("화면에서 위치를 확인할 수 있는 본문 글자를 먼저 선택하세요.");
                 });
             });
             ui.horizontal_wrapped(|ui| {

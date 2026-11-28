@@ -498,6 +498,29 @@ mod tests {
             editor.table = [3, 4];
             frame(&ctx, &mut editor, size, vec![]);
             let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            let ui = if format == Format::Hangul {
+                editor.objects[0].glyph_boxes = vec![
+                    (0, [0.20, 0.30, 0.22, 0.32]),
+                    (1, [0.22, 0.30, 0.24, 0.32]),
+                    (2, [0.24, 0.30, 0.26, 0.32]),
+                    (3, [0.26, 0.30, 0.28, 0.32]),
+                ];
+                let texture = editor.image.as_ref().unwrap().id();
+                let canvas = ui
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+                        _ => None,
+                    })
+                    .unwrap();
+                let caret = canvas.min + canvas.size() * vec2(0.239, 0.31);
+                assert!(click(&ctx, &mut editor, size, caret).is_none());
+                assert_eq!(editor.selection(&ctx), Some([2, 2]));
+                frame(&ctx, &mut editor, size, vec![]).0
+            } else {
+                ui
+            };
             find_text(&ui.shapes, extension);
             let table = find_text(
                 &ui.shapes,
@@ -512,7 +535,8 @@ mod tests {
             let insert = find_text(&menu.shapes, "표 삽입");
             assert!(matches!(click(&ctx, &mut editor, size, insert),
                              Some(Command::Page(params)) if params["operation"] == "table"
-                                 && params["value"] == json!([3, 4])));
+                                 && params["value"] == json!([3, 4])
+                                 && (format != Format::Hangul || params["selection"] == json!([2, 2]))));
             editor.waiting = false;
             let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
             let shape = find_text(
@@ -528,7 +552,8 @@ mod tests {
             let arrow = find_text(&menu.shapes, "화살표");
             assert!(matches!(click(&ctx, &mut editor, size, arrow),
                              Some(Command::Page(params)) if params["operation"] == "shape"
-                                 && params["value"] == "arrow"));
+                                 && params["value"] == "arrow"
+                                 && (format != Format::Hangul || params["selection"] == json!([2, 2]))));
         }
     }
 
@@ -652,6 +677,79 @@ mod tests {
         std::fs::remove_file(file).unwrap();
         updated.unwrap();
         assert_eq!(editor.selection(&ctx), Some([1, 3]));
+    }
+
+    #[test]
+    fn reverse_drag_uses_the_rendered_lines_and_keeps_selection_through_the_color_menu() {
+        let ctx = Context::default();
+        let size = vec2(850.0, 950.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.zoom = 125.0;
+        editor.objects[0] = Object::read(&json!({
+            "id": 1, "box": [0.2, 0.25, 0.8, 0.39], "ink": [0.20, 0.25, 0.30, 0.39],
+            "text": "한A 글\nB끝", "name": "한A 글", "hangul_format": true,
+            "glyph_boxes": [[0,[0.20,0.26,0.22,0.28]],[1,[0.22,0.26,0.24,0.28]],
+                [3,[0.26,0.26,0.28,0.28]], [5,[0.20,0.32,0.22,0.34]],
+                [6,[0.22,0.32,0.24,0.34]]]
+        }))
+        .unwrap();
+        let texture = editor.image.as_ref().unwrap().id();
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let canvas = display
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                epaint::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+            .expect("rendered page texture");
+        let point = |x, y| canvas.min + canvas.size() * vec2(x, y);
+        let start = point(0.237, 0.33);
+        let end = point(0.223, 0.27);
+        let mouse = |pos, pressed| Event::PointerButton {
+            pos,
+            pressed,
+            button: PointerButton::Primary,
+            modifiers: Modifiers::NONE,
+        };
+        assert!(
+            frame(
+                &ctx,
+                &mut editor,
+                size,
+                vec![Event::PointerMoved(start), mouse(start, true)]
+            )
+            .1
+            .is_none()
+        );
+        assert_eq!(editor.selection(&ctx), Some([7, 7]));
+        assert!(
+            frame(&ctx, &mut editor, size, vec![Event::PointerMoved(end)])
+                .1
+                .is_none()
+        );
+        assert!(
+            frame(&ctx, &mut editor, size, vec![mouse(end, false)])
+                .1
+                .is_none()
+        );
+        assert_eq!(editor.selection(&ctx), Some([1, 7]));
+        assert_eq!(editor.image.as_ref().unwrap().id(), texture);
+        assert!(!editor.changed());
+
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let tab = find_text(&display.shapes, "서식");
+        assert!(click(&ctx, &mut editor, size, tab).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let colors = find_text(&display.shapes, "글자 색");
+        assert!(click(&ctx, &mut editor, size, colors).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let blue = find_text(&display.shapes, "파랑");
+        assert!(
+            matches!(click(&ctx, &mut editor, size, blue), Some(Command::Page(params))
+            if params["operation"] == "color" && params["value"] == "1852A3"
+                && params["selection"] == json!([1,7]) && params["text_edit"].is_null())
+        );
     }
 
     #[test]

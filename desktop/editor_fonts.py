@@ -67,6 +67,17 @@ def use_rendered_fonts(objects, pdf, page, directory):
             matched = matches[0]
             item["fonts"] = font_spans(text, [glyph[2] for glyph in matched])
             item["baselines"] = baselines(text, matched)
+            if "hangul_format" in item:
+                boxes = []
+                offset = 0
+                for index, char in enumerate(text):
+                    length = len(compact(char))
+                    group = matched[offset:offset + length]
+                    offset += length
+                    if group:
+                        left, top, right, bottom = zip(*(glyph[1] for glyph in group))
+                        boxes.append([index, [min(left), min(top), max(right), max(bottom)]])
+                item["glyph_boxes"] = boxes
         else:
             close = Counter(glyph[2] for glyph in glyphs if inside(glyph[1]))
             if close:
