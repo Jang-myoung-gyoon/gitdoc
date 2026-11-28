@@ -85,6 +85,8 @@ struct PageTable {
     columns: u32,
     #[serde(default)]
     cells: Vec<table_cells::PageCell>,
+    #[serde(default)]
+    editable_grid: bool,
 }
 
 struct Text {
@@ -153,6 +155,7 @@ pub struct Editor {
     selected_table: Option<usize>,
     selected_cell: Option<usize>,
     cell_draft: Option<table_cells::CellDraft>,
+    grid_removal: Option<table_cells::GridRemoval>,
     reveal_table: bool,
     reason: String,
     saving: bool,
@@ -207,6 +210,7 @@ impl Editor {
             selected_table: None,
             selected_cell: None,
             cell_draft: None,
+            grid_removal: None,
             reveal_table: false,
             reason: String::new(),
             saving: false,
@@ -281,6 +285,7 @@ impl Editor {
         self.selected_table = None;
         self.selected_cell = None;
         self.cell_draft = None;
+        self.grid_removal = None;
         self.reveal_table = false;
         self.object_drag = None;
         self.resize_drag = None;
@@ -400,7 +405,7 @@ impl Editor {
         });
     }
 
-    fn table_tools(&mut self, ui: &mut Ui, action: &mut Option<(&str, Value)>) {
+    fn table_tools(&mut self, ui: &mut Ui, action: &mut Option<(&'static str, Value)>) {
         if self.page_tables.is_empty() {
             return;
         }
@@ -430,6 +435,7 @@ impl Editor {
                 }
             }
         });
+        self.table_grid_tools(ui, action);
         self.table_cell_tools(ui);
         if let Some(table) = self
             .selected_table
@@ -466,6 +472,7 @@ impl Editor {
                     | "delete_object"
                     | "delete_table"
                     | "edit_table_cell"
+                    | "edit_table_grid"
                     | "delete_shape"
                     | "shape_up"
                     | "shape_down"
@@ -884,6 +891,9 @@ impl Editor {
 
         if self.waiting {
             return command;
+        }
+        if self.grid_removal.is_some() {
+            return self.grid_dialog(ui.ctx());
         }
         if self.cell_draft.is_some() {
             return self.cell_dialog(ui.ctx());

@@ -9,8 +9,19 @@ from editing import open_package, parse_part, rewrite_package, valid_text
 
 STALE_CELL = "편집할 표 셀을 다시 선택하세요."
 
+UNSAFE_GRID = "병합되거나 보호된 셀, 또는 복잡한 표 구조에서는 줄·칸을 편집할 수 없습니다."
+GRID_MISMATCH = "줄·칸 편집 결과의 셀 내용과 서식을 확인할 수 없어 변경을 취소했습니다."
+GRID_OPERATIONS = {
+    "row_above": ("insert-row", 0, False, None),
+    "row_below": ("insert-row", 0, False, "--below"),
+    "col_left": ("insert-col", 1, False, None),
+    "col_right": ("insert-col", 1, False, "--right"),
+    "row_delete": ("delete-row", 0, True, None),
+    "col_delete": ("delete-col", 1, True, None),
+}
 
-def source_cells(root, table):
+
+def source_table(root, table):
     paragraphs = root.findall(HANGUL + "p")
     index = table["paragraph"]
     if not 0 <= index < len(paragraphs):
@@ -22,7 +33,10 @@ def source_cells(root, table):
     if (native.get("lock", "0") != "0" or native.get("rowCnt") != str(table["rows"])
             or native.get("colCnt") != str(table["cols"])):
         return
+    return native
 
+
+def source_cells(native, table):
     nodes = {}
     duplicates = set()
     for cell in native.findall(f"{HANGUL}tr/{HANGUL}tc"):
@@ -78,10 +92,11 @@ def cell_catalog(data, tables):
             section, *_ = address
             if section not in sections:
                 sections[section] = parse_part(archive, section_part(section))
-            catalog[(*address, table["control"])] = {
-                coordinate: element.text or ""
-                for coordinate, element, _ in source_cells(sections[section], table)
-            }
+            native = source_table(sections[section], table)
+            if native is not None:
+                supported = {coordinate: element.text or ""
+                             for coordinate, element, _ in source_cells(native, table)}
+                catalog[(*address, table["control"])] = supported, editable_grid(native, table, supported)
     return catalog
 
 
@@ -89,7 +104,8 @@ def replace_cell(data, table, coordinate, value):
     part = section_part(table["section"])
     with open_package(data) as archive:
         root = parse_part(archive, part)
-        for key, text, paragraph in source_cells(root, table):
+        native = source_table(root, table)
+        for key, text, paragraph in source_cells(native, table) if native is not None else ():
             if key == coordinate:
                 text.text = value
                 if (cache := paragraph.find(HANGUL + "linesegarray")) is not None:
@@ -129,3 +145,139 @@ def verify_cell(expected, actual, table, coordinate):
                         paragraph.remove(cache)
         if etree.tostring(desired, method="c14n") != etree.tostring(saved, method="c14n"):
             raise ValueError(message)
+
+
+def editable_grid(native, table, supported):
+    size = native.find(HANGUL + "sz")
+    rows = native.findall(HANGUL + "tr")
+    if (size is None or size.get("protect", "0") != "0"
+            or any(size.get(axis + "RelTo") != "ABSOLUTE" for axis in ("width", "height"))
+            or any(node.tag not in {HANGUL + kind for kind in ("sz", "pos", "outMargin", "inMargin", "tr")}
+                   for node in native)
+            or len(rows) != table["rows"]):
+        return False
+    height, width = table["rows"], table["cols"]
+    if (len(supported) != height * width or len(supported) != len(table["cells"])
+            or any(not (0 <= row < height and 0 <= col < width) for row, col in supported)):
+        return False
+    for row in rows:
+        if row.attrib or len(row) != table["cols"]:
+            return False
+        for cell in row:
+            sublist = cell.find(HANGUL + "subList")
+            if (cell.tag != HANGUL + "tc" or cell.get("name") or sublist is None or sublist.get("id")
+                    or any(sublist.get(flag, "0") != "0" for flag in (
+                        "hasTextRef", "hasNumRef", "linkListIDRef", "linkListNextIDRef"))
+                    or any(node.tag not in {HANGUL + kind for kind in (
+                        "subList", "cellAddr", "cellSpan", "cellSz", "cellMargin")} for node in cell)):
+                return False
+    return True
+
+
+def xml_signature(node, *, skip=frozenset(), synthetic_ids=False):
+    attrs = dict(node.attrib)
+    if synthetic_ids and node.tag == HANGUL + "p":
+        # rhwp exports sequential paragraph IDs from binary HWP on every export.
+        attrs.pop("id", None)
+    text = node.text if node.tag == HANGUL + "t" or (node.text or "").strip() else None
+    parent = node.getparent()
+    tail = node.tail if (node.tail or "").strip() or (parent is not None and parent.tag == HANGUL + "t") else None
+    return (node.tag, attrs, text or None, tail or None,
+            tuple(xml_signature(child, skip=skip, synthetic_ids=synthetic_ids)
+                  for child in node if child.tag not in skip))
+
+
+def grid_cells(table):
+    return {(int(address.get("rowAddr")), int(address.get("colAddr"))): cell
+            for cell in table.findall(f"{HANGUL}tr/{HANGUL}tc")
+            for address in cell.findall(HANGUL + "cellAddr")}
+
+
+def verify_grid(source, staged, before, after, operation, coordinate, binary):
+    _, axis, deleting, direction = GRID_OPERATIONS[operation]
+    pivot = coordinate[axis] + bool(direction)
+    part = section_part(before["section"])
+    sizes = ("rows", "cols")
+    count_attr = ("rowCnt", "colCnt")[axis]
+    extent_attr = ("height", "width")[axis]
+    expected = [before[key] + ((-1 if deleting else 1) if index == axis else 0)
+                for index, key in enumerate(sizes)]
+    if [after[key] for key in sizes] != expected:
+        raise ValueError(GRID_MISMATCH)
+
+    with open_package(source) as original, open_package(staged) as candidate:
+        root, changed = parse_part(original, part), parse_part(candidate, part)
+        table, replacement = source_table(root, before), source_table(changed, after)
+        if table is None or replacement is None:
+            raise ValueError(GRID_MISMATCH)
+        old_cells, new_cells = grid_cells(table), grid_cells(replacement)
+        # Existing native cell properties must agree, including character/paragraph styles,
+        # border, margin, direction and size. Only coordinates and cached layout may differ.
+        skip = {HANGUL + "cellAddr", HANGUL + "linesegarray"}
+        remaining = set(new_cells)
+        surviving = []
+        previous_size = table.find(HANGUL + "sz")
+        new_size = replacement.find(HANGUL + "sz")
+        if previous_size is None or new_size is None:
+            raise ValueError(GRID_MISMATCH)
+        previous_size.set(extent_attr, new_size.get(extent_attr) or "")
+        table.set(count_attr, replacement.get(count_attr))
+        if xml_signature(table, skip={HANGUL + "tr"}) != xml_signature(replacement, skip={HANGUL + "tr"}):
+            raise ValueError(GRID_MISMATCH)
+
+        for cell_coordinate, old_cell in old_cells.items():
+            pos = cell_coordinate[axis]
+            if deleting and pos == pivot:
+                continue
+            shifted = list(cell_coordinate)
+            shifted[axis] += ((-1 if deleting else 1) if pos >= pivot else 0)
+            new_coordinate = tuple(shifted)
+            new_cell = new_cells.get(new_coordinate)
+            if (new_coordinate not in remaining
+                    or xml_signature(old_cell, skip=skip, synthetic_ids=True)
+                    != xml_signature(new_cell, skip=skip, synthetic_ids=True)):
+                raise ValueError(GRID_MISMATCH)
+            remaining.remove(new_coordinate)
+            surviving.append((old_cell, new_cell))
+        if deleting and remaining:
+            raise ValueError(GRID_MISMATCH)
+        if not deleting and (len(remaining) != expected[1-axis]
+                             or any(key[axis] != pivot for key in remaining)):
+            raise ValueError(GRID_MISMATCH)
+        if not editable_grid(replacement, after, {
+                key: node.text or "" for key, node, _ in source_cells(replacement, after)
+        }) or any(item["text"] for item in after["cells"] if (item["row"], item["col"]) in remaining):
+            raise ValueError(GRID_MISMATCH)
+
+        if binary:
+            table.getparent().remove(table)
+            replacement.getparent().remove(replacement)
+            if xml_signature(root, synthetic_ids=True) != xml_signature(changed, synthetic_ids=True):
+                raise ValueError(GRID_MISMATCH)
+            return None
+
+        header = "Contents/header.xml"
+        if remaining and xml_signature(parse_part(original, header)) != xml_signature(parse_part(candidate, header)):
+            raise ValueError(GRID_MISMATCH)
+        # Install only the table. Use the original HWPX cells (and paragraph IDs) for
+        # all surviving entries, and assign fresh IDs only to newly created cells.
+        if remaining:
+            used = (int(ident) for part_name in original.namelist()
+                    if part_name.startswith("Contents/section") and part_name.endswith(".xml")
+                    for paragraph in (root if part_name == part else parse_part(original, part_name)).iter(HANGUL + "p")
+                    if (ident := paragraph.get("id", "")).isascii() and ident.isdigit())
+            next_id = max(used, default=0) + 1
+            for key in sorted(remaining):
+                paragraph = new_cells[key].find(f"{HANGUL}subList/{HANGUL}p")
+                if next_id > 0xffffffff:
+                    raise ValueError(GRID_MISMATCH)
+                paragraph.set("id", str(next_id))
+                next_id += 1
+        for old_cell, new_cell in surviving:
+            old_address = old_cell.find(HANGUL + "cellAddr")
+            new_address = new_cell.find(HANGUL + "cellAddr")
+            old_address.attrib.update(new_address.attrib)
+            new_cell.getparent().replace(new_cell, old_cell)
+        replacement.tail = table.tail
+        table.getparent().replace(table, replacement)
+        return rewrite_package(original, {part: root})

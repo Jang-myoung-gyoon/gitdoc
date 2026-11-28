@@ -1,6 +1,6 @@
 use super::{Editor, Format, button, project};
 use eframe::egui::*;
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(serde::Deserialize)]
 pub(super) struct PageCell {
@@ -20,6 +20,21 @@ impl PageCell {
 pub(super) struct CellDraft {
     text: String,
     focus: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum GridRemoval {
+    Row,
+    Column,
+}
+
+impl GridRemoval {
+    fn action(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Row => ("줄 지우기", "row_delete"),
+            Self::Column => ("칸 지우기", "col_delete"),
+        }
+    }
 }
 
 impl Editor {
@@ -54,6 +69,96 @@ impl Editor {
                 self.selected_cell = Some(index);
             }
         }
+    }
+
+    pub(super) fn table_grid_tools(
+        &mut self,
+        ui: &mut Ui,
+        action: &mut Option<(&'static str, Value)>,
+    ) {
+        if self.format != Format::Hangul {
+            return;
+        }
+        let Some(table) = self.selected_table.and_then(|i| self.page_tables.get(i)) else {
+            return;
+        };
+        let coordinate = self.selected_table_cell().map(|cell| cell.coordinate);
+        let enabled = table.editable_grid && coordinate.is_some() && self.text_edit().is_none();
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.menu_button("줄/칸 편집", |ui| {
+                for (label, change) in [
+                    ("위에 줄 추가", "row_above"),
+                    ("아래에 줄 추가", "row_below"),
+                    ("왼쪽에 칸 추가", "col_left"),
+                    ("오른쪽에 칸 추가", "col_right"),
+                ] {
+                    if ui.button(label).clicked()
+                        && let Some(coordinate) = coordinate
+                    {
+                        *action = Some((
+                            "edit_table_grid",
+                            json!({
+                                "address": table.address, "coordinate": coordinate,
+                                "digest": self.edit_digest, "change": change
+                            }),
+                        ));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                for (removal, count) in [
+                    (GridRemoval::Row, table.rows),
+                    (GridRemoval::Column, table.columns),
+                ] {
+                    if ui
+                        .add_enabled(count > 1, Button::new(removal.action().0))
+                        .on_disabled_hover_text("마지막 줄이나 칸은 지울 수 없습니다.")
+                        .clicked()
+                    {
+                        self.grid_removal = Some(removal);
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_disabled_hover_text(if !table.editable_grid {
+                "병합·보호 셀 또는 복잡한 표 구조가 있으면 줄과 칸을 편집할 수 없습니다."
+            } else {
+                "본문 입력을 먼저 반영하고 표의 셀을 선택하세요."
+            });
+        });
+    }
+
+    pub(super) fn grid_dialog(&mut self, ctx: &Context) -> Option<super::Command> {
+        let removal = self.grid_removal?;
+        let selection = self
+            .selected_table
+            .and_then(|i| self.page_tables.get(i))
+            .zip(self.selected_table_cell());
+        let Some((table, cell)) = selection else {
+            self.grid_removal = None;
+            return None;
+        };
+        let (label, change) = removal.action();
+        let modal = Modal::new(Id::new("hangul-grid-removal")).show(ctx, |ui| {
+            ui.heading(label);
+            let target = match removal {
+                GridRemoval::Row => format!("{}행 전체", cell.coordinate[0] + 1),
+                GridRemoval::Column => format!("{}열 전체", cell.coordinate[1] + 1),
+            };
+            ui.label(format!("{target}와 그 안의 셀 내용을 지웁니다."));
+            ui.horizontal(|ui| (ui.button("취소").clicked(), ui.button("지우기").clicked()))
+                .inner
+        });
+        if modal.should_close() || modal.inner.0 {
+            self.grid_removal = None;
+        } else if modal.inner.1 {
+            let value = json!({"address": table.address, "coordinate": cell.coordinate,
+                "digest": self.edit_digest, "change": change, "confirmed": true});
+            self.grid_removal = None;
+            return Some(self.request(ctx, "edit_table_grid", value));
+        }
+        None
     }
 
     pub(super) fn table_cell_tools(&mut self, ui: &mut Ui) {

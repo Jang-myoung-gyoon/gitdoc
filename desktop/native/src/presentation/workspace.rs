@@ -672,6 +672,7 @@ mod tests {
                     rows: 2,
                     columns: 3,
                     cells: vec![],
+                    editable_grid: false,
                 },
                 PageTable {
                     address: address.clone(),
@@ -680,6 +681,7 @@ mod tests {
                     rows: 4,
                     columns: 2,
                     cells: vec![],
+                    editable_grid: false,
                 },
             ];
             frame(&ctx, &mut editor, size, vec![]);
@@ -806,6 +808,58 @@ mod tests {
             Some(pos2(25.0, 50.0)),
         );
         assert_eq!(editor.selected_cell, Some(0));
+    }
+
+    #[test]
+    fn hangul_grid_ribbon_adds_relative_to_cell_and_confirms_removal() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "grid-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 3, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 2, "columns": 2, "editable_grid": true, "cells": [
+                {"coordinate": [1, 0], "text": "Same", "box": [0.1, 0.49, 0.45, 0.54]},
+                {"coordinate": [1, 1], "text": "Same", "box": [0.45, 0.49, 0.8, 0.54]}
+            ]
+        }]))
+        .unwrap();
+
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        frame(&ctx, &mut editor, size, vec![]);
+        for label in [
+            "기존 표",
+            "표 1 · 2행 × 2열",
+            "셀 선택",
+            "2행 2열",
+            "줄/칸 편집",
+        ] {
+            assert!(press(&mut editor, label).is_none());
+        }
+        assert!(
+            matches!(press(&mut editor, "오른쪽에 칸 추가"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_grid" && params["value"] == json!({
+                "address": [0, 3, 1], "coordinate": [1, 1], "digest": "grid-snapshot", "change": "col_right"
+            }))
+        );
+        editor.waiting = false;
+
+        for label in ["줄/칸 편집", "줄 지우기", "취소"] {
+            assert!(press(&mut editor, label).is_none());
+        }
+        assert!(editor.grid_removal.is_none());
+        assert!(press(&mut editor, "줄/칸 편집").is_none());
+        assert!(press(&mut editor, "줄 지우기").is_none());
+        assert!(
+            matches!(press(&mut editor, "지우기"), Some(Command::Page(params))
+            if params["value"] == json!({
+                "address": [0, 3, 1], "coordinate": [1, 1], "digest": "grid-snapshot", "change": "row_delete",
+                "confirmed": true
+            }))
+        );
     }
 
     #[test]
