@@ -402,7 +402,7 @@ def register_document(file_path: str, title: str) -> dict[str, object]:
 
 
 @server.tool(annotations=write, structured_output=True)
-def create_blank_document(title: str, extension: Literal["docx", "pptx", "xlsx", "pdf"]) -> dict[str, object]:
+def create_blank_document(title: str, extension: Literal["docx", "pptx", "xlsx", "pdf", "hwp", "hwpx"]) -> dict[str, object]:
     """Create a blank file in the current GitDoc workspace at v1.0.0."""
     result = create_blank(title, extension)
     return {**version_result(result["document_id"], result["version_id"]), **result}
