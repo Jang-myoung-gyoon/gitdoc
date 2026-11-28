@@ -1,0 +1,60 @@
+name: Desktop updater regression
+
+on:
+  push:
+    branches: ["codex/**", "main"]
+    paths: [".github/workflows/desktop-updates.yml", "desktop/**", "packaging/**", "tests/test_desktop_updates.py"]
+  pull_request:
+    paths: [".github/workflows/desktop-updates.yml", "desktop/**", "packaging/**", "tests/test_desktop_updates.py"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify discovery, tampering and Authenticode
+        run: python -m unittest discover -s tests -p test_desktop_updates.py -v
+      - name: Install Inno Setup
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+      - name: Upgrade and recover an isolated installed app
+        run: ./packaging/test-windows-update.ps1
+  windows-native:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/native
+      - name: Test the Windows desktop update controls
+        run: cargo test --locked --manifest-path desktop/native/Cargo.toml updates::tests
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build both launcher configurations
+        run: |
+          set -eu
+          sparkle=$(sh packaging/sparkle.sh)
+          swiftc -target arm64-apple-macosx13.0 -parse-as-library -swift-version 5 -framework AppKit desktop/GitDoc.swift -o "$RUNNER_TEMP/development"
+          swiftc -target arm64-apple-macosx13.0 -parse-as-library -swift-version 5 -framework AppKit -F "$sparkle" -framework Sparkle desktop/GitDoc.swift -o "$RUNNER_TEMP/distribution"
+      - name: Verify the signed update feed and tamper rejection
+        run: sh packaging/test-sparkle.sh

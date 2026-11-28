@@ -9,6 +9,7 @@ mod paper_text;
 mod presentation;
 mod printing;
 mod screen;
+mod updates;
 
 use eframe::egui;
 use screen::GitDoc;
@@ -262,8 +263,9 @@ fn main() -> eframe::Result {
         },
         Box::new(move |creation| {
             configure(&creation.egui_ctx);
+            let updates = updates::Updates::new(&root, &python, &creation.egui_ctx);
             let bridge = bridge::Bridge::start(root, python, creation.egui_ctx.clone());
-            Ok(Box::new(GitDoc::new(bridge, setup)))
+            Ok(Box::new(GitDoc::new(bridge, setup, updates)))
         }),
     )
 }

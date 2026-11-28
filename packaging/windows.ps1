@@ -15,6 +15,25 @@ $project = "desktop\native"
 $version = (Select-String -Path "$project\Cargo.toml" -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches.Groups[1].Value
 if (-not $version) { throw "version not found in $project\Cargo.toml" }
 $stage = "dist\windows\GitDoc"
+$signerPins = $env:GITDOC_WINDOWS_UPDATE_SIGNERS
+if ($env:GITDOC_WINDOWS_RELEASE_SIGNING -ceq 'unsigned') { $signerPins = $null }
+if ($env:GITDOC_DISTRIBUTION -eq 'true') {
+    switch -CaseSensitive ($env:GITDOC_WINDOWS_RELEASE_SIGNING) {
+        'unsigned' {}
+        'signed' {
+            if ([string]::IsNullOrWhiteSpace($signerPins)) {
+                throw "A signed stable Windows package must embed the approved Authenticode signer pin."
+            }
+        }
+        default { throw "Declare the signing policy for this stable Windows package." }
+    }
+}
+if ($signerPins) {
+    $pins = $signerPins.Trim() -split '\s+'
+    if ($pins.Count -gt 2 -or ($pins | Where-Object { $_ -cnotmatch '^[0-9a-f]{64}$' })) {
+        throw "Windows update signer pins must be one or two lowercase SHA-256 certificate digests."
+    }
+}
 
 $native = $env:GITDOC_NATIVE_DIR
 if (-not $native) {
@@ -30,7 +49,10 @@ Remove-Item -Recurse -Force "dist\windows" -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$stage\app\desktop", "dist\cache" | Out-Null
 Copy-Item "$native\gitdoc-desktop.exe", "$native\gitdoc-pdf.exe" $stage
 Copy-Item *.py, LICENSE "$stage\app"
-Copy-Item desktop\*.py "$stage\app\desktop"
+Copy-Item desktop\*.py, desktop\windows-update.ps1 "$stage\app\desktop"
+if ($signerPins) {
+    Set-Content -Path "$stage\app\WINDOWS_UPDATE_SIGNERS" -Value $pins -Encoding ascii
+}
 Copy-Item -Recurse templates, static "$stage\app"
 Set-Content -Path "$stage\app\PACKAGED" -Value $version -Encoding ascii
 

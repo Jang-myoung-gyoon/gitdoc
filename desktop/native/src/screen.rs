@@ -5,6 +5,7 @@ use crate::{
     paper::{self, PaperRow},
     paper_text::{self, Lines},
     presentation,
+    updates::Updates,
 };
 use eframe::egui::*;
 use serde_json::{Value, json};
@@ -142,6 +143,7 @@ struct Pane {
 
 pub struct GitDoc {
     bridge: Bridge,
+    updates: Updates,
     busy: usize,
     epoch: u64,
     doc: i64,
@@ -169,9 +171,10 @@ pub struct GitDoc {
 }
 
 impl GitDoc {
-    pub fn new(bridge: Bridge, destination: Result<Destination, String>) -> Self {
+    pub fn new(bridge: Bridge, destination: Result<Destination, String>, updates: Updates) -> Self {
         let mut app = Self {
             bridge,
+            updates,
             busy: 0,
             epoch: 0,
             doc: 0,
@@ -359,10 +362,7 @@ impl GitDoc {
 
     fn open_editor(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self
-            .record(self.head())
-            .map(|row| text(&row["extension"]))
-            .unwrap_or("");
+        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
         let format = match extension {
             "pptx" => Some(presentation::Format::Slides),
             "doc" | "docx" => Some(presentation::Format::Word),
@@ -388,7 +388,10 @@ impl GitDoc {
 
     fn open_editor_form(&mut self, find_only: bool) {
         let page = self.target_page();
-        let extension = self.record(self.head()).map(|row| text(&row["extension"])).unwrap_or("");
+        let extension = self
+            .record(self.head())
+            .map(|row| text(&row["extension"]))
+            .unwrap_or("");
         let mode = match extension {
             "docx" | "pptx" => "blocks",
             "hwp" | "hwpx" => "replace",
@@ -821,6 +824,9 @@ impl GitDoc {
                                 self.request("desktop_review", 0, json!({"enabled":review}));
                         }
                         ui.weak("켜면 새 수정안에 승인 또는 반려가 필요합니다.");
+                        ui.separator();
+                        let idle = self.form.is_none() && self.deck.is_none() && self.busy == 0;
+                        self.updates.control(ui, idle);
                     });
                     if ui.button("＋ 문서 등록").clicked() {
                         self.register_form(None);
@@ -2278,6 +2284,13 @@ impl eframe::App for GitDoc {
     fn update(&mut self, ctx: &Context, frame: &mut eframe::Frame) {
         while let Ok(reply) = self.bridge.read.try_recv() {
             self.receive(ctx, frame, reply);
+        }
+        self.updates.tick(
+            ctx,
+            self.form.is_none() && self.deck.is_none() && self.busy == 0,
+        );
+        if self.updates.dialog(ctx) {
+            return;
         }
         if self.form.is_none()
             && self.deck.is_none()

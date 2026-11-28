@@ -36,8 +36,32 @@ assemble() {
     # The bundled PDFium wheel needs macOS 13.
     plist "Set :LSMinimumSystemVersion 13.0"
 
+    sparkle=$(sh packaging/sparkle.sh)
+    mkdir -p "$bundle/Contents/Frameworks"
+    ditto "$sparkle/Sparkle.framework" "$bundle/Contents/Frameworks/Sparkle.framework"
+    cp "$sparkle/LICENSE" "$bundle/Contents/Resources/LICENSE-Sparkle"
+    if [ "${GITDOC_DISTRIBUTION:-false}" = true ]; then
+        : "${GITDOC_SPARKLE_PUBLIC_KEY:?configure the GitDoc Sparkle public key}"
+        sparkle_public=$(printf '%s' "$GITDOC_SPARKLE_PUBLIC_KEY" | /usr/bin/python3 -c '
+import base64, sys
+key = base64.b64decode(sys.stdin.read().strip(), validate=True)
+assert len(key) == 32
+print(base64.b64encode(key).decode("ascii"))
+')
+        plist "Add :SUPublicEDKey string $sparkle_public"
+        plist 'Add :SUFeedURL string https://github.com/Jang-myoung-gyoon/gitdoc/releases/latest/download/gitdoc-macos-arm64-appcast.xml'
+        plist 'Add :SUEnableAutomaticChecks bool false'
+        plist 'Add :SUAllowsAutomaticUpdates bool false'
+        plist 'Add :SUAutomaticallyUpdate bool false'
+        plist 'Add :SUVerifyUpdateBeforeExtraction bool true'
+        plist 'Add :SURequireSignedFeed bool true'
+        plist 'Add :SUSignedFeedFailureExpirationInterval integer 0'
+    fi
+
     cp "$native/gitdoc-desktop" "$native/gitdoc-pdf" "$bundle/Contents/MacOS/"
-    swiftc -target arm64-apple-macosx12.0 -parse-as-library -swift-version 5 -O -framework AppKit desktop/GitDoc.swift -o "$bundle/Contents/MacOS/GitDoc"
+    swiftc -target arm64-apple-macosx13.0 -parse-as-library -swift-version 5 -O -framework AppKit \
+        -F "$sparkle" -framework Sparkle -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
+        desktop/GitDoc.swift -o "$bundle/Contents/MacOS/GitDoc"
     swiftc -target arm64-apple-macosx12.0 -parse-as-library -swift-version 5 -O -framework Vision desktop/OCR.swift -o "$bundle/Contents/MacOS/gitdoc-ocr"
 
     app="$bundle/Contents/Resources/app"
@@ -89,7 +113,7 @@ sign_runtime_code() {
 
 sign_bundle() {
     # Sign leaves before their containing bundles, including code shipped as runtime resources.
-    find "$bundle/Contents/Resources/python" "$bundle/Contents/MacOS" -depth -print > "$stage/code-paths"
+    find "$bundle/Contents/Resources/python" "$bundle/Contents/MacOS" "$bundle/Contents/Frameworks" -depth -print > "$stage/code-paths"
     while IFS= read -r code; do
         [ ! -L "$code" ] || continue
         if [ -f "$code" ]; then

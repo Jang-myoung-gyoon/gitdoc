@@ -26,7 +26,7 @@ GitDoc은 Rust의 [eframe](https://github.com/emilk/egui/tree/main/crates/eframe
 macOS 패키지는 Apple Silicon용입니다.
 
 - **macOS**에서 디스크 이미지를 열고 GitDoc을 응용 프로그램 폴더로 끌어 놓은 뒤 실행합니다. v0.1.2부터 공개 앱과 디스크 이미지는 Developer ID로 서명되며, 디스크 이미지에 Apple 공증 티켓이 포함됩니다.
-- **Windows**에서 설치 파일을 실행합니다. 설치 파일에는 서명이 없습니다. SmartScreen 화면이 나타나면 **추가 정보 ▸ 실행**을 선택합니다. 관리자 권한 없이 현재 사용자에게 설치하고 `gitdoc://` 링크를 등록합니다. 제거하면 앱과 링크 등록이 함께 지워집니다.
+- **Windows**에서 설치 파일을 실행합니다. 업데이트 지원판은 서명된 설치 파일을 사용하고 Windows가 표시하는 발행자를 확인하세요. 관리자 권한 없이 현재 사용자에게 설치하고 `gitdoc://` 링크를 등록합니다. 제거하면 앱과 링크 등록이 함께 지워집니다.
 
 패키지 앱은 저장소, 미리보기 캐시, 로그를 macOS에서는 `~/Library/Application Support/GitDoc`, Windows에서는 `%APPDATA%\GitDoc`에 둡니다. 앱을 제거하거나 교체해도 이 폴더는 남습니다. `DOCVERS_DB`로 다른 저장소 파일을 지정할 수 있습니다.
 
@@ -58,13 +58,17 @@ py -3.12 -m venv .venv
 
 기본 저장소는 `data/documents.sqlite3`입니다. `DOCVERS_DB`로 경로를 바꾸고 데스크톱 앱, CLI, MCP에 같은 값을 지정합니다.
 
+### 데스크톱 업데이트
+
+**설정 → 업데이트 확인…**에서 정식 릴리스의 변경 사항을 확인할 수 있습니다. macOS는 앱에서 설치를 승인하고, Windows는 설치 파일에 서명이 없는 동안 공식 GitHub 링크에서 받아 직접 설치합니다. v0.1.3의 기존 위치에 새 버전을 덮어쓰면 문서함과 설정을 계속 사용할 수 있습니다. 서명과 게시 조건은 [업데이트 릴리스 절차](docs/desktop-updates.md)를 참고하세요.
+
 ### 릴리스 만들기
 
 [릴리스 워크플로](.github/workflows/release.yml)는 `packaging/macos.sh`와 `packaging/windows.ps1`로 두 패키지를 빌드하고, 깨끗한 러너에 각각 설치한 뒤 `packaging/smoke.py`로 확인합니다. 앱이나 패키징을 바꾸는 풀 리퀘스트, 수동 실행, 버전 태그에서 실행됩니다.
 
 1. `desktop/native/Cargo.toml`의 `version`을 새 버전으로 바꾸고 `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`으로 `Cargo.lock`을 갱신한 뒤 병합합니다. 패키지 버전은 이 파일에서 가져옵니다.
 2. 그 커밋에 `vX.Y.Z` 태그를 붙여 푸시합니다. `git tag v0.2.0 && git push origin v0.2.0`
-3. 워크플로가 태그와 버전이 일치하는지 확인합니다. 양쪽 설치 테스트와 macOS Developer ID 서명, Apple 공증, 공증 티켓 첨부, Gatekeeper 검사를 통과하면 태그 실행에서 두 설치 파일을 내려받아 저장소 소유자 계정으로 함께 게시합니다.
+3. 워크플로가 태그와 버전이 일치하는지 확인합니다. 양쪽 설치 테스트와 macOS Developer ID 서명, Apple 공증, 공증 티켓 첨부, Gatekeeper 검사를 통과하면 태그 실행에서 macOS DMG와 서명된 업데이트 피드, Authenticode 서명을 검증한 Windows 설치 파일을 저장소 소유자 계정으로 함께 게시합니다.
 
 macOS 서명 및 공증 단계는 원본 저장소의 버전 태그 푸시에서 실행됩니다. 이 단계에서 Actions Secret `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`를 사용합니다. 풀 리퀘스트와 수동 실행 빌드는 ad-hoc 서명을 사용합니다.
 

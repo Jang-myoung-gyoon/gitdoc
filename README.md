@@ -26,7 +26,7 @@ Experimental packages are attached to each release on the [Releases page](../../
 The macOS package is for Apple Silicon.
 
 - **macOS**: open the disk image, drag GitDoc to Applications, and launch it from there. Starting with v0.1.2, the public app and disk image use Developer ID signing, and the disk image carries Apple's notarization ticket.
-- **Windows**: run the setup file. The installer is unsigned. If SmartScreen prompts, choose **More info ▸ Run anyway**. It installs for the current user without administrator rights and registers `gitdoc://` links. Uninstalling removes the app and the link handler.
+- **Windows**: run the setup file. Use the signed installer for updater-enabled releases and verify the publisher shown by Windows. It installs for the current user without administrator rights and registers `gitdoc://` links. Uninstalling removes the app and the link handler.
 
 Packaged apps keep the repository, preview cache, and logs in `~/Library/Application Support/GitDoc` on macOS and `%APPDATA%\GitDoc` on Windows. Uninstalling or replacing the app leaves this folder in place. `DOCVERS_DB` still selects a different repository file.
 
@@ -58,13 +58,17 @@ py -3.12 -m venv .venv
 
 The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a different file and give the desktop app, CLI, and MCP the same value.
 
+### Desktop updates
+
+Use **Settings → Check for updates** to review a stable release. On macOS, approve installation from the app. On Windows, follow the official GitHub link and run the installer manually while Windows releases are unsigned. Install this release over GitDoc 0.1.3 at the existing location to keep your workspace. See the [desktop update release checklist](docs/desktop-updates.md) for signing and publication requirements.
+
 ### Cutting a release
 
 The [release workflow](.github/workflows/release.yml) builds both packages with `packaging/macos.sh` and `packaging/windows.ps1`, installs each one on a clean runner, and checks it with `packaging/smoke.py`. It runs on pull requests that touch the app or the packaging, on manual dispatch, and on version tags.
 
 1. Set the new `version` in `desktop/native/Cargo.toml`, refresh `Cargo.lock` with `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`, and merge the change. The packages take their version from this file.
 2. Tag that commit `vX.Y.Z` and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. The workflow checks that the tag matches the version. After the installation tests, macOS Developer ID signing, notarization, stapling, and Gatekeeper assessment succeed, download both artifacts from the tag run and publish them together using the repository owner account.
+3. The workflow checks that the tag matches the version. After the installation tests, macOS Developer ID signing, notarization, stapling, and Gatekeeper assessment succeed, publish the Mac DMG, its signed appcast, and the verified Authenticode-signed Windows installer together using the repository owner account.
 
 The macOS signing and notarization steps run on version-tag pushes in the upstream repository. They use the Actions secrets `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`. Pull requests and manually dispatched builds use ad-hoc signing.
 
