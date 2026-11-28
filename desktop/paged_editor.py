@@ -19,8 +19,9 @@ from desktop.document_objects import (
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from desktop.hangul_cells import (
-    GRID_MISMATCH, GRID_OPERATIONS, SPAN_MISMATCH, STALE_CELL, UNSAFE_GRID, UNSAFE_SPAN, cell_catalog, cell_value,
-    replace_cell, verify_cell, verify_grid, verify_span,
+    CELL_LAYOUT_COMMANDS, GRID_MISMATCH, GRID_OPERATIONS, LAYOUT_MISMATCH, SPAN_MISMATCH,
+    STALE_CELL, UNSAFE_GRID, UNSAFE_LAYOUT, UNSAFE_SIZE, cell_catalog, cell_value, format_cells,
+    replace_cell, verify_cell, verify_cell_layout, verify_grid, verify_span,
 )
 from desktop.hangul_format import CHARACTER, OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
 from desktop.shape_editor import (
@@ -194,14 +195,16 @@ def edit_native_table(document, output, address, command, args, *, message, allo
     return target, updated[index], updated
 
 
-def verify_hwp_streams(source, output, section, message=GRID_MISMATCH):
+def verify_hwp_streams(source, output, section, message=GRID_MISMATCH, *, doc_info=False):
     # The writer may change the target BodyText section. Keep every other OLE stream verbatim.
     with olefile.OleFileIO(io.BytesIO(source)) as old, olefile.OleFileIO(output) as new:
         if old.listdir(streams=True, storages=True) != new.listdir(streams=True, storages=True):
             raise ValueError(message)
-        excluded = ["BodyText", f"Section{section}"]
+        excluded = {("BodyText", f"Section{section}")}
+        if doc_info:
+            excluded.add(("DocInfo",))
         if any(old.openstream(path).read() != new.openstream(path).read()
-               for path in old.listdir() if path != excluded):
+               for path in old.listdir() if tuple(path) not in excluded):
             raise ValueError(message)
 
 
@@ -359,7 +362,7 @@ class PagedEditor:
     def close(self):
         self.directory.cleanup()
 
-    def render(self, data, number, *, keep_inline_shape=None):
+    def render(self, data, number, *, keep_inline_shape=None, table_layout=None):
         extension = "docx" if self.extension == "doc" else self.extension
         key = hashlib.sha256(data).hexdigest()
         if extension in HANGUL_EXTENSIONS:
@@ -415,15 +418,37 @@ class PagedEditor:
                             pass
                 for table in tables:
                     address = tuple(table["address"])
-                    supported, grid, spans = (native_cells or {}).get(address, ({}, False, {}))
-                    table["cells"] = [{"coordinate": list(coordinate), "text": supported[coordinate], "box": box}
-                                      for coordinate, box in sorted(page_cells[address].items())
-                                      if box is not None and coordinate in supported]
+                    supported, grid, spans, layout = (native_cells or {}).get(address, ({}, False, {}, {}))
+                    cells = []
+                    for coordinate, box in sorted(page_cells[address].items()):
+                        if box is None or (coordinate not in supported and coordinate not in spans and coordinate not in layout):
+                            continue
+                        cell = {"coordinate": list(coordinate), "text": supported.get(coordinate),
+                                "box": box, "layout": coordinate in layout}
+                        span = tuple(spans.get(coordinate) or layout.get(coordinate) or (1, 1))
+                        if span != (1, 1):
+                            cell["span"] = list(span)
+                        if coordinate in spans:
+                            cell["split"] = True
+                        cells.append(cell)
+                    table["cells"] = cells
                     table["editable_grid"] = grid and len(table["cells"]) == table["rows"] * table["columns"]
-                    table["cells"].extend({"coordinate": list(coordinate), "text": "", "box": box,
-                                           "span": spans[coordinate]}
-                                          for coordinate, box in sorted(page_cells[address].items())
-                                          if box is not None and coordinate in spans)
+                    table["layout_grid"] = (len(layout) == table["rows"] * table["columns"]
+                                            and len(table["cells"]) == len(layout)
+                                            and all(span == (1, 1) for span in layout.values()))
+                if table_layout is not None:
+                    matching = [table for table in tables if table["address"] == table_layout["address"]]
+                    if (len(matching) != 1
+                            or {tuple(c["coordinate"]) for c in matching[0]["cells"]}
+                            != table_layout["coordinates"]):
+                        raise ValueError("표가 현재 쪽을 벗어나 변경을 적용하지 않았습니다.")
+                    if table_layout["sizing"]:
+                        left, top, right, bottom = matching[0]["box"]
+                        area = placement["bodyArea"]
+                        usable_right = min(1, (area["x"] + area["width"] + 1) / (width * 96 / 72))
+                        usable_bottom = min(1, (area["y"] + area["height"] + 1) / (height * 96 / 72))
+                        if left < 0 or top < 0 or right > usable_right or bottom > usable_bottom:
+                            raise ValueError("표가 현재 쪽의 본문 영역을 벗어나 변경을 적용하지 않았습니다.")
                 for item in objects:
                     identity = item["id"]
                     item["hangul_format"] = (identity >> 32, (identity & 0xffffffff) - 1) in formatting
@@ -477,7 +502,12 @@ class PagedEditor:
         selected_shape = None
         if operation in ("shape_up", "shape_down", "shape_size") and len(value["address"]) == 3:
             selected_shape = value["address"]
-        result = self.render(updated, number, keep_inline_shape=selected_shape)
+        layout = None
+        if operation == "edit_table_layout":
+            chosen = next(table for table in self.tables if table["address"] == value["address"])
+            layout = {"address": value["address"], "coordinates": {tuple(c["coordinate"]) for c in chosen["cells"]},
+                      "sizing": value["change"] in ("width", "height")}
+        result = self.render(updated, number, keep_inline_shape=selected_shape, table_layout=layout)
         if index == self.position and updated != source:
             del self.states[index+1:]
             self.states.append(updated)
@@ -489,7 +519,49 @@ class PagedEditor:
             result["hangul_selection"] = selection
         if selected_shape is not None:
             result["shape_selection"] = selected_shape
+        if layout is not None:
+            result["table_selection"] = {key: value[key] for key in ("address", "coordinate", "end") if key in value}
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
+
+    def change_cell_layout(self, source, chosen, coordinate, value):
+        change, amount = value.get("change"), value.get("value")
+        end = value.get("end", coordinate)
+        if (not isinstance(end, list) or len(end) != 2 or any(type(i) is not int for i in end)
+                or not any(cell["coordinate"] == end and cell["layout"] for cell in chosen["cells"])):
+            raise ValueError(STALE_CELL)
+        if change in ("width", "height"):
+            if not chosen["layout_grid"]:
+                raise ValueError(UNSAFE_SIZE)
+            if type(amount) is not int or not 2 <= amount <= 180:
+                raise ValueError("셀 너비와 높이는 2~180 mm로 입력하세요.")
+        elif not isinstance(change, str) or amount not in CELL_LAYOUT_COMMANDS.get(change, ()):
+            raise ValueError(UNSAFE_LAYOUT)
+        with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+            document = Path(work)/f"document.{self.extension}"
+            document.write_bytes(source)
+            native = next((table for table in exported_tables(document)
+                           if [table["section"], table["paragraph"], table["control"]] == chosen["address"]), None)
+            if native is None:
+                raise ValueError(STALE_CELL)
+            xml = hangul_xml(document)
+            changed, commands = format_cells(xml, native, tuple(coordinate), tuple(end), change, amount)
+            if not commands:
+                return source
+            if self.extension == "hwpx":
+                return changed
+            if len(commands) > 200:
+                raise ValueError("HWP에서는 한 번에 최대 200개 셀 또는 문단을 바꿀 수 있습니다.")
+            for index, (command, flags) in enumerate(commands):
+                output = document.parent / f"layout-{index % 2}.hwp"
+                if output.exists():
+                    output.unlink()
+                rhwp(["edit", command, str(document), "--table", str(native["index"]), *flags,
+                      "-o", str(output)], document.parent)
+                document = output
+            verify_hwp_streams(source, document, native["section"], LAYOUT_MISMATCH,
+                               doc_info=change == "horizontal")
+            verify_cell_layout(xml, changed, hangul_xml(document), native, change)
+            return document.read_bytes()
 
     def change_grid(self, source, chosen, coordinate, value):
         if not chosen.get("editable_grid"):
@@ -623,7 +695,7 @@ class PagedEditor:
                     verify_inline_hwp(changed, convert_format("hwp", "hwpx", converted), address[0])
                 return converted
             return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
-        if operation in ("edit_table_cell", "edit_table_grid", "edit_table_span") and self.extension in HANGUL_EXTENSIONS:
+        if operation in ("edit_table_cell", "edit_table_grid", "edit_table_span", "edit_table_layout") and self.extension in HANGUL_EXTENSIONS:
             if not isinstance(value, dict):
                 raise ValueError(STALE_CELL)
             address, coordinate = value.get("address"), value.get("coordinate")
@@ -634,11 +706,15 @@ class PagedEditor:
             selected = next((cell for cell in chosen.get("cells", []) if cell["coordinate"] == coordinate), None)
             if selected is None:
                 raise ValueError(STALE_CELL)
+            if operation == "edit_table_layout":
+                if not selected.get("layout"):
+                    raise ValueError(UNSAFE_LAYOUT)
+                return self.change_cell_layout(source, chosen, coordinate, value)
             if operation == "edit_table_span":
                 return self.change_span(source, chosen, coordinate, selected, value)
             if operation == "edit_table_grid":
                 return self.change_grid(source, chosen, coordinate, value)
-            if selected.get("span"):
+            if selected.get("span") or selected.get("text") is None:
                 raise ValueError(STALE_CELL)
             value = cell_value(value.get("text"))
             if value == selected["text"]:

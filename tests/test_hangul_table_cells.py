@@ -9,13 +9,36 @@ from PIL import Image, ImageChops
 import store
 from desktop.bridge import CanvasSession
 from desktop.document_objects import HANGUL
-from desktop.hangul_cells import grid_cells, source_table
+from desktop.hangul_cells import HWP_UNITS_PER_MM, grid_cells, source_table, xml_signature
+from desktop.hangul_format import HEADER, HH
 from desktop.paged_editor import PagedEditor, exported_tables, hangul_xml, rhwp
 from editing import open_package, parse_part, rewrite_package
 from extract import matches_format
 from mcp_server import get_preview_info, register_document, render_document_page
 from preview import PreviewError, rhwp_command
 from workflow import review_revision
+
+
+def table_layout_state(path, index):
+    table = exported_tables(path)[index]
+    with open_package(hangul_xml(path)) as archive:
+        header = parse_part(archive, HEADER)
+        body = parse_part(archive, f"Contents/section{table['section']}.xml")
+    para_props = {node.get("id"): node.find(HH + "align").get("horizontal")
+                  for node in header.iter(HH + "paraPr") if node.find(HH + "align") is not None}
+    characters = {node.get("id"): xml_signature(node) for node in header.iter(HH + "charPr")}
+    cells = {}
+    for key, cell in grid_cells(source_table(body, table)).items():
+        sublist = cell.find(HANGUL + "subList")
+        paragraphs = sublist.findall(HANGUL + "p")
+        contents = [[(node.text or "", characters[run.get("charPrIDRef")])
+                     for run in para.findall(HANGUL + "run") for node in run.findall(HANGUL + "t")]
+                    for para in paragraphs]
+        size = cell.find(HANGUL + "cellSz")
+        cells[key] = {"text": contents, "horizontal": [para_props[p.get("paraPrIDRef")] for p in paragraphs],
+                      "vertical": sublist.get("vertAlign"),
+                      "width": int(size.get("width")), "height": int(size.get("height"))}
+    return cells
 
 
 class HangulTableCellTests(unittest.TestCase):
@@ -105,6 +128,118 @@ class HangulTableCellTests(unittest.TestCase):
         reopened = canvas.open(doc, "main", proposal["id"], 1)
         self.assertIn("표 주변 본문", [item["text"] for item in reopened["objects"]])
         self.assertIn(action["text"], [cell["text"] for table in reopened["tables"] for cell in table["cells"]])
+        self.assertEqual(get_preview_info(doc, proposal["id"], base)["page_counts"], [1, 1])
+        _, image = render_document_page(doc, proposal["id"])
+        self.assertTrue(image.data.startswith(b"\x89PNG"))
+
+    def test_cell_layout_roundtrip_regular_and_merged_in_both_formats(self):
+        try:
+            rhwp_command()
+        except PreviewError as error:
+            self.skipTest(str(error))
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            self.fixture(folder)
+            rhwp(["edit", "set-column-widths", "source.hwp", "--table", "1", "--widths", "10000,10000,10000",
+                  "-o", "narrow.hwp"], folder)
+            rhwp(["edit", "apply-char-format-in-cell", "narrow.hwp", "--table", "1", "--row", "1",
+                  "--col", "0", "--props", '{"bold":true}', "-o", "layout.hwp"], folder)
+            rhwp(["edit", "merge-cells", "layout.hwp", "--table", "1", "--row", "0", "--col", "1",
+                  "--end-row", "1", "--end-col", "1", "-o", "layout-merged.hwp"], folder)
+            for name in ("layout", "layout-merged"):
+                rhwp(["export-hwpx", f"{name}.hwp", f"{name}.hwpx"], folder)
+            with patch.object(store, "DATABASE", folder/"layouts.sqlite3"):
+                store.initialize()
+                store.set_desktop_review(True)
+                for extension in ("hwp", "hwpx"):
+                    for merged in (False, True):
+                        with self.subTest(extension=extension, merged=merged):
+                            self.exercise_cell_layout(folder, extension, merged)
+
+    def exercise_cell_layout(self, folder, extension, merged):
+        name = "layout-merged" if merged else "layout"
+        path = folder/f"{name}.{extension}"
+        original = path.read_bytes()
+        before = table_layout_state(path, 1)
+        adjacent = table_layout_state(path, 0)
+        record = register_document(str(path), f"Cell layout {extension} {merged}")["version"]
+        doc, base = record["document_id"], record["id"]
+        canvas = CanvasSession()
+        self.addCleanup(canvas.close)
+        opened = canvas.open(doc, "main", base, 1)
+        before_image = Image.open(opened["image"]).convert("RGB")
+        address = opened["tables"][1]["address"]
+        self.assertEqual(opened["tables"][1]["layout_grid"], not merged)
+
+        def edit(snapshot, change, value, start, end=None):
+            params = {"address": address, "digest": snapshot["edit_digest"], "coordinate": start,
+                      "change": change, "value": value}
+            if end is not None:
+                params["end"] = end
+            return canvas.page(number=1, operation="edit_table_layout", value=params)
+
+        if merged:
+            with self.assertRaisesRegex(ValueError, "병합 셀 전체"):
+                edit(opened, "horizontal", "right", [0, 0], [0, 2])
+            with self.assertRaisesRegex(ValueError, "병합되지 않은"):
+                edit(opened, "width", 32, [0, 1])
+            self.assertEqual(canvas.working.data, original)
+            single = edit(opened, "horizontal", "right", [0, 1])
+            self.assertEqual(single["table_selection"]["coordinate"], [0, 1])
+            edited = edit(single, "vertical", "TOP", [1, 2], [0, 0])
+            for key, cell in before.items():
+                cell["vertical"] = "TOP"
+                if key == (0, 1):
+                    cell["horizontal"] = ["RIGHT"] * len(cell["horizontal"])
+        else:
+            with self.assertRaisesRegex(ValueError, "본문 영역|현재 쪽"):
+                edit(opened, "width", 150, [1, 0], [1, 2])
+            self.assertEqual(canvas.working.data, original)
+            single = edit(opened, "horizontal", "right", [1, 0])
+            with self.assertRaisesRegex(ValueError, "다시 선택"):
+                edit(opened, "vertical", "BOTTOM", [1, 0])
+            def visible_size(page, coordinate, axis):
+                cell = next(cell for cell in page["tables"][1]["cells"] if cell["coordinate"] == coordinate)
+                return cell["box"][axis + 2] - cell["box"][axis]
+
+            wide = edit(single, "width", 32, [0, 0], [1, 1])
+            self.assertLess(visible_size(wide, [0, 0], 0), visible_size(opened, [0, 0], 0))
+            self.assertAlmostEqual(visible_size(wide, [0, 2], 0), visible_size(opened, [0, 2], 0), places=3)
+            tall = edit(wide, "height", 16, [1, 1])
+            self.assertGreater(visible_size(tall, [1, 2], 1), visible_size(wide, [1, 2], 1))
+            horizontal = edit(tall, "horizontal", "center", [1, 1], [1, 0])
+            horizontal_image = Image.open(horizontal["image"]).convert("RGB")
+            edited = edit(horizontal, "vertical", "BOTTOM", [1, 1], [1, 0])
+            self.assertIsNotNone(ImageChops.difference(horizontal_image, Image.open(edited["image"]).convert("RGB")).getbbox())
+            self.assertEqual(edited["table_selection"]["end"], [1, 0])
+            for (row, col), cell in before.items():
+                if col in (0, 1):
+                    cell["width"] = round(32 * HWP_UNITS_PER_MM)
+                if row == 1:
+                    cell["height"] = round(16 * HWP_UNITS_PER_MM)
+                    if col in (0, 1):
+                        cell["horizontal"] = ["CENTER"] * len(cell["horizontal"])
+                        cell["vertical"] = "BOTTOM"
+
+        self.assertIsNotNone(ImageChops.difference(before_image, Image.open(edited["image"]).convert("RGB")).getbbox())
+        finished = canvas.working.data
+        self.assertTrue(canvas.page(number=1, operation="undo")["redo"])
+        self.assertNotEqual(canvas.working.data, finished)
+        self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
+        self.assertEqual(canvas.working.data, finished)
+        proposal = canvas.save("Align or size cells", 1)
+        with store.database(readonly=True) as db:
+            self.assertEqual(store.find_version(db, doc, base, "content")["content"], original)
+            new = store.find_version(db, doc, proposal["id"], "content, extension")
+        self.assertEqual(new["extension"], extension)
+        self.assertTrue(matches_format(extension, new["content"]))
+        saved = folder/f"saved-{name}.{extension}"
+        saved.write_bytes(new["content"])
+        self.assertEqual(table_layout_state(saved, 0), adjacent)
+        self.assertEqual(table_layout_state(saved, 1), before)
+        review_revision(doc, proposal["id"], "approve", base)
+        reopened = canvas.open(doc, "main", proposal["id"], 1)
+        self.assertEqual(reopened["tables"][1]["address"], address)
         self.assertEqual(get_preview_info(doc, proposal["id"], base)["page_counts"], [1, 1])
         _, image = render_document_page(doc, proposal["id"])
         self.assertTrue(image.data.startswith(b"\x89PNG"))
@@ -272,6 +407,12 @@ class HangulTableCellTests(unittest.TestCase):
                                     "address": table["address"], "coordinate": [1, 1], "end": [1, 2],
                                     "digest": opened["edit_digest"], "change": "merge",
                                 })
+                        if filename in ("protected.hwpx", "nested.hwpx"):
+                            self.assertFalse(table["layout_grid"])
+                            with self.assertRaises(ValueError):
+                                editor.page(1, "edit_table_layout", value={"address": table["address"],
+                                    "coordinate": [0, 0], "digest": opened["edit_digest"],
+                                    "change": "horizontal", "value": "right"})
                         self.assertEqual(editor.position, 0)
                         self.assertEqual(editor.data, original)
                     finally:

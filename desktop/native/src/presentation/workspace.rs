@@ -829,6 +829,7 @@ mod tests {
                     columns: 3,
                     cells: vec![],
                     editable_grid: false,
+                    layout_grid: false,
                 },
                 PageTable {
                     address: address.clone(),
@@ -838,6 +839,7 @@ mod tests {
                     columns: 2,
                     cells: vec![],
                     editable_grid: false,
+                    layout_grid: false,
                 },
             ];
             frame(&ctx, &mut editor, size, vec![]);
@@ -1029,6 +1031,49 @@ mod tests {
     }
 
     #[test]
+    fn hangul_cell_layout_ribbon_sends_range_alignment_and_dimensions() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "layout-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address":[0,2,1], "box":[0.1,0.44,0.8,0.54], "rows":1, "columns":2,
+            "layout_grid":true, "editable_grid":true,
+            "cells":[{"coordinate":[0,0], "text":"A", "layout":true, "box":[0.1,0.44,0.45,0.54]},
+                     {"coordinate":[0,1], "text":"B", "layout":true, "box":[0.45,0.44,0.8,0.54]}]
+        }]))
+        .unwrap();
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        editor.select_table_at(canvas, Some(pos2(25.0, 50.0)), false);
+        editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), true);
+        frame(&ctx, &mut editor, size, vec![]);
+        for (menu, button, change, value) in [
+            ("가로 맞춤", "오른쪽", "horizontal", json!("right")),
+            ("세로 맞춤", "아래", "vertical", json!("BOTTOM")),
+            ("셀 크기", "너비 적용", "width", json!(25)),
+            ("셀 크기", "높이 적용", "height", json!(10)),
+        ] {
+            assert!(press(&mut editor, menu).is_none());
+            assert!(
+                matches!(press(&mut editor, button), Some(Command::Page(params))
+                if params["operation"] == "edit_table_layout" && params["value"] ==
+                    json!({"address":[0,2,1], "coordinate":[0,0], "end":[0,1],
+                           "digest":"layout-snapshot", "change":change, "value":value}))
+            );
+            editor.waiting = false;
+        }
+        editor.page_tables[0].layout_grid = false;
+        assert!(press(&mut editor, "셀 크기").is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(!display.shapes.iter().any(|s| matches!(&s.shape,
+            Shape::Text(text) if text.galley.job.text == "높이 적용")));
+    }
+
+    #[test]
     fn hangul_cell_range_controls_route_merge_and_split_in_a_narrow_ribbon() {
         let ctx = Context::default();
         let size = vec2(560.0, 650.0);
@@ -1076,7 +1121,7 @@ mod tests {
         editor.page_tables = serde_json::from_value(json!([{
             "address": [0, 2, 1], "box": [0.1, 0.44, 0.8, 0.54],
             "rows": 1, "columns": 2, "editable_grid": false,
-            "cells": [{"coordinate": [0, 0], "text": "", "span": [1, 2], "box": [0.1, 0.44, 0.8, 0.54]}]
+            "cells": [{"coordinate": [0, 0], "text": "", "span": [1, 2], "split": true, "box": [0.1, 0.44, 0.8, 0.54]}]
         }])).unwrap();
         editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), false);
         assert!(
