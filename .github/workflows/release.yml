@@ -58,7 +58,7 @@ jobs:
             missing=1
           fi
           test "$missing" = 0
-          printf '%s\n' "$GITDOC_SPARKLE_PRIVATE_SEED" | swift packaging/sparkle-key.swift "$GITDOC_SPARKLE_PUBLIC_KEY"
+          printf '%s\n' "$GITDOC_SPARKLE_PRIVATE_SEED" | sh packaging/sparkle-key-check.sh "$GITDOC_SPARKLE_PUBLIC_KEY"
           printf '%s\n' 'Sparkle release key configuration verified.'
       - name: Assemble the macOS app
         env:

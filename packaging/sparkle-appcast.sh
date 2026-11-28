@@ -11,7 +11,7 @@ image="GitDoc-$version-macos-arm64.dmg"
 codesign --verify --strict -R='anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' "dist/$image"
 xcrun stapler validate "dist/$image"
 public=$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' dist/macos/GitDoc.app/Contents/Info.plist)
-printf '%s\n' "$seed" | swift packaging/sparkle-key.swift "$public"
+printf '%s\n' "$seed" | sh packaging/sparkle-key-check.sh "$public"
 sparkle=$(sh packaging/sparkle.sh)
 stage=$(mktemp -d "$PWD/dist/.sparkle-appcast.XXXXXX")
 trap 'rm -rf "$stage"' 0

@@ -42,12 +42,13 @@ assemble() {
     cp "$sparkle/LICENSE" "$bundle/Contents/Resources/LICENSE-Sparkle"
     if [ "${GITDOC_DISTRIBUTION:-false}" = true ]; then
         : "${GITDOC_SPARKLE_PUBLIC_KEY:?configure the GitDoc Sparkle public key}"
-        printf '%s' "$GITDOC_SPARKLE_PUBLIC_KEY" | /usr/bin/python3 -c '
+        sparkle_public=$(printf '%s' "$GITDOC_SPARKLE_PUBLIC_KEY" | /usr/bin/python3 -c '
 import base64, sys
-key = sys.stdin.read()
-assert len(base64.b64decode(key, validate=True)) == 32
-'
-        plist "Add :SUPublicEDKey string $GITDOC_SPARKLE_PUBLIC_KEY"
+key = base64.b64decode(sys.stdin.read().strip(), validate=True)
+assert len(key) == 32
+print(base64.b64encode(key).decode("ascii"))
+')
+        plist "Add :SUPublicEDKey string $sparkle_public"
         plist 'Add :SUFeedURL string https://github.com/Jang-myoung-gyoon/gitdoc/releases/latest/download/gitdoc-macos-arm64-appcast.xml'
         plist 'Add :SUEnableAutomaticChecks bool false'
         plist 'Add :SUAllowsAutomaticUpdates bool false'

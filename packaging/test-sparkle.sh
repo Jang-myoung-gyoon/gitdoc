@@ -3,7 +3,6 @@
 set -eu
 cd "$(dirname "$0")/.."
 sparkle=$(sh packaging/sparkle.sh)
-key_source="$PWD/packaging/sparkle-key.swift"
 umask 077
 stage=$(mktemp -d "${RUNNER_TEMP:-/tmp}/gitdoc-sparkle-test.XXXXXX")
 trap 'rm -rf "$stage"' 0
@@ -16,8 +15,8 @@ print(key.publicKey.rawRepresentation.base64EncodedString())
 SWIFT
 public=$(swift "$stage/key.swift" "$stage/seed")
 other=$(swift "$stage/key.swift" "$stage/wrong-seed")
-swift "$key_source" "$public" < "$stage/seed"
-if swift "$key_source" "$other" < "$stage/seed"; then
+sh packaging/sparkle-key-check.sh "$public" < "$stage/seed"
+if sh packaging/sparkle-key-check.sh "$other" < "$stage/seed"; then
     echo 'accepted a mismatched Sparkle key' >&2
     exit 1
 fi
