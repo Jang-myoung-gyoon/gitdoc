@@ -164,3 +164,6 @@ try {
     Remove-Item "Cert:\LocalMachine\Root\$($certificate.Thumbprint)" -ErrorAction SilentlyContinue
     Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -ErrorAction SilentlyContinue
 }
+
+# The last directly invoked verifier intentionally returned nonzero for the tampered fixture.
+exit 0
