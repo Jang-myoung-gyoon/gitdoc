@@ -165,7 +165,7 @@ In HWP and HWPX, click a table or select it from **기존 표**. GitDoc outlines
 
 For existing standalone inline shapes, open **도형 선택** under **도형 서식** in Word documents or **도형 도구** in Hangul documents. Pick the shape by paragraph and size. Move it one paragraph up or down where available, enter its width and height in millimeters, or delete it. Undo is available before saving. Floating and grouped shapes require additional support. Rotation and resizing rotated shapes are outside these controls.
 
-In Hangul documents, **편집**, **서식**, and **입력** give access to clipboard tools, existing object insertion, and paragraph formatting. Select a supported body paragraph and use **서식** for font, size, bold, italic, underline, color, alignment, and line spacing. Formatting applies to the whole paragraph.
+In Hangul documents, **편집**, **서식**, and **입력** give access to clipboard tools, existing object insertion, and paragraph formatting. Select a supported body paragraph and use **서식** for font, size, bold, italic, underline, color, alignment, and line spacing. Select text inside a supported paragraph to apply character formatting to that range. With only a caret, character formatting applies to the paragraph. Alignment and line spacing apply to the whole paragraph.
 
 For HWP and HWPX, click a supported table cell on the page or choose **기존 표** and the cell coordinates under **표 레이아웃**. Use **셀 내용 편집** and **셀에 적용** to replace or clear a single line of text. Undo remains available until **수정안 저장** creates a new version in the original format. The current cell editor supports unmerged, unprotected cells with one plain text run, including empty cells.
 

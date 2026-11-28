@@ -618,7 +618,15 @@ mod tests {
         let size = vec2(560.0, 650.0);
         let mut editor = fixture(Format::Hangul, &ctx);
         editor.objects[0].hangul_format = true;
-        editor.selected = Some(editor.objects[0].target);
+        let target = editor.objects[0].target;
+        editor.start_text(target, None);
+        let id = crate::presentation::text_id(editor.session, editor.history_page, target);
+        let mut state = TextEdit::load_state(&ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(text::CCursorRange::two(
+            text::CCursor::new(1),
+            text::CCursor::new(3),
+        )));
+        state.store(&ctx, id);
         frame(&ctx, &mut editor, size, vec![]);
         let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
         let tabs = find_text(&ui.shapes, "서식");
@@ -627,7 +635,23 @@ mod tests {
         let bold = find_text(&ui.shapes, "B 진하게");
         assert!(matches!(click(&ctx, &mut editor, size, bold),
             Some(Command::Page(params)) if params["operation"] == "bold"
-                && params["target"]["id"] == 1));
+                && params["target"]["id"] == 1 && params["selection"] == json!([1, 3])));
+
+        let file =
+            std::env::temp_dir().join(format!("gitdoc-format-test-{}.png", std::process::id()));
+        image::RgbaImage::new(2, 2).save(&file).unwrap();
+        let updated = editor.update(
+            &ctx,
+            &json!({
+                "image": file, "width": 612, "height": 792, "page": 1, "count": 3,
+                "objects": [{"id": 1, "box": [0.2, 0.3, 0.8, 0.4], "text": "Body",
+                             "name": "Body", "hangul_format": true}],
+                "hangul_selection": [1, 3]
+            }),
+        );
+        std::fs::remove_file(file).unwrap();
+        updated.unwrap();
+        assert_eq!(editor.selection(&ctx), Some([1, 3]));
     }
 
     #[test]

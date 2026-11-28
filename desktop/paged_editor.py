@@ -19,7 +19,7 @@ from desktop.document_objects import (
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from desktop.hangul_cells import STALE_CELL, cell_catalog, cell_value, replace_cell, verify_cell
-from desktop.hangul_format import OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
+from desktop.hangul_format import CHARACTER, OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
 from desktop.shape_editor import apply_shape, prepare_legacy_shapes, shape_catalog
 from editing import WORD, editable_office_blocks, office_blocks, open_package, parse_part, replace_office_blocks, valid_text
 from page_text import embedded_text
@@ -356,7 +356,7 @@ class PagedEditor:
         return {"page": number, "edit_digest": key, "count": count, "width": width, "height": height,
                 "objects": objects, "tables": tables, "shapes": shapes, "hangul_fonts": hangul_fonts, "image": str(png), "fonts": fonts}
 
-    def page(self, number, operation=None, text_edit=None, target=None, value=None, **_):
+    def page(self, number, operation=None, text_edit=None, target=None, value=None, selection=None, **_):
         index = self.position
         source = self.data
         if operation == "undo":
@@ -366,7 +366,7 @@ class PagedEditor:
             index = min(len(self.states)-1, index+1)
             updated = self.states[index]
         elif (text_edit or operation) and not (operation == "page" and not text_edit):
-            updated = self.apply(source, operation, text_edit, target, value)
+            updated = self.apply(source, operation, text_edit, target, value, selection)
         else:
             updated = source
         if len(updated) > MAX_FILE:
@@ -379,9 +379,11 @@ class PagedEditor:
                 del self.states[1]
             index = len(self.states)-1
         self.position = index
+        if self.extension in HANGUL_EXTENSIONS and operation in CHARACTER and selection:
+            result["hangul_selection"] = selection
         return dict(result, undo=index > 0, redo=index+1 < len(self.states), dirty=index > 0)
 
-    def apply(self, source, operation, text_edit, target, value):
+    def apply(self, source, operation, text_edit, target, value, selection=None):
         if self.extension in HANGUL_EXTENSIONS and operation in HANGUL_FORMATS:
             identity = (target or {}).get("id")
             if text_edit or type(identity) is not int or not any(item["id"] == identity and item.get("hangul_format")
@@ -389,7 +391,20 @@ class PagedEditor:
                 raise ValueError("본문 입력을 먼저 저장하고, 서식을 적용할 문단을 선택하세요.")
             section, paragraph = identity >> 32, (identity & 0xffffffff) - 1
             data = self.shape_xml if self.extension == "hwp" else source
-            changed = format_paragraph(data, section, paragraph, operation, value)
+            text = self.texts[(section, paragraph)]
+            if operation in CHARACTER and selection is not None:
+                if (not isinstance(selection, list) or len(selection) != 2
+                        or any(type(index) is not int for index in selection)
+                        or not 0 <= selection[0] <= selection[1] <= len(text)):
+                    raise ValueError("서식을 적용할 한글 글자 범위를 다시 선택하세요.")
+                if selection[0] == selection[1]:
+                    selection = None
+            else:
+                selection = None
+            changed = format_paragraph(data, section, paragraph, operation, value,
+                                       selection=selection, original=text)
+            if changed == data:
+                return source
             return convert_format("hwpx", "hwp", changed) if self.extension == "hwp" else changed
         if operation in SHAPE_EDITS:
             address = value.get("address") if isinstance(value, dict) else None

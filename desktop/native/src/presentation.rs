@@ -290,6 +290,17 @@ impl Editor {
         self.text = None;
         if let Some(target) = self.next_text.take() {
             self.start_text(target, None);
+            if let Ok([first, last]) =
+                serde_json::from_value::<[usize; 2]>(result["hangul_selection"].clone())
+            {
+                let id = text_id(self.session, self.history_page, target);
+                let mut state = TextEdit::load_state(ctx, id).unwrap_or_default();
+                state.cursor.set_char_range(Some(text::CCursorRange::two(
+                    text::CCursor::new(first),
+                    text::CCursor::new(last),
+                )));
+                state.store(ctx, id);
+            }
         }
         self.waiting = false;
         self.error = None;

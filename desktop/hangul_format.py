@@ -1,4 +1,4 @@
-"""Apply whole-paragraph format changes using copy-on-write HWPX properties."""
+"""Apply Hangul paragraph and character formatting with copy-on-write properties."""
 
 import re
 from copy import deepcopy
@@ -144,7 +144,37 @@ def character_update(node, operation, value, active, fonts):
         raise ValueError(UNSUPPORTED)
 
 
-def format_paragraph(data, section, index, operation, value):
+def selected_runs(paragraph, selection, original):
+    runs = []
+    for run in paragraph.findall(HANGUL + "run"):
+        texts = run.findall(HANGUL + "t")
+        if texts:
+            if len(run) != 1 or len(texts[0]):
+                raise ValueError(UNSUPPORTED)
+            runs.append((run, texts[0].text or ""))
+    if "".join(value for _, value in runs) != original:
+        raise ValueError(UNSUPPORTED)
+
+    start, end = selection
+    offset = 0
+    for run, value in runs:
+        left, right = max(0, start-offset), min(len(value), end-offset)
+        offset += len(value)
+        if left >= right:
+            continue
+        if left:
+            prefix = deepcopy(run)
+            prefix[0].text = value[:left]
+            run.addprevious(prefix)
+        if right < len(value):
+            suffix = deepcopy(run)
+            suffix[0].text = value[right:]
+            run.addnext(suffix)
+        run[0].text = value[left:right]
+        yield run
+
+
+def format_paragraph(data, section, index, operation, value, *, selection=None, original=None):
     part = f"Contents/section{section}.xml"
     with open_package(data) as archive:
         header = parse_part(archive, HEADER)
@@ -161,6 +191,10 @@ def format_paragraph(data, section, index, operation, value):
             changed = clone_properties(group, nodes, [paragraph], "paraPrIDRef",
                              lambda node: paragraph_update(node, operation, value))
         elif operation in CHARACTER:
+            if selection is not None:
+                runs = list(selected_runs(paragraph, selection, original))
+                if not runs:
+                    raise ValueError(UNSUPPORTED)
             group, nodes = property_nodes(header, "char")
             fonts = font_map(header) if operation == "font" else {}
             active = True

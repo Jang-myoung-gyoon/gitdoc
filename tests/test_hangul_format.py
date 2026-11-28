@@ -7,7 +7,7 @@ import store
 from desktop.bridge import CanvasSession
 from desktop.document_objects import HANGUL
 from desktop.exporting import convert_format
-from desktop.hangul_format import HEADER, HH
+from desktop.hangul_format import HEADER, HH, format_paragraph
 from desktop.paged_editor import rhwp
 from editing import open_package, parse_part
 from mcp_server import get_preview_info, register_document, render_document_page
@@ -94,3 +94,75 @@ class HangulFormattingTests(unittest.TestCase):
                     self.assertEqual(get_preview_info(doc, proposal["id"], base)["page_counts"], [1,1])
                     _, image = render_document_page(doc, proposal["id"])
                     self.assertEqual(image.to_image_content().mimeType, "image/png")
+
+    def test_hwp_and_hwpx_style_only_selected_characters_across_existing_runs(self):
+        try:
+            rhwp_command()
+        except PreviewError as error:
+            self.skipTest(str(error))
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            rhwp(["gen-table"], folder)
+            rhwp(["edit", "delete-table", "output/gen_table.hwp", "--table", "0", "-o", "blank.hwp"], folder)
+            rhwp(["edit", "insert-text", "blank.hwp", "--text", "앞문단", "-o", "previous.hwp"], folder)
+            text = "한글 가나다 끝말"
+            rhwp(["edit", "insert-text", "previous.hwp", "--para", "1", "--text", text,
+                  "-o", "plain.hwp"], folder)
+            rhwp(["export-hwpx", "plain.hwp", "plain.hwpx"], folder)
+            mixed = format_paragraph((folder/"plain.hwpx").read_bytes(), 0, 1, "color", "1852A3",
+                                     selection=[0, 5], original=text)
+            paths = {"hwp": convert_format("hwpx", "hwp", mixed), "hwpx": mixed}
+
+            with patch.object(store, "DATABASE", folder/"ranges.sqlite3"):
+                store.initialize()
+                store.set_desktop_review(True)
+                for extension, data in paths.items():
+                    with self.subTest(extension=extension):
+                        self.check_character_range(folder, extension, data, text)
+
+    def check_character_range(self, folder, extension, data, text):
+        source = folder/f"mixed.{extension}"
+        source.write_bytes(data)
+        entry = register_document(str(source), f"Selected text {extension}")["version"]
+        doc, base = entry["document_id"], entry["id"]
+        canvas = CanvasSession()
+        self.addCleanup(canvas.close)
+        initial = canvas.open(doc, "main", base, 1)
+        target = next({"id": item["id"]} for item in initial["objects"] if item["text"] == text)
+        for selection in ([True, 3], [-1, 3], [3, 1], [2, len(text)+1]):
+            with self.assertRaises(ValueError):
+                canvas.page(number=1, operation="bold", target=target, selection=selection)
+        selection = [1, 7]
+        result = canvas.page(number=1, operation="bold", target=target, selection=selection)
+        self.assertEqual(result["hangul_selection"], selection)
+        canvas.page(number=1, operation="size", target=target, selection=selection, value=16)
+        expected = character_styles(data, extension)
+        for i in range(*selection):
+            char, color, _, _ = expected[1][i]
+            expected[1][i] = (char, color, True, "1600")
+        self.assertTrue(canvas.page(number=1, operation="undo")["redo"])
+        self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
+        proposal = canvas.save("Format selected characters", 1)
+        with store.database(readonly=True) as db:
+            unchanged = store.find_version(db, doc, base, "content")
+            saved = store.find_version(db, doc, proposal["id"], "content, extension")
+        self.assertEqual(unchanged["content"], data)
+        self.assertEqual(saved["extension"], extension)
+        self.assertEqual(character_styles(saved["content"], extension), expected)
+        review_revision(doc, proposal["id"], "approve", base)
+        self.assertIn(text, [item["text"] for item in canvas.open(doc, "main", proposal["id"], 1)["objects"]])
+        _, image = render_document_page(doc, proposal["id"])
+        self.assertTrue(image.data.startswith(b"\x89PNG"))
+
+
+def character_styles(data, extension):
+    if extension == "hwp":
+        data = convert_format("hwp", "hwpx", data)
+    with open_package(data) as archive:
+        header = parse_part(archive, HEADER)
+        section = parse_part(archive, "Contents/section0.xml")
+    styles = {node.get("id"): (node.get("textColor"), node.find(HH+"bold") is not None, node.get("height"))
+              for node in header.iter(HH+"charPr")}
+    return [[(char, *styles[run.get("charPrIDRef")])
+             for run in paragraph.findall(HANGUL+"run") for text in run.findall(HANGUL+"t")
+             for char in text.text or ""] for paragraph in section.findall(HANGUL+"p")]
