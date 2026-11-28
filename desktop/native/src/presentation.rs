@@ -89,6 +89,8 @@ struct PageTable {
     cells: Vec<table_cells::PageCell>,
     #[serde(default)]
     editable_grid: bool,
+    #[serde(default)]
+    layout_grid: bool,
 }
 
 struct Text {
@@ -159,6 +161,7 @@ pub struct Editor {
     selected_table: Option<usize>,
     selected_cell: Option<usize>,
     cell_range_end: Option<usize>,
+    cell_dimensions_mm: [u32; 2],
     cell_draft: Option<table_cells::CellDraft>,
     grid_removal: Option<table_cells::GridRemoval>,
     reveal_table: bool,
@@ -216,6 +219,7 @@ impl Editor {
             selected_table: None,
             selected_cell: None,
             cell_range_end: None,
+            cell_dimensions_mm: [25, 10],
             cell_draft: None,
             grid_removal: None,
             reveal_table: false,
@@ -301,6 +305,7 @@ impl Editor {
         self.selected_table = None;
         self.selected_cell = None;
         self.cell_range_end = None;
+        self.restore_table_selection(&result["table_selection"]);
         self.cell_draft = None;
         self.grid_removal = None;
         self.reveal_table = false;
@@ -459,6 +464,7 @@ impl Editor {
         });
         self.table_grid_tools(ui, action);
         self.table_cell_tools(ui, action);
+        self.table_layout_tools(ui, action);
         if let Some(table) = self
             .selected_table
             .and_then(|index| self.page_tables.get(index))
@@ -496,6 +502,7 @@ impl Editor {
                     | "edit_table_cell"
                     | "edit_table_grid"
                     | "edit_table_span"
+                    | "edit_table_layout"
                     | "delete_shape"
                     | "shape_up"
                     | "shape_down"

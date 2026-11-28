@@ -1,13 +1,24 @@
 """Resolve editable Hangul table cells against native document coordinates."""
 
+import json
 from collections import Counter
 from copy import deepcopy
 
 from lxml import etree
 
 from desktop.document_objects import HANGUL
+from desktop.hangul_format import HEADER, clone_properties, paragraph_update, property_nodes
 from editing import open_package, parse_part, rewrite_package, valid_text
 
+HWP_UNITS_PER_MM = 7200 / 25.4
+UNSAFE_LAYOUT = "셀 정렬은 보호되지 않은 일반 텍스트 셀에서만 사용할 수 있습니다."
+UNSAFE_SIZE = "셀 크기는 병합되지 않은 일반 표에서만 바꿀 수 있습니다."
+PARTIAL_SPAN = "정렬하려면 범위에 걸친 병합 셀 전체를 포함하세요."
+LAYOUT_MISMATCH = "한글 표 속성과 주변 내용을 확인할 수 없어 변경을 적용하지 않았습니다."
+CELL_LAYOUT_COMMANDS = {
+    "horizontal": ("left", "center", "right"),
+    "vertical": ("TOP", "CENTER", "BOTTOM"),
+}
 STALE_CELL = "편집할 표 셀을 다시 선택하세요."
 UNSAFE_SPAN = "병합·나누기는 보호되지 않은 일반 셀에서만 사용할 수 있습니다."
 SPAN_STYLES = "선택한 셀의 테두리·여백·정렬 또는 머리글이 달라 서식을 보존한 채 합칠 수 없습니다."
@@ -102,8 +113,242 @@ def cell_catalog(data, tables):
                              for coordinate, element, _ in source_cells(native, table)}
                 catalog[(*address, table["control"])] = (
                     supported, editable_grid(native, table, supported), splittable_cells(native, table),
+                    layout_cells(native, table),
                 )
     return catalog
+
+
+
+def layout_paragraphs(cell):
+    if not ordinary_cell(cell):
+        return []
+    sublist = cell.find(HANGUL + "subList")
+    if sublist.get("textDirection", "HORIZONTAL") != "HORIZONTAL":
+        return []
+    for p in sublist:
+        if (p.tag != HANGUL + "p" or any(
+                child.tag not in (HANGUL + "run", HANGUL + "linesegarray") for child in p)
+                or any(text.tag != HANGUL + "t" or len(text) for run in p.findall(HANGUL + "run") for text in run)):
+            return []
+    return list(sublist)
+
+
+def layout_cells(native, table):
+    if not ordinary_table(native, table):
+        return {}
+    cells = grid_cells(native)
+    if len(cells) != len(table["cells"]):
+        return {}
+    result = {}
+    for item in table["cells"]:
+        row, col, rows, cols = (item[key] for key in ("row", "col", "rowSpan", "colSpan"))
+        cell = cells.get((row, col))
+        if cell is None or not layout_paragraphs(cell):
+            continue
+        span = cell.find(HANGUL + "cellSpan")
+        if (span.get("rowSpan") != str(rows) or span.get("colSpan") != str(cols)
+                or not (0 <= row < table["rows"] and 0 <= col < table["cols"]
+                        and 1 <= rows <= table["rows"]-row and 1 <= cols <= table["cols"]-col)):
+            continue
+        result[row, col] = (rows, cols)
+    return result
+
+
+def layout_range(table, coordinate, end):
+    anchors = {(c["row"], c["col"]): (c["rowSpan"], c["colSpan"]) for c in table["cells"]}
+    if coordinate not in anchors or end not in anchors:
+        raise ValueError(STALE_CELL)
+    start = tuple(map(min, zip(coordinate, end)))
+    stop = tuple(max(a + x, b + y) for a, b, x, y in zip(coordinate, end, anchors[coordinate], anchors[end]))
+    if (stop[0] - start[0]) * (stop[1] - start[1]) > 1000:
+        raise ValueError("한 번에 최대 1,000개 셀까지 편집할 수 있습니다.")
+    selected = []
+    covered = set()
+    for (row, col), (rows, cols) in anchors.items():
+        if row >= stop[0] or col >= stop[1] or row+rows <= start[0] or col+cols <= start[1]:
+            continue
+        if not (start[0] <= row and start[1] <= col and row+rows <= stop[0] and col+cols <= stop[1]):
+            raise ValueError(PARTIAL_SPAN)
+        selected.append((row, col))
+        for r in range(row, row+rows):
+            for c in range(col, col+cols):
+                if (r, c) in covered:
+                    raise ValueError(UNSAFE_LAYOUT)
+                covered.add((r, c))
+    if len(covered) != (stop[0]-start[0]) * (stop[1]-start[1]):
+        raise ValueError(UNSAFE_LAYOUT)
+    return selected
+
+
+def resize_cells(native, table, cells, supported, selected, axis, value):
+    if (native.get("cellSpacing", "0") != "0"
+            or not editable_grid(native, table, supported)
+            or any(span != (1, 1) for span in supported.values())):
+        raise ValueError(UNSAFE_SIZE)
+    dimension = 0 if axis == "height" else 1
+    first, last = ("top", "bottom") if dimension == 0 else ("left", "right")
+    targets = {coordinate[dimension] for coordinate in selected}
+    units = round(value * HWP_UNITS_PER_MM)
+    size = native.find(HANGUL + "sz")
+    dimensions = {}
+    affected = []
+    changed_cells = []
+    try:
+        for coordinate, cell in cells.items():
+            node = cell.find(HANGUL + "cellSz")
+            length = int(node.get(axis))
+            strip = coordinate[dimension]
+            if length <= 0 or dimensions.setdefault(strip, length) != length:
+                raise ValueError(UNSAFE_SIZE)
+            if strip in targets:
+                margin = cell.find(HANGUL + "cellMargin")
+                if cell.get("hasMargin", "0") != "1" or margin is None:
+                    margin = native.find(HANGUL + "inMargin")
+                if margin is not None and units < sum(int(margin.get(key, "0")) for key in (first, last)) + round(HWP_UNITS_PER_MM):
+                    raise ValueError("셀 크기는 안쪽 여백보다 커야 합니다.")
+                if length != units:
+                    node.set(axis, str(units))
+                    affected.extend(layout_paragraphs(cell))
+                    changed_cells.append(coordinate)
+        total = int(size.get(axis))
+        delta = sum(units-dimensions[strip] for strip in targets)
+        if total <= 0 or total+delta <= 0 or (axis == "width" and total != sum(dimensions.values())):
+            raise ValueError(UNSAFE_SIZE)
+        if delta:
+            size.set(axis, str(total+delta))
+    except TypeError as error:
+        raise ValueError(UNSAFE_SIZE) from error
+    commands = []
+    if changed_cells:
+        if axis == "width":
+            widths = [units if index in targets else dimensions[index] for index in range(table["cols"])]
+            commands.append(("set-column-widths", ["--widths", ",".join(map(str, widths))]))
+        else:
+            commands = [cell_properties_command(row, col, {"height": units}) for row, col in changed_cells]
+    return affected, commands
+
+
+def cell_properties_command(row, col, props):
+    return "set-cell-props", ["--row", str(row), "--col", str(col), "--props", json.dumps(props)]
+
+
+def format_cells(data, table, coordinate, end, change, value):
+    part = section_part(table["section"])
+    with open_package(data) as archive:
+        root = parse_part(archive, part)
+        native = source_table(root, table)
+        if native is None or not ordinary_table(native, table):
+            raise ValueError(UNSAFE_LAYOUT)
+        selected = layout_range(table, coordinate, end)
+        supported = layout_cells(native, table)
+        if any(key not in supported for key in selected):
+            raise ValueError(UNSAFE_LAYOUT)
+        cells = grid_cells(native)
+        parts = {part: root}
+        commands = []
+        if change in ("width", "height"):
+            changed, commands = resize_cells(native, table, cells, supported, selected, change, value)
+        elif change == "horizontal":
+            targets = [(row, col, index, p, p.get("paraPrIDRef"))
+                       for row, col in selected for index, p in enumerate(layout_paragraphs(cells[row, col]))]
+            paragraphs = [p for _, _, _, p, _ in targets]
+            header = parse_part(archive, HEADER)
+            group, nodes = property_nodes(header, "para")
+            clone_properties(group, nodes, paragraphs, "paraPrIDRef", lambda node: paragraph_update(node, "align", value))
+            changed = []
+            for row, col, index, p, original in targets:
+                if p.get("paraPrIDRef") != original:
+                    changed.append(p)
+                    commands.append(("apply-para-format-in-cell", [
+                        "--row", str(row), "--col", str(col), "--cell-para", str(index),
+                        "--props", json.dumps({"alignment": value}),
+                    ]))
+            if changed:
+                parts[HEADER] = header
+        else:
+            changed = []
+            for key in selected:
+                cell = cells[key]
+                sublist = cell.find(HANGUL + "subList")
+                if sublist.get("vertAlign") != value:
+                    sublist.set("vertAlign", value)
+                    changed.extend(layout_paragraphs(cell))
+                    commands.append(cell_properties_command(*key, {"verticalAlign": CELL_LAYOUT_COMMANDS["vertical"].index(value)}))
+        if not changed:
+            return data, []
+        for paragraph in changed:
+            if (cache := paragraph.find(HANGUL + "linesegarray")) is not None:
+                paragraph.remove(cache)
+        return rewrite_package(archive, parts), commands
+
+
+def alignment_references(original, expected, saved):
+    _, initial = property_nodes(original, "para")
+    expected_group, desired = property_nodes(expected, "para")
+    actual_group, actual = property_nodes(saved, "para")
+    if any(key not in actual or xml_signature(node) != xml_signature(actual[key]) for key, node in initial.items()):
+        raise ValueError(LAYOUT_MISMATCH)
+
+    def appearance(node):
+        signature = xml_signature(node)
+        attributes = signature[1]
+        attributes.pop("id")
+        return signature
+
+    styles = [(key, appearance(node)) for key, node in desired.items()]
+    refs = {}
+    for key, node in actual.items():
+        if key in initial:
+            continue
+        signature = appearance(node)
+        match = next((ident for ident, style in styles if style == signature), None)
+        if match is None:
+            raise ValueError(LAYOUT_MISMATCH)
+        refs[key] = match
+    # rhwp can append a duplicate paragraph style for each cell. Compare its effect by reference.
+    for key in refs:
+        actual_group.remove(actual[key])
+    for key, node in desired.items():
+        if key not in initial:
+            actual_group.append(deepcopy(node))
+    actual_group.set("itemCnt", expected_group.get("itemCnt"))
+    return refs
+
+
+def verify_cell_layout(source, expected, actual, table, change):
+    part = section_part(table["section"])
+    with open_package(source) as original, open_package(expected) as before, open_package(actual) as after:
+        filenames = {name for name in before.namelist() if name.startswith(("Contents/", "BinData/"))}
+        if filenames != {name for name in after.namelist() if name.startswith(("Contents/", "BinData/"))}:
+            raise ValueError(LAYOUT_MISMATCH)
+        if any(before.read(name) != after.read(name) for name in filenames - {part, HEADER}):
+            raise ValueError(LAYOUT_MISMATCH)
+
+        styles, actual_styles = (parse_part(archive, HEADER) for archive in (before, after))
+        refs = alignment_references(parse_part(original, HEADER), styles, actual_styles) if change == "horizontal" else {}
+        if xml_signature(styles) != xml_signature(actual_styles):
+            raise ValueError(LAYOUT_MISMATCH)
+
+        roots = [parse_part(archive, part) for archive in (before, after)]
+        for root in roots:
+            native = source_table(root, table)
+            if native is None:
+                raise ValueError(LAYOUT_MISMATCH)
+            # The writer can refresh cached line metrics within the table.
+            for cache in list(native.iter(HANGUL + "linesegarray")):
+                cache.getparent().remove(cache)
+            if change == "height":
+                # rhwp recomputes the frame height from rendered row minima.
+                size = native.find(HANGUL + "sz")
+                height = size.attrib.pop("height", "") if size is not None else ""
+                if not height.isascii() or not height.isdecimal() or int(height) <= 0:
+                    raise ValueError(LAYOUT_MISMATCH)
+        for paragraph in roots[1].iter(HANGUL + "p"):
+            key = paragraph.get("paraPrIDRef")
+            if key in refs:
+                paragraph.set("paraPrIDRef", refs[key])
+        if xml_signature(roots[0]) != xml_signature(roots[1]):
+            raise ValueError(LAYOUT_MISMATCH)
 
 
 def replace_cell(data, table, coordinate, value):

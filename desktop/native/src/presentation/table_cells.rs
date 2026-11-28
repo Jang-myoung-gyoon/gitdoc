@@ -5,7 +5,11 @@ use serde_json::{Value, json};
 #[derive(serde::Deserialize)]
 pub(super) struct PageCell {
     coordinate: [u32; 2],
-    text: String,
+    text: Option<String>,
+    #[serde(default)]
+    layout: bool,
+    #[serde(default)]
+    split: bool,
     #[serde(rename = "box")]
     pub(super) bounds: [f32; 4],
     span: Option<[u32; 2]>,
@@ -85,7 +89,6 @@ impl Editor {
                 self.selected_cell = Some(index);
                 if extend
                     && selected == self.selected_table
-                    && table.editable_grid
                     && let Some(anchor) = first
                     && anchor != index
                 {
@@ -231,7 +234,7 @@ impl Editor {
         let last = self.cell_range_end;
         let selection = selected.map(|index| &table.cells[index]);
         let editable = self.text_edit().is_none();
-        if table.editable_grid
+        if table.cells.len() > 1
             && let Some(index) = selected
         {
             ui.menu_button("범위 끝 선택", |ui| {
@@ -266,7 +269,7 @@ impl Editor {
             ui.label(format!("{} ↔ {}", first.name(), last.name()));
             button(
                 ui,
-                editable,
+                editable && table.editable_grid,
                 "셀 합치기",
                 "선택 범위의 내용을 첫 셀에 문단 순서로 합칩니다.",
                 || {
@@ -285,7 +288,7 @@ impl Editor {
         if let Some(cell) = selection.filter(|cell| cell.span.is_some()) {
             button(
                 ui,
-                editable,
+                editable && cell.split,
                 "셀 나누기",
                 "기존 줄·칸 경계로 나누고 내용은 왼쪽 위 셀에 둡니다.",
                 || {
@@ -298,7 +301,7 @@ impl Editor {
             );
             return;
         }
-        let text = selection.map(|cell| cell.text.clone());
+        let text = selection.and_then(|cell| cell.text.clone());
         button(
             ui,
             text.is_some() && self.text_edit().is_none(),
@@ -306,6 +309,112 @@ impl Editor {
             "선택한 셀의 한 줄 텍스트를 바꿉니다. 입력 중인 본문은 먼저 반영하세요.",
             || self.cell_draft = text.map(|text| CellDraft { text, focus: true }),
         );
+    }
+
+    pub(super) fn restore_table_selection(&mut self, selection: &Value) {
+        let Ok(address) = serde_json::from_value::<Vec<u32>>(selection["address"].clone()) else {
+            return;
+        };
+        let Ok(coordinate) = serde_json::from_value::<[u32; 2]>(selection["coordinate"].clone())
+        else {
+            return;
+        };
+        if let Some((index, table)) = self
+            .page_tables
+            .iter()
+            .enumerate()
+            .find(|(_, item)| item.address == address)
+        {
+            self.selected_table = Some(index);
+            self.selected_cell = table
+                .cells
+                .iter()
+                .position(|cell| cell.coordinate == coordinate);
+            self.cell_range_end = serde_json::from_value::<[u32; 2]>(selection["end"].clone())
+                .ok()
+                .and_then(|end| table.cells.iter().position(|cell| cell.coordinate == end));
+        }
+    }
+
+    pub(super) fn table_layout_tools(
+        &mut self,
+        ui: &mut Ui,
+        action: &mut Option<(&'static str, Value)>,
+    ) {
+        if self.format != Format::Hangul {
+            return;
+        }
+        let Some(table) = self
+            .selected_table
+            .and_then(|index| self.page_tables.get(index))
+        else {
+            return;
+        };
+        let Some(first) = self.selected_table_cell() else {
+            return;
+        };
+        let last = self.cell_range_end.and_then(|index| table.cells.get(index));
+        let mut selection = json!({"address":table.address, "digest":self.edit_digest, "coordinate":first.coordinate});
+        if let Some(end) = last {
+            selection["end"] = json!(end.coordinate);
+        }
+        let editable =
+            self.text_edit().is_none() && first.layout && last.is_none_or(|cell| cell.layout);
+        let mut apply = |change: &str, value: Value| {
+            let mut params = selection.clone();
+            params["change"] = json!(change);
+            params["value"] = value;
+            *action = Some(("edit_table_layout", params));
+        };
+        ui.separator();
+        ui.strong("셀 속성");
+        ui.add_enabled_ui(editable, |ui| {
+            for (menu, change, items) in [
+                (
+                    "가로 맞춤",
+                    "horizontal",
+                    [("왼쪽", "left"), ("가운데", "center"), ("오른쪽", "right")],
+                ),
+                (
+                    "세로 맞춤",
+                    "vertical",
+                    [("위", "TOP"), ("가운데", "CENTER"), ("아래", "BOTTOM")],
+                ),
+            ] {
+                ui.menu_button(menu, |ui| {
+                    for (label, value) in items {
+                        if ui.button(label).clicked() {
+                            apply(change, json!(value));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            ui.add_enabled_ui(table.layout_grid, |ui| {
+                ui.menu_button("셀 크기", |ui| {
+                    ui.label("선택한 열과 행 전체에 적용합니다.");
+                    for (index, label, button, change) in [
+                        (0, "열 너비", "너비 적용", "width"),
+                        (1, "최소 행 높이", "높이 적용", "height"),
+                    ] {
+                        ui.horizontal(|ui| {
+                            let title = ui.label(label);
+                            let value = &mut self.cell_dimensions_mm[index];
+                            ui.add(DragValue::new(value).range(2..=180).suffix(" mm"))
+                                .labelled_by(title.id);
+                            if ui.button(button).clicked() {
+                                apply(change, json!(*value));
+                                ui.close();
+                            }
+                        });
+                    }
+                })
+                .response
+                .on_disabled_hover_text(
+                    "셀 크기는 병합되지 않은 일반 표에서만 지정할 수 있습니다.",
+                );
+            });
+        });
     }
 
     pub(super) fn cell_dialog(&mut self, ctx: &Context) -> Option<super::Command> {
@@ -316,7 +425,8 @@ impl Editor {
             self.cell_draft = None;
             return None;
         };
-        let (name, original) = (cell.name(), cell.text.clone());
+        let name = cell.name();
+        let original = cell.text.clone()?;
         let (address, coordinate) = (table.address.clone(), cell.coordinate);
         let draft = self.cell_draft.as_mut()?;
         let modal = Modal::new(Id::new("hangul-cell-edit")).show(ctx, |ui| {
