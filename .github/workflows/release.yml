@@ -96,6 +96,9 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    env:
+      GITDOC_DISTRIBUTION: ${{ github.repository == 'Jang-myoung-gyoon/gitdoc' && github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
+      GITDOC_WINDOWS_UPDATE_SIGNERS: ${{ vars.GITDOC_WINDOWS_UPDATE_SIGNERS }}
     defaults:
       run:
         shell: pwsh
@@ -112,8 +115,6 @@ jobs:
             choco install innosetup --no-progress -y
           }
       - name: Build the installer
-        env:
-          GITDOC_WINDOWS_UPDATE_SIGNERS: ${{ vars.GITDOC_WINDOWS_UPDATE_SIGNERS }}
         run: ./packaging/windows.ps1
       - name: Smoke test the installer
         run: |
@@ -122,6 +123,11 @@ jobs:
           $install = "$env:RUNNER_TEMP\GitDoc"
           $run = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$install`"" -Wait -PassThru
           if ($run.ExitCode -ne 0) { throw "setup exited with $($run.ExitCode)" }
+          if ($env:GITDOC_DISTRIBUTION -eq 'true') {
+            $expected = $env:GITDOC_WINDOWS_UPDATE_SIGNERS.Trim() -split '\s+'
+            $installedPins = Get-Content "$install\app\WINDOWS_UPDATE_SIGNERS"
+            if (Compare-Object $expected $installedPins -CaseSensitive) { throw "Unexpected installed updater signer pins" }
+          }
           $key = "HKCU:\Software\Classes\gitdoc"
           $command = (Get-Item "$key\shell\open\command").GetValue("")
           if ($command -ne "`"$install\gitdoc-desktop.exe`" `"%1`"") { throw "gitdoc:// opens $command" }

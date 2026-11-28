@@ -64,9 +64,11 @@ Get-Content packaging\gitdoc.iss | Set-Content $brokenRecipe
 @'
 
 [Code]
+procedure FixtureExit(ExitCode: Cardinal);
+external 'ExitProcess@kernel32.dll stdcall';
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then RaiseException('Injected update failure');
+  if CurStep = ssPostInstall then FixtureExit(27);
 end;
 '@ | Add-Content $brokenRecipe
 $broken = Build-Fixture $old '0.1.5' $brokenRecipe
@@ -74,14 +76,17 @@ $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=GitD
 try {
     $public = Join-Path $testRoot "fixture.cer"
     Export-Certificate -Cert $certificate -FilePath $public | Out-Null
-    Import-Certificate -FilePath $public -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+    Write-Output 'Adding the disposable signer to the ephemeral machine trust store.'
+    Import-Certificate -FilePath $public -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+    Write-Output 'Disposable test certificate imported.'
     $pin = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($certificate.RawData)).Replace('-','').ToLowerInvariant()
     foreach ($file in @($success, $broken)) {
         $signature = Set-AuthenticodeSignature -FilePath $file -Certificate $certificate -HashAlgorithm SHA256
         if ($signature.Status -ne 'Valid') { throw "Test signature was not trusted: $($signature.Status)" }
     }
     $dirArg = '/DIR="' + $install + '"'
-    $initial = Start-Process $prior -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES',$dirArg -Wait -PassThru
+    $initial = Start-Process $prior -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES',$dirArg -PassThru
+    if (!$initial.WaitForExit(30000)) { throw 'Old fixture setup timed out.' }
     if ($initial.ExitCode -ne 0) { throw "Old fixture did not install." }
     $env:GITDOC_UPDATE_PATH = $install
     $env:GITDOC_UPDATE_MODE = "verify"
@@ -129,17 +134,22 @@ try {
             throw "Installed fixture did not restart with the expected version and status."
         }
     }
+    Write-Output 'Checking the signed Inno upgrade.'
     Exercise-Fixture $success 'new|installed'
     $uninstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6A2E4C0B-3C0F-4F6E-9B57-7D1B6C1F5E21}_is1'
     $record = Get-ItemProperty $uninstall
     if ($record.DisplayVersion -ne '0.1.4' -or $record.InstallLocation.TrimEnd('\') -ine $install) {
         throw "The signed installer changed the per-user identity or install location."
     }
+    Write-Output 'Checking failure recovery after fixture files were copied.'
     Exercise-Fixture $broken 'new|failed'
+    if ((Get-ItemProperty $uninstall).DisplayVersion -ne '0.1.4') {
+        throw "Recovery did not restore the prior uninstall registration."
+    }
     $checked = Get-FileHash (Join-Path $data '*') | Select-Object -ExpandProperty Hash
     if (Compare-Object $hashes $checked) { throw "User data or settings changed during update." }
     Write-Output "Verified unsigned rejection, signed in-place update, restart and recovery after injected setup failure."
 } finally {
-    Remove-Item "Cert:\CurrentUser\Root\$($certificate.Thumbprint)" -ErrorAction SilentlyContinue
+    Remove-Item "Cert:\LocalMachine\Root\$($certificate.Thumbprint)" -ErrorAction SilentlyContinue
     Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -ErrorAction SilentlyContinue
 }

@@ -9,6 +9,8 @@ if ($pins.Count -gt 2 -or ($pins | Where-Object { $_ -cnotmatch '^[0-9a-f]{64}$'
     throw "Pass one or two lowercase SHA-256 certificate digests."
 }
 $resolved = (Resolve-Path -LiteralPath $Setup).Path
+$signature = Get-AuthenticodeSignature -LiteralPath $resolved
+if (!$signature.TimeStamperCertificate) { throw "The release installer requires an Authenticode timestamp." }
 $env:GITDOC_UPDATE_SETUP = $resolved
 $env:GITDOC_UPDATE_STAGE = Split-Path $resolved -Parent
 $env:GITDOC_UPDATE_PATH = $env:GITDOC_UPDATE_STAGE

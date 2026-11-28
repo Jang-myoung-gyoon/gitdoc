@@ -5,6 +5,11 @@ $stage = [IO.Path]::GetFullPath($env:GITDOC_UPDATE_STAGE)
 $install = [IO.Path]::GetFullPath($env:GITDOC_UPDATE_PATH)
 $application = Join-Path $install "gitdoc-desktop.exe"
 $components = @("app", "python", "gitdoc-desktop.exe", "gitdoc-pdf.exe")
+$registration = @(
+    "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6A2E4C0B-3C0F-4F6E-9B57-7D1B6C1F5E21}_is1",
+    "HKCU\Software\Classes\gitdoc"
+)
+$reg = Join-Path $env:SystemRoot "System32\reg.exe"
 
 function Assert-Installer {
     $signature = Get-AuthenticodeSignature -LiteralPath $setup
@@ -61,10 +66,18 @@ try {
     try {
         Assert-Installer
         New-Item -ItemType Directory -Path $backup | Out-Null
-        foreach ($name in $components) {
+        $uninstallFiles = @(Get-ChildItem -LiteralPath $install -File | Where-Object { $_.Name -match '^unins[0-9]+\.(exe|dat|msg)$' })
+        foreach ($name in $components + @($uninstallFiles.Name)) {
             Copy-Item -LiteralPath (Join-Path $install $name) -Destination $backup -Recurse -Force
         }
-        $process = Start-Process -FilePath $setup -ArgumentList '/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS', '/NORESTARTAPPLICATIONS', "/DIR=`"$install`"" -PassThru
+        for ($index = 0; $index -lt $registration.Count; $index++) {
+            $key = $registration[$index]
+            if (Test-Path ($key -replace '^HKCU', 'HKCU:')) {
+                & $reg export $key (Join-Path $backup "registry-$index.reg") /y | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "Cannot back up installer registration." }
+            }
+        }
+        $process = Start-Process -FilePath $setup -Verb Open -ArgumentList '/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS', '/NORESTARTAPPLICATIONS', "/DIR=`"$install`"" -PassThru
         $changed = $true
         $process.WaitForExit()
         if ($process.ExitCode -ne 0) { throw "Setup exited with code $($process.ExitCode)." }
@@ -77,6 +90,24 @@ try {
                 $target = Join-Path $install $name
                 if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
                 Copy-Item -LiteralPath (Join-Path $backup $name) -Destination $install -Recurse -Force
+            }
+            Get-ChildItem -LiteralPath $install -File |
+                Where-Object { $_.Name -match '^unins[0-9]+\.(exe|dat|msg)$' } |
+                Remove-Item -Force
+            Get-ChildItem -LiteralPath $backup -File |
+                Where-Object { $_.Name -match '^unins[0-9]+\.(exe|dat|msg)$' } |
+                Copy-Item -Destination $install -Force
+            for ($index = 0; $index -lt $registration.Count; $index++) {
+                $key = $registration[$index]
+                if (Test-Path ($key -replace '^HKCU', 'HKCU:')) {
+                    & $reg delete $key /f | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "Cannot restore installer registration." }
+                }
+                $savedKey = Join-Path $backup "registry-$index.reg"
+                if (Test-Path -LiteralPath $savedKey) {
+                    & $reg import $savedKey | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "Cannot restore installer registration." }
+                }
             }
         } catch { $keepBackup = $true }
     }

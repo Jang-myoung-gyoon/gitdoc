@@ -335,6 +335,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desktop_controls_require_an_explicit_install_click_and_the_signer_configuration() {
+        let ctx = egui::Context::default();
+        let (request, work) = mpsc::channel();
+        let (_, replies) = mpsc::channel();
+        let mut updates = Updates {
+            worker: Some(request),
+            replies,
+            state: State::Idle,
+            next_check: Instant::now(),
+            busy: false,
+            interactive: false,
+            windows: true,
+        };
+        let frame = |updates: &mut Updates, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640.0, 440.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    if updates.dialog(ctx) {
+                        return;
+                    }
+                    egui::CentralPanel::default().show(ctx, |ui| updates.control(ui, true));
+                },
+            )
+        };
+        let click = |updates: &mut Updates, label| {
+            let _ = frame(updates, vec![]);
+            let output = frame(updates, vec![]);
+            let pos = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("Missing control {label}"));
+            for pressed in [true, false] {
+                frame(
+                    updates,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        };
+        frame(&mut updates, vec![]);
+        click(&mut updates, "업데이트 확인…");
+        assert!(matches!(work.try_recv(), Ok(Request::Manual)));
+        let result = |can_install| State::Available {
+            version: "0.1.4".into(),
+            notes: "Release notes".into(),
+            digest: "approved-hash".into(),
+            can_install,
+        };
+        updates.state = result(false);
+        updates.busy = false;
+        click(&mut updates, "다운로드 및 설치");
+        assert!(work.try_recv().is_err());
+        updates.state = result(true);
+        assert!(work.try_recv().is_err());
+        click(&mut updates, "다운로드 및 설치");
+        assert!(
+            matches!(work.try_recv(), Ok(Request::Install { version, digest })
+                         if version == "0.1.4" && digest == "approved-hash")
+        );
+    }
+
+    #[test]
     fn background_results_and_manual_approval_are_separate() {
         let ctx = egui::Context::default();
         let (request, work) = mpsc::channel();

@@ -26,7 +26,7 @@ GitDoc은 Rust의 [eframe](https://github.com/emilk/egui/tree/main/crates/eframe
 macOS 패키지는 Apple Silicon용입니다.
 
 - **macOS**에서 디스크 이미지를 열고 GitDoc을 응용 프로그램 폴더로 끌어 놓은 뒤 실행합니다. v0.1.2부터 공개 앱과 디스크 이미지는 Developer ID로 서명되며, 디스크 이미지에 Apple 공증 티켓이 포함됩니다.
-- **Windows**에서 설치 파일을 실행합니다. 설치 파일에는 서명이 없습니다. SmartScreen 화면이 나타나면 **추가 정보 ▸ 실행**을 선택합니다. 관리자 권한 없이 현재 사용자에게 설치하고 `gitdoc://` 링크를 등록합니다. 제거하면 앱과 링크 등록이 함께 지워집니다.
+- **Windows**에서 설치 파일을 실행합니다. 업데이트 지원판은 서명된 설치 파일을 사용하고 Windows가 표시하는 발행자를 확인하세요. 관리자 권한 없이 현재 사용자에게 설치하고 `gitdoc://` 링크를 등록합니다. 제거하면 앱과 링크 등록이 함께 지워집니다.
 
 패키지 앱은 저장소, 미리보기 캐시, 로그를 macOS에서는 `~/Library/Application Support/GitDoc`, Windows에서는 `%APPDATA%\GitDoc`에 둡니다. 앱을 제거하거나 교체해도 이 폴더는 남습니다. `DOCVERS_DB`로 다른 저장소 파일을 지정할 수 있습니다.
 

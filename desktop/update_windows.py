@@ -101,6 +101,12 @@ def download(update, target):
         raise UpdateError("설치 파일 검증에 실패했습니다. 다시 다운로드하세요.")
 
 
+def mark_internet_download(target, source):
+    # Preserve the Internet zone for the shell and SmartScreen when launching an executable.
+    with open(f"{target}:Zone.Identifier", "x", encoding="ascii", newline="\r\n") as zone:
+        zone.write(f"[ZoneTransfer]\nZoneId=3\nHostUrl={source}\n")
+
+
 def publisher_pins(root):
     file = root/"WINDOWS_UPDATE_SIGNERS"
     if not file.is_file():
@@ -146,6 +152,7 @@ def install(root, installed, pins, version, digest, parent_id):
     try:
         installer = stage/"GitDoc-setup.exe"
         download(update, installer)
+        mark_internet_download(installer, update["url"])
         run_update_helper(root, installer, update, pins, parent_id, stage)
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)

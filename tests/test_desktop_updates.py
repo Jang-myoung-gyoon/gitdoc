@@ -88,3 +88,5 @@ class WindowsUpdatesTests(unittest.TestCase):
                     launch.assert_called_once()
                     self.assertEqual(launch.call_args.kwargs["env"]["GITDOC_UPDATE_PARENT"], "123")
                     self.assertEqual((stage/"GitDoc-setup.exe").read_bytes(), INSTALLER)
+                    with open(f'{stage/"GitDoc-setup.exe"}:Zone.Identifier', encoding="ascii") as zone:
+                        self.assertIn("ZoneId=3", zone.read())

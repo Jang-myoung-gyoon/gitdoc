@@ -15,6 +15,9 @@ $project = "desktop\native"
 $version = (Select-String -Path "$project\Cargo.toml" -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches.Groups[1].Value
 if (-not $version) { throw "version not found in $project\Cargo.toml" }
 $stage = "dist\windows\GitDoc"
+if ($env:GITDOC_DISTRIBUTION -eq 'true' -and [string]::IsNullOrWhiteSpace($env:GITDOC_WINDOWS_UPDATE_SIGNERS)) {
+    throw "A stable Windows package must embed the approved Authenticode signer pin."
+}
 
 $native = $env:GITDOC_NATIVE_DIR
 if (-not $native) {
