@@ -18,10 +18,13 @@ from desktop.document_objects import (
 )
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
+from desktop.hangul_cell_appearance import (
+    PAINT_MISMATCH, paint_references, paint_request, plan_cell_paint, verify_cell_paint,
+)
 from desktop.hangul_cells import (
     CELL_LAYOUT_COMMANDS, GRID_MISMATCH, GRID_OPERATIONS, LAYOUT_MISMATCH, MAX_SUBDIVISION, SPAN_MISMATCH,
     STALE_CELL, SUBDIVISION_MISMATCH, UNSAFE_GRID, UNSAFE_LAYOUT, UNSAFE_SIZE, UNSAFE_SUBDIVISION,
-    cell_catalog, cell_value, format_cells, replace_cell, subdivision_axes, subdivision_children,
+    cell_catalog, cell_properties_command, cell_value, format_cells, replace_cell, subdivision_axes, subdivision_children,
     verify_cell, verify_cell_layout, verify_grid, verify_span, verify_subdivision,
 )
 from desktop.hangul_format import CHARACTER, OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
@@ -538,12 +541,17 @@ class PagedEditor:
         if (not isinstance(end, list) or len(end) != 2 or any(type(i) is not int for i in end)
                 or not any(cell["coordinate"] == end and cell["layout"] for cell in chosen["cells"])):
             raise ValueError(STALE_CELL)
+        paint = None
+        if change in ("border", "background"):
+            if "value" not in value:
+                raise ValueError("적용할 테두리나 배경을 지정하세요.")
+            paint = paint_request(change, amount)
         if change in ("width", "height"):
             if not chosen["layout_grid"]:
                 raise ValueError(UNSAFE_SIZE)
             if type(amount) is not int or not 2 <= amount <= 180:
                 raise ValueError("셀 너비와 높이는 2~180 mm로 입력하세요.")
-        elif not isinstance(change, str) or amount not in CELL_LAYOUT_COMMANDS.get(change, ()):
+        elif paint is None and (not isinstance(change, str) or amount not in CELL_LAYOUT_COMMANDS.get(change, ())):
             raise ValueError(UNSAFE_LAYOUT)
         with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
             document = Path(work)/f"document.{self.extension}"
@@ -553,6 +561,13 @@ class PagedEditor:
             if native is None:
                 raise ValueError(STALE_CELL)
             xml = hangul_xml(document)
+            if paint is not None:
+                plan = plan_cell_paint(xml, native, tuple(coordinate), tuple(end), paint)
+                if plan is None:
+                    return source
+                if self.extension == "hwpx":
+                    return plan.document
+                return self.save_native_cell_paint(document, source, xml, native, plan)
             changed, commands = format_cells(xml, native, tuple(coordinate), tuple(end), change, amount)
             if not commands:
                 return source
@@ -571,6 +586,44 @@ class PagedEditor:
                                doc_info=change == "horizontal")
             verify_cell_layout(xml, changed, hangul_xml(document), native, change)
             return document.read_bytes()
+
+    def save_native_cell_paint(self, document, source, xml, native, plan):
+        original_refs = paint_references(xml, native)
+        changes = sum(original_refs[key] != value for key, value in plan.references.items())
+        if changes > 100:
+            raise ValueError("HWP에서는 한 번에 최대 100개 셀의 테두리나 배경을 바꿀 수 있습니다.")
+        folder = document.parent
+        stage = 0
+
+        def write_cell(coordinate, props):
+            nonlocal document, stage
+            output = folder / f"cell-paint-{stage % 2}.hwp"
+            if output.exists():
+                output.unlink()
+            command, flags = cell_properties_command(*coordinate, props)
+            rhwp(["edit", command, str(document), "--table", str(native["index"]), *flags,
+                  "-o", str(output)], folder)
+            document = output
+            stage += 1
+
+        aliases = {}
+        current = original_refs
+        for style, (coordinate, props) in plan.new_styles.items():
+            write_cell(coordinate, props)
+            current = paint_references(hangul_xml(document), native)
+            if current.keys() != original_refs.keys() or current[coordinate] is None:
+                raise ValueError(PAINT_MISMATCH)
+            aliases[style] = current[coordinate]
+        for coordinate, style in plan.references.items():
+            desired = aliases.get(style, style)
+            if current[coordinate] != desired:
+                if desired is None:
+                    raise ValueError(PAINT_MISMATCH)
+                # rhwp paints both sides of a shared edge. Reassign references without repainting neighbors.
+                write_cell(coordinate, {"borderFillId": int(desired)})
+        verify_hwp_streams(source, document, native["section"], PAINT_MISMATCH, doc_info=True)
+        verify_cell_paint(xml, plan, hangul_xml(document), native, aliases)
+        return document.read_bytes()
 
     def change_grid(self, source, chosen, coordinate, value):
         if not chosen.get("editable_grid"):

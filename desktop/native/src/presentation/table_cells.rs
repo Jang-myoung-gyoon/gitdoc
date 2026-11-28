@@ -25,6 +25,89 @@ impl PageCell {
     }
 }
 
+pub(super) struct CellPaint {
+    side: &'static str,
+    width: &'static str,
+    style: &'static str,
+    border_color: [u8; 3],
+    background: [u8; 3],
+}
+
+impl Default for CellPaint {
+    fn default() -> Self {
+        Self {
+            side: "all",
+            width: "0.3",
+            style: "solid",
+            border_color: [0, 0, 0],
+            background: [252, 232, 175],
+        }
+    }
+}
+
+impl CellPaint {
+    fn show(&mut self, ui: &mut Ui, mut apply: impl FnMut(&str, Value)) {
+        let rgb = |[r, g, b]: [u8; 3]| format!("#{r:02X}{g:02X}{b:02X}");
+        ui.menu_button("셀 테두리", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (label, value) in [
+                    ("네 면", "all"),
+                    ("왼쪽", "left"),
+                    ("오른쪽", "right"),
+                    ("위", "top"),
+                    ("아래", "bottom"),
+                ] {
+                    ui.selectable_value(&mut self.side, value, label);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.style, "solid", "실선");
+                ui.selectable_value(&mut self.style, "none", "선 없음");
+            });
+            ui.add_enabled_ui(self.style == "solid", |ui| {
+                ui.horizontal(|ui| {
+                    for (label, value) in [
+                        ("0.2 mm", "0.2"),
+                        ("0.3 mm", "0.3"),
+                        ("0.5 mm", "0.5"),
+                        ("0.7 mm", "0.7"),
+                    ] {
+                        ui.selectable_value(&mut self.width, value, label);
+                    }
+                });
+                let label = ui.label("선 색");
+                ui.color_edit_button_srgb(&mut self.border_color)
+                    .labelled_by(label.id);
+            });
+            if ui.button("테두리 적용").clicked() {
+                apply(
+                    "border",
+                    json!({"side":self.side, "style":self.style,
+                    "width":self.width, "color":rgb(self.border_color)}),
+                );
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text("선택 범위의 각 셀에 지정한 면의 테두리를 적용합니다.");
+        ui.menu_button("셀 배경", |ui| {
+            let label = ui.label("배경색");
+            ui.color_edit_button_srgb(&mut self.background)
+                .labelled_by(label.id);
+            if ui.button("배경색 적용").clicked() {
+                apply("background", json!(rgb(self.background)));
+                ui.close();
+            }
+            if ui.button("배경 없음").clicked() {
+                apply("background", Value::Null);
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text("선택 범위의 각 셀에 단색 배경을 적용합니다.");
+    }
+}
+
 pub(super) struct CellDraft {
     text: String,
     focus: bool,
@@ -415,6 +498,7 @@ impl Editor {
                     }
                 });
             }
+            self.cell_paint.show(ui, &mut apply);
             ui.add_enabled_ui(table.layout_grid, |ui| {
                 ui.menu_button("셀 크기", |ui| {
                     ui.label("선택한 열과 행 전체에 적용합니다.");

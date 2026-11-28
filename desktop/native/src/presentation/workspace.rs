@@ -1091,6 +1091,14 @@ mod tests {
             ("세로 맞춤", "아래", "vertical", json!("BOTTOM")),
             ("셀 크기", "너비 적용", "width", json!(25)),
             ("셀 크기", "높이 적용", "height", json!(10)),
+            (
+                "셀 테두리",
+                "테두리 적용",
+                "border",
+                json!({"side":"all", "style":"solid", "width":"0.3", "color":"#000000"}),
+            ),
+            ("셀 배경", "배경색 적용", "background", json!("#FCE8AF")),
+            ("셀 배경", "배경 없음", "background", json!(null)),
         ] {
             assert!(press(&mut editor, menu).is_none());
             assert!(
