@@ -130,12 +130,18 @@ try {
         $env:GITDOC_UPDATE_SHA256 = (Get-FileHash -Algorithm SHA256 $setupPath).Hash.ToLowerInvariant()
         $env:GITDOC_UPDATE_MODE = "apply"
         if (Test-Path $marker) { Remove-Item -LiteralPath $marker }
-        $run = Start-Process $winPS -ArgumentList "-NoProfile", "-NonInteractive", "-EncodedCommand", $encoded -PassThru
+        $stderr = Join-Path $testRoot "updater-stderr.log"
+        $run = Start-Process $winPS -ArgumentList "-NoProfile", "-NonInteractive", "-EncodedCommand", $encoded -RedirectStandardError $stderr -PassThru
         if (!$run.WaitForExit(90000)) { throw "Update helper timed out." }
+        Get-Content $stderr | Write-Output
         if ($run.ExitCode -ne 0) { throw "Update helper exited with $($run.ExitCode)." }
-        for ($i = 0; $i -lt 30 -and !(Test-Path $marker); $i++) { Start-Sleep -Milliseconds 100 }
-        if (!(Test-Path $marker) -or (Get-Content -Raw $marker) -ne $expected) {
-            throw "Installed fixture did not restart with the expected version and status."
+        $result = $null
+        for ($i = 0; $i -lt 50 -and !$result; $i++) {
+            if (Test-Path $marker) { $result = Get-Content -Raw $marker }
+            if (!$result) { Start-Sleep -Milliseconds 100 }
+        }
+        if ($result -ne $expected) {
+            throw "Installed fixture returned '$result', expected '$expected'."
         }
     }
     Write-Output 'Checking the signed Inno upgrade.'

@@ -84,6 +84,7 @@ try {
         $installed = $true
     } finally { $stream.Dispose() }
 } catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
     if ($changed) {
         try {
             foreach ($name in $components) {
@@ -109,7 +110,10 @@ try {
                     if ($LASTEXITCODE -ne 0) { throw "Cannot restore installer registration." }
                 }
             }
-        } catch { $keepBackup = $true }
+        } catch {
+            [Console]::Error.WriteLine($_.Exception.Message)
+            $keepBackup = $true
+        }
     }
     if ($keepBackup) {
         Add-Type -AssemblyName System.Windows.Forms
