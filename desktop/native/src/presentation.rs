@@ -409,8 +409,8 @@ impl Editor {
         if self.page_tables.is_empty() {
             return;
         }
-        ui.strong("표 레이아웃");
         let menu = if self.format == Format::Word {
+            ui.strong("표 레이아웃");
             "문서 표"
         } else {
             "기존 표"

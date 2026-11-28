@@ -8,11 +8,15 @@ pub(super) enum HangulTab {
     Edit,
     Format,
     Insert,
+    Table,
 }
 
 impl Editor {
     pub(super) fn hangul_tools(&mut self, ui: &mut Ui) -> Option<(&'static str, Value)> {
         let mut action = None;
+        if self.hangul_tab == HangulTab::Table && self.page_tables.is_empty() {
+            self.hangul_tab = HangulTab::Edit;
+        }
         ui.add_enabled_ui(!self.waiting, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (value, label) in [
@@ -21,6 +25,9 @@ impl Editor {
                     (HangulTab::Insert, "입력"),
                 ] {
                     ui.selectable_value(&mut self.hangul_tab, value, label);
+                }
+                if !self.page_tables.is_empty() {
+                    ui.selectable_value(&mut self.hangul_tab, HangulTab::Table, "표 레이아웃");
                 }
             });
             ui.separator();
@@ -38,20 +45,7 @@ impl Editor {
                             });
                         }
                         ui.separator();
-                        button(
-                            ui,
-                            self.undo || self.text_edit().is_some(),
-                            "↶ 실행 취소",
-                            "Ctrl/⌘+Z",
-                            || action = Some(("undo_tool", Value::Null)),
-                        );
-                        button(
-                            ui,
-                            self.redo || self.text.is_some(),
-                            "↷ 다시 실행",
-                            "Ctrl/⌘+Shift+Z",
-                            || action = Some(("redo_tool", Value::Null)),
-                        );
+                        self.hangul_history_tools(ui, &mut action);
                         ui.separator();
                         ui.strong("서식");
                         if ui.button("글자 · 문단 모양").clicked() {
@@ -70,13 +64,34 @@ impl Editor {
                         self.insertion_tools(ui, &mut action);
                     });
                 }
-            }
-            if !self.page_tables.is_empty() {
-                ui.horizontal_wrapped(|ui| self.table_tools(ui, &mut action));
+                HangulTab::Table => {
+                    ui.horizontal_wrapped(|ui| {
+                        self.hangul_history_tools(ui, &mut action);
+                        ui.separator();
+                        self.table_tools(ui, &mut action);
+                    });
+                }
             }
             self.paged_shape_tools(ui, &mut action);
         });
         action
+    }
+
+    fn hangul_history_tools(&self, ui: &mut Ui, action: &mut Option<(&'static str, Value)>) {
+        button(
+            ui,
+            self.undo || self.text_edit().is_some(),
+            "↶ 실행 취소",
+            "Ctrl/⌘+Z",
+            || *action = Some(("undo_tool", Value::Null)),
+        );
+        button(
+            ui,
+            self.redo || self.text.is_some(),
+            "↷ 다시 실행",
+            "Ctrl/⌘+Shift+Z",
+            || *action = Some(("redo_tool", Value::Null)),
+        );
     }
 
     pub(super) fn can_format_hangul(&self) -> bool {

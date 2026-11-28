@@ -685,8 +685,12 @@ mod tests {
                 },
             ];
             frame(&ctx, &mut editor, size, vec![]);
-            let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
-            find_text(&ui.shapes, "표 레이아웃");
+            let (mut ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            let layout = find_text(&ui.shapes, "표 레이아웃");
+            if format == Format::Hangul {
+                assert!(click(&ctx, &mut editor, size, layout).is_none());
+                (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            }
             let tables = find_text(&ui.shapes, menu_name);
             assert!(click(&ctx, &mut editor, size, tables).is_none());
             let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
@@ -716,6 +720,9 @@ mod tests {
         .unwrap();
 
         frame(&ctx, &mut editor, size, vec![]);
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        let layout = find_text(&output.shapes, "표 레이아웃");
+        assert!(click(&ctx, &mut editor, size, layout).is_none());
         let (output, _) = frame(&ctx, &mut editor, size, vec![]);
         assert!(
             click(
@@ -808,6 +815,7 @@ mod tests {
             Some(pos2(25.0, 50.0)),
         );
         assert_eq!(editor.selected_cell, Some(0));
+        assert!(editor.hangul_tab == crate::presentation::hangul_ribbon::HangulTab::Table);
     }
 
     #[test]
@@ -831,6 +839,7 @@ mod tests {
         };
         frame(&ctx, &mut editor, size, vec![]);
         for label in [
+            "표 레이아웃",
             "기존 표",
             "표 1 · 2행 × 2열",
             "셀 선택",

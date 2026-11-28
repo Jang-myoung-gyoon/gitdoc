@@ -58,6 +58,7 @@ impl Editor {
             && tables.next().is_none()
         {
             self.selected_table = Some(index);
+            self.hangul_tab = super::hangul_ribbon::HangulTab::Table;
             let mut cells = table
                 .cells
                 .iter()
