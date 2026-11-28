@@ -58,6 +58,10 @@ py -3.12 -m venv .venv
 
 The repository defaults to `data/documents.sqlite3`. Set `DOCVERS_DB` to use a different file and give the desktop app, CLI, and MCP the same value.
 
+### Desktop updates
+
+Starting with the first updater-enabled release, use **Settings → Check for updates** to review a stable release and approve its installation. Install that first release over GitDoc 0.1.3 once to activate this feature. Keep the existing install location and workspace. See the [desktop update release checklist](docs/desktop-updates.md) for signing and publication requirements.
+
 ### Cutting a release
 
 The [release workflow](.github/workflows/release.yml) builds both packages with `packaging/macos.sh` and `packaging/windows.ps1`, installs each one on a clean runner, and checks it with `packaging/smoke.py`. It runs on pull requests that touch the app or the packaging, on manual dispatch, and on version tags.

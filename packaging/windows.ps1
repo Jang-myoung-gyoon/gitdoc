@@ -30,7 +30,14 @@ Remove-Item -Recurse -Force "dist\windows" -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$stage\app\desktop", "dist\cache" | Out-Null
 Copy-Item "$native\gitdoc-desktop.exe", "$native\gitdoc-pdf.exe" $stage
 Copy-Item *.py, LICENSE "$stage\app"
-Copy-Item desktop\*.py "$stage\app\desktop"
+Copy-Item desktop\*.py, desktop\windows-update.ps1 "$stage\app\desktop"
+if ($env:GITDOC_WINDOWS_UPDATE_SIGNERS) {
+    $pins = $env:GITDOC_WINDOWS_UPDATE_SIGNERS.Trim() -split '\s+'
+    if ($pins.Count -gt 2 -or ($pins | Where-Object { $_ -cnotmatch '^[0-9a-f]{64}$' })) {
+        throw "Windows update signer pins must be one or two lowercase SHA-256 certificate digests."
+    }
+    Set-Content -Path "$stage\app\WINDOWS_UPDATE_SIGNERS" -Value $pins -Encoding ascii
+}
 Copy-Item -Recurse templates, static "$stage\app"
 Set-Content -Path "$stage\app\PACKAGED" -Value $version -Encoding ascii
 

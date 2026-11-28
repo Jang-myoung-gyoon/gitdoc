@@ -58,13 +58,17 @@ py -3.12 -m venv .venv
 
 기본 저장소는 `data/documents.sqlite3`입니다. `DOCVERS_DB`로 경로를 바꾸고 데스크톱 앱, CLI, MCP에 같은 값을 지정합니다.
 
+### 데스크톱 업데이트
+
+업데이트 기능이 포함된 첫 버전부터 **설정 → 업데이트 확인…**에서 정식 릴리스의 변경 사항을 보고 설치를 승인할 수 있습니다. v0.1.3에서는 이 기능이 포함된 첫 버전을 기존 설치 위치에 한 번 덮어쓰면 됩니다. 기존 문서함과 저장소 설정은 계속 사용할 수 있습니다. 서명과 게시 조건은 [업데이트 릴리스 절차](docs/desktop-updates.md)를 참고하세요.
+
 ### 릴리스 만들기
 
 [릴리스 워크플로](.github/workflows/release.yml)는 `packaging/macos.sh`와 `packaging/windows.ps1`로 두 패키지를 빌드하고, 깨끗한 러너에 각각 설치한 뒤 `packaging/smoke.py`로 확인합니다. 앱이나 패키징을 바꾸는 풀 리퀘스트, 수동 실행, 버전 태그에서 실행됩니다.
 
 1. `desktop/native/Cargo.toml`의 `version`을 새 버전으로 바꾸고 `cargo update --manifest-path desktop/native/Cargo.toml --package gitdoc-desktop`으로 `Cargo.lock`을 갱신한 뒤 병합합니다. 패키지 버전은 이 파일에서 가져옵니다.
 2. 그 커밋에 `vX.Y.Z` 태그를 붙여 푸시합니다. `git tag v0.2.0 && git push origin v0.2.0`
-3. 워크플로가 태그와 버전이 일치하는지 확인합니다. 양쪽 설치 테스트와 macOS Developer ID 서명, Apple 공증, 공증 티켓 첨부, Gatekeeper 검사를 통과하면 태그 실행에서 두 설치 파일을 내려받아 저장소 소유자 계정으로 함께 게시합니다.
+3. 워크플로가 태그와 버전이 일치하는지 확인합니다. 양쪽 설치 테스트와 macOS Developer ID 서명, Apple 공증, 공증 티켓 첨부, Gatekeeper 검사를 통과하면 태그 실행에서 macOS DMG와 서명된 업데이트 피드, Authenticode 서명을 검증한 Windows 설치 파일을 저장소 소유자 계정으로 함께 게시합니다.
 
 macOS 서명 및 공증 단계는 원본 저장소의 버전 태그 푸시에서 실행됩니다. 이 단계에서 Actions Secret `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`를 사용합니다. 풀 리퀘스트와 수동 실행 빌드는 ad-hoc 서명을 사용합니다.
 
