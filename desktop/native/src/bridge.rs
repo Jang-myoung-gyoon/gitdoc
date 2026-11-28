@@ -104,6 +104,22 @@ impl Bridge {
                 let mut images = Vec::new();
                 let result = match request.op {
                     "page" | "changes" => render(&request, &mut renderer, &mut images, call),
+                    "pdf_objects" => call(request.op, &request.params).and_then(|value| {
+                        let path = value["image"]
+                            .as_str()
+                            .ok_or("PDF 미리보기 경로가 없습니다.")?;
+                        let rgba = image::open(path)
+                            .map_err(|error| error.to_string())?
+                            .into_rgba8();
+                        images.push(Some(
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [rgba.width() as usize, rgba.height() as usize],
+                                rgba.as_raw(),
+                            )
+                            .into(),
+                        ));
+                        Ok(value)
+                    }),
                     _ => call(request.op, &request.params),
                 };
                 if output

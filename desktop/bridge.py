@@ -28,6 +28,7 @@ from store import (
 from uploads import load_local_file, prepare_upload
 from workbook import read_workbook
 from pdf_text_edit import pdf_text_targets
+from pdf_objects import edit_objects, open_objects
 from workflow import merge_revision, require, reset_branch, restore_revision, review_revision, save_document_edit, save_proposal
 
 
@@ -241,6 +242,20 @@ def edit_pdf_contents(doc, version, page):
     return pdf_text_targets(record["content"], page)
 
 
+def pdf_objects(doc, version, page, objects=None):
+    with database(readonly=True) as db:
+        record = item(db, doc, version, "extension, content")
+    if record["extension"] != "pdf":
+        raise ValueError("PDF 문서를 선택하세요.")
+    data = record["content"]
+    if objects is not None:
+        data = edit_objects(data, page, objects)
+    targets, image = open_objects(data, page)
+    path = Path(font_raster_folder().name) / "pdf-objects.png"
+    image.save(path, format="PNG")
+    return {"objects": targets, "image": str(path)}
+
+
 def edit_contents(doc, version):
     with database(readonly=True) as db:
         record = item(db, doc, version, "extension, content")
@@ -327,7 +342,8 @@ OPERATIONS = {
     "view": view, "page_notes": page_notes, "page_text": preview_text, "register": register,
     "branch": create_branch, "submit": submit, "edit": edit, "edit_contents": edit_contents, "review": review,
     "restore": restore, "rewind": rewind, "save": save_file, "print": print_preview, "merge": merge,
-    "pdf_text_targets": edit_pdf_contents, "browser": open_browser_view, "font_raster": font_raster,
+    "pdf_text_targets": edit_pdf_contents, "pdf_objects": pdf_objects,
+    "browser": open_browser_view, "font_raster": font_raster,
     "deck_open": canvas_editor.open, "deck_page": canvas_editor.page,
     "deck_save": canvas_editor.save, "deck_close": canvas_editor.close,
 }

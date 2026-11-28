@@ -4,6 +4,7 @@ use crate::{
     office_editor::Editor,
     paper::{self, PaperRow},
     paper_text::{self, Lines},
+    pdf_objects::PdfObjects,
     pdf_text_tools::PdfTextEditor,
     presentation,
 };
@@ -73,6 +74,7 @@ struct Form {
     error: Option<String>,
     office: Option<Editor>,
     pdf_text: Option<PdfTextEditor>,
+    pdf_objects: Option<PdfObjects>,
     find_mode: bool,
 }
 
@@ -96,6 +98,7 @@ impl Form {
             error: None,
             office: None,
             pdf_text: None,
+            pdf_objects: None,
             find_mode: false,
         }
     }
@@ -408,6 +411,27 @@ impl GitDoc {
         );
     }
 
+    fn open_pdf_objects(&mut self) {
+        let page = self.target_page();
+        let editor = PdfObjects::new();
+        let scope = editor.scope();
+        self.open_form(
+            Action::Edit,
+            "PDF 개체 편집",
+            json!({"doc":self.doc,"branch":self.branch,"base":self.head()}),
+        );
+        if let Some(form) = &mut self.form {
+            form.mode = "pdf_objects".into();
+            form.page = page;
+            form.pdf_objects = Some(editor);
+        }
+        if !self.request("pdf_objects", scope, json!({"doc":self.doc,"version":self.head(),"page":page}))
+            && let Some(editor) = self.form.as_mut().and_then(|form| form.pdf_objects.as_mut())
+        {
+            editor.request_failed(self.notice.clone());
+        }
+    }
+
     fn open_editor_form(&mut self, find_only: bool) {
         let page = self.target_page();
         let extension = self
@@ -502,6 +526,14 @@ impl GitDoc {
             match reply.result {
                 Ok(value) => self.review_enabled = value == true,
                 Err(error) => self.notify(error, true),
+            }
+            return;
+        }
+        if reply.op == "pdf_objects" {
+            if let Some(editor) = self.form.as_mut().and_then(|form| form.pdf_objects.as_mut())
+                && editor.scope() == reply.scope
+            {
+                editor.load(ctx, reply.result, reply.images.into_iter().next().flatten());
             }
             return;
         }
@@ -1155,6 +1187,11 @@ impl GitDoc {
                 && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("본문 수정")).clicked()
             {
                 self.open_pdf_text();
+            }
+            if extension == "pdf"
+                && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("개체 편집")).clicked()
+            {
+                self.open_pdf_objects();
             }
             if extension == "docx"
                 && ui.add_enabled(selected > 0 && selected == self.head(), Button::new("텍스트 수정")).clicked()
@@ -2050,8 +2087,9 @@ impl GitDoc {
         let wide_editor = form.mode == "blocks" && editor_width >= 850.0 && preview.is_some();
         let mut save = false;
         let mut cancel = false;
+        let mut pdf_request = None;
         let modal = Modal::new(Id::new(("form", form.title))).show(ctx, |ui| {
-            ui.set_width(if wide_editor { editor_width } else if form.mode == "blocks" { editor_width.min(620.0) } else { 390.0 });
+            ui.set_width(if wide_editor { editor_width } else if matches!(form.mode.as_str(), "blocks" | "pdf_objects") { editor_width.clamp(230.0, 670.0) } else { 390.0 });
             ui.heading(form.title);
             ui.add_enabled_ui(!form.submitting, |ui| {
                 if form.needs_file() {
@@ -2104,6 +2142,17 @@ impl GitDoc {
                         "pdf_text" => {
                             if let Some(editor) = &mut form.pdf_text {
                                 editor.show(ui, preview, form.error.is_some());
+                            }
+                        }
+                        "pdf_objects" => {
+                            if let Some(editor) = &mut form.pdf_objects
+                                && let Some(objects) = editor.show(ui)
+                            {
+                                form.error = None;
+                                pdf_request = Some((editor.scope(), json!({
+                                    "doc":form.values["doc"], "version":form.values["base"],
+                                    "page":form.page, "objects":objects,
+                                })));
                             }
                         }
                         "replace" => {
@@ -2219,6 +2268,7 @@ impl GitDoc {
                     && (!required_reason || !form.reason.trim().is_empty())
                     && (!required_name || !form.name.trim().is_empty())
                     && (form.mode != "pdf_text" || form.pdf_text.as_ref().and_then(|editor| editor.fields(form.page)).is_some())
+                    && (form.mode != "pdf_objects" || form.pdf_objects.as_ref().and_then(|editor| editor.fields(form.page)).is_some())
                     && (form.mode != "blocks" || if form.find_mode {
                         !form.find.is_empty() && form.find != form.replacement
                     } else { form.office.as_ref().is_some_and(Editor::has_changes) });
@@ -2265,6 +2315,11 @@ impl GitDoc {
                         }
                         "pdf_text" => form
                             .pdf_text
+                            .as_ref()
+                            .and_then(|editor| editor.fields(form.page))
+                            .unwrap_or_default(),
+                        "pdf_objects" => form
+                            .pdf_objects
                             .as_ref()
                             .and_then(|editor| editor.fields(form.page))
                             .unwrap_or_default(),
@@ -2318,6 +2373,11 @@ impl GitDoc {
             }
         } else if cancel || escape {
             self.form = None;
+        } else if let Some((scope, params)) = pdf_request
+            && !self.request("pdf_objects", scope, params)
+            && let Some(editor) = self.form.as_mut().and_then(|form| form.pdf_objects.as_mut())
+        {
+            editor.request_failed(self.notice.clone());
         }
     }
 }

@@ -31,7 +31,7 @@ jobs:
       - name: Install the document converters
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreoffice-writer libreoffice-impress poppler-utils
+          sudo apt-get install -y libreoffice-writer libreoffice-impress poppler-utils fonts-nanum
           archive="$RUNNER_TEMP/rhwp.tar.gz"
           curl --fail --location --retry 3 -o "$archive" "https://github.com/edwardkim/rhwp/releases/download/v0.9.0/rhwp-v0.9.0-linux-x86_64.tar.gz"
           echo "837910d858162537f3f04b35ae8f5ad65fb42cc8e3582b1e174ce605b6ac7952  $archive" | sha256sum --check
@@ -47,6 +47,7 @@ jobs:
           python -m unittest discover -s tests -p test_document_objects.py -v
           python -m unittest discover -s tests -p test_presentation_edit.py -v
           python -m unittest discover -s tests -p test_pdf_text_edit.py -v
+          python -m unittest discover -s tests -p test_pdf_objects.py -v
 
   desktop-toolbar:
     runs-on: macos-15

@@ -175,6 +175,8 @@ To insert pages, enter the page number they should go before. Enter the current 
 
 For PDFs, **본문 수정** opens an editor for supported existing text objects on the current page. Select the highlighted text or choose it from the list, enter one replacement line that fits, and save it as a new PDF version. The editor verifies the saved text and the unchanged area around the edit. Scanned pages, interactive forms, signed or encrypted files, and unsupported font encodings have limited or unavailable text editing.
 
+Open **개체 편집** on the current PDF page to insert a text box, rectangle, ellipse, triangle, or arrow. Click opposite corners of its box. Select an object created in this editor to move or delete it, or use **실행 취소** and **다시 실행** before saving. Text boxes support Korean and English when an installed font allows PDF embedding. Saving creates a PDF version with extractable text and vector paths and preserves the source version.
+
 ## Exporting versions
 
 Open **Save** to export the selected version. Every supported format can be saved as PDF. Extra choices depend on the source format.

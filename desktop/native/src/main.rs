@@ -7,6 +7,7 @@ mod pages;
 mod paper;
 mod paper_text;
 mod pdf_text_tools;
+mod pdf_objects;
 mod presentation;
 mod printing;
 mod screen;

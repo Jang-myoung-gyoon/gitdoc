@@ -19,6 +19,7 @@ from pypdf.errors import PyPdfError
 
 from extract import ZIP_MARKERS, ordered_parts
 from pdf_edit import edit_pdf_bytes
+from pdf_objects import edit_objects
 from pdf_text_edit import replace_pdf_text
 from preview import PreviewError, rhwp_command, run_converter
 
@@ -485,6 +486,8 @@ def edit_pdf(data, fields, source=None):
     if fields.get("operation") == "replace_text_object":
         return replace_pdf_text(data, page_number, fields.get("index"),
                                 fields.get("original"), fields.get("replacement")), None
+    if fields.get("operation") == "edit_page_objects":
+        return edit_objects(data, page_number, fields.get("objects")), None
     return edit_pdf_bytes(data, page_number, fields.get("operation"),
                           valid_text(fields.get("note", ""), 1000, multiline=True), source)
 
