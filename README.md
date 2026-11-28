@@ -175,6 +175,8 @@ In **표 레이아웃**, select a cell or a rectangular range and use **가로 �
 
 Select a single regular cell and use **행·열로 나누기** to create up to six rows and six columns inside it. Leave one count at 1 to split in just one direction. The original text stays in the upper-left cell and the other cells start blank with matching formatting. Neighboring cells span the new boundaries as needed. **병합 셀 나누기** restores the existing boundaries of a merged cell. Subdivision requires a fully visible, regular table without merged or protected cells, and space for the new cells and their margins.
 
+Use **셀 테두리** to set a solid line or remove the line on one or all four sides of each selected cell. **셀 배경** sets or clears a solid color. These actions support a single cell or a rectangle that fully covers any merged cells it touches. An adjoining cell's border can still draw a visible line along a shared edge. The commands leave protected or nested cells and unsupported styles unchanged. HWP changes are limited to 100 cells per action.
+
 DOC uses LibreOffice to convert to DOCX for editing and back to DOC when saving. HWP and HWPX use rhwp with table and shape insertion support. HWP triangles and right arrows use editable, closed HWPX polygons that rhwp saves back to HWP. Legacy format conversions can change existing layout or formatting. For direct text entry, the canvas uses the font, size, and color from the preview. Unavailable fonts follow the document font substitution rules.
 
 The desktop app, MCP, and CLI use the same Rust PDF editor, powered by [lopdf](https://github.com/J-F-Liu/lopdf). The macOS app bundle includes the editor, and the standard Cargo build creates it alongside the Windows app. Password-protected and signed originals cannot be edited.

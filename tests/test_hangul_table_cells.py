@@ -9,6 +9,7 @@ from PIL import Image, ImageChops
 import store
 from desktop.bridge import CanvasSession
 from desktop.document_objects import HANGUL
+from desktop.hangul_cell_appearance import HC
 from desktop.hangul_cells import HWP_UNITS_PER_MM, grid_cells, source_table, xml_signature
 from desktop.hangul_format import HEADER, HH
 from desktop.paged_editor import PagedEditor, exported_tables, hangul_xml, rhwp
@@ -240,6 +241,132 @@ class HangulTableCellTests(unittest.TestCase):
         review_revision(doc, proposal["id"], "approve", base)
         reopened = canvas.open(doc, "main", proposal["id"], 1)
         self.assertEqual(reopened["tables"][1]["address"], address)
+        self.assertEqual(get_preview_info(doc, proposal["id"], base)["page_counts"], [1, 1])
+        _, image = render_document_page(doc, proposal["id"])
+        self.assertTrue(image.data.startswith(b"\x89PNG"))
+
+    def test_cell_appearance_roundtrip_preserves_neighbors_and_shared_styles(self):
+        try:
+            rhwp_command()
+        except PreviewError as error:
+            self.skipTest(str(error))
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            self.fixture(folder)
+            self.subdivision_fixture(folder)
+            rhwp(["edit", "merge-cells", "subdivision.hwp", "--table", "1", "--row", "0",
+                  "--col", "1", "--end-row", "1", "--end-col", "1", "-o", "paint-merged.hwp"], folder)
+            rhwp(["export-hwpx", "paint-merged.hwp", "paint-merged.hwpx"], folder)
+            with patch.object(store, "DATABASE", folder/"appearance.sqlite3"):
+                store.initialize()
+                store.set_desktop_review(True)
+                for extension in ("hwp", "hwpx"):
+                    with self.subTest(extension=extension):
+                        self.exercise_appearance(folder, extension)
+                        original = (folder/f"paint-merged.{extension}").read_bytes()
+                        editor = PagedEditor(extension, original)
+                        try:
+                            page = editor.page(1)
+                            params = {"address": page["tables"][1]["address"], "digest": page["edit_digest"],
+                                      "coordinate": [0, 0], "end": [0, 2], "change": "background", "value": "#FCE8AF"}
+                            with self.assertRaisesRegex(ValueError, "병합 셀 전체"):
+                                editor.page(1, "edit_table_layout", value=params)
+                            self.assertEqual(editor.data, original)
+                            self.assertEqual(editor.position, 0)
+                            del params["end"]
+                            params["coordinate"] = [0, 1]
+                            self.assertTrue(editor.page(1, "edit_table_layout", value=params)["dirty"])
+                        finally:
+                            editor.close()
+
+    def exercise_appearance(self, folder, extension):
+        def inspect_styles(path):
+            tables = exported_tables(path)
+            with open_package(hangul_xml(path)) as archive:
+                header = parse_part(archive, HEADER)
+                styles = {node.get("id"): node for node in header.iter(HH + "borderFill")}
+                refs = []
+                for table in tables[:2]:
+                    body = parse_part(archive, f"Contents/section{table['section']}.xml")
+                    refs.append({key: node.get("borderFillIDRef")
+                                 for key, node in grid_cells(source_table(body, table)).items()})
+            return styles, refs
+
+        path = folder/f"subdivision.{extension}"
+        original = path.read_bytes()
+        old_styles, old_refs = inspect_styles(path)
+        original_layout = [table_layout_state(path, index) for index in (0, 1)]
+        record = register_document(str(path), f"Cell appearance {extension}")["version"]
+        doc, base = record["document_id"], record["id"]
+        canvas = CanvasSession()
+        self.addCleanup(canvas.close)
+        opened = canvas.open(doc, "main", base, 1)
+        address = opened["tables"][1]["address"]
+
+        def edit(snapshot, change, coordinate=(1, 1), **kwargs):
+            params = {"address": address, "digest": snapshot["edit_digest"], "coordinate": list(coordinate),
+                      "change": change, **kwargs}
+            return canvas.page(number=1, operation="edit_table_layout", value=params)
+
+        border = {"side": "right", "style": "solid", "width": "0.5", "color": "#1852A3"}
+        for invalid in ({"value": "#x"}, {}, {"value": "#FCE8AF", "digest": "stale"}):
+            with self.assertRaises(ValueError):
+                edit(opened, "background", **invalid)
+        for invalid in ({"width": "0.6"}, {"side": "center"}):
+            with self.assertRaises(ValueError):
+                edit(opened, "border", value=dict(border, **invalid))
+        self.assertEqual(canvas.working.data, original)
+        self.assertEqual(canvas.working.position, 0)
+        raster = Image.open(opened["image"]).convert("RGB")
+        bordered = edit(opened, "border", value=border)
+        bordered_raster = Image.open(bordered["image"]).convert("RGB")
+        bounds = ImageChops.difference(raster, bordered_raster).getbbox()
+        self.assertIsNotNone(bounds)
+        self.assertLess(bounds[2]-bounds[0], 12)
+        unlined = edit(bordered, "border", value=dict(border, style="none"))
+        self.assertIsNotNone(ImageChops.difference(bordered_raster, Image.open(unlined["image"]).convert("RGB")).getbbox())
+        bordered = canvas.page(number=1, operation="undo")
+
+        filled = edit(bordered, "background", value="#FCE8AF", end=[0, 0])
+        self.assertEqual(filled["table_selection"]["end"], [0, 0])
+        cleared = edit(filled, "background", coordinate=(0, 0), value=None)
+        final_raster = Image.open(cleared["image"]).convert("RGB")
+        self.assertIsNotNone(ImageChops.difference(bordered_raster, final_raster).getbbox())
+        final = canvas.working.data
+        self.assertTrue(canvas.page(number=1, operation="undo")["redo"])
+        self.assertNotEqual(canvas.working.data, final)
+        self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
+        self.assertEqual(canvas.working.data, final)
+        proposal = canvas.save("Cell appearance", 1)
+        with store.database(readonly=True) as db:
+            self.assertEqual(store.find_version(db, doc, base, "content")["content"], original)
+            saved = store.find_version(db, doc, proposal["id"], "content, extension")
+        self.assertEqual(saved["extension"], extension)
+        self.assertTrue(matches_format(extension, saved["content"]))
+        saved_path = folder/f"appearance-saved.{extension}"
+        saved_path.write_bytes(saved["content"])
+        self.assertEqual([table_layout_state(saved_path, index) for index in (0, 1)], original_layout)
+        styles, refs = inspect_styles(saved_path)
+        self.assertEqual(refs[0], old_refs[0])
+        self.assertEqual({key: xml_signature(styles[key]) for key in old_styles},
+                         {key: xml_signature(node) for key, node in old_styles.items()})
+        changed = {(0, 1), (1, 0), (1, 1)}
+        for key, old_id in old_refs[1].items():
+            if key not in changed:
+                self.assertEqual(refs[1][key], old_id)
+                continue
+            before, after = old_styles[old_id], styles[refs[1][key]]
+            self.assertEqual(after.find(f"{HC}fillBrush/{HC}winBrush").get("faceColor"), "#FCE8AF")
+            for side in ("left", "right", "top", "bottom"):
+                line = HH+side+"Border"
+                if key == (1, 1) and side == "right":
+                    self.assertEqual(tuple(after.find(line).get(attr) for attr in ("type", "width", "color")),
+                                     ("SOLID", "0.5 mm", "#1852A3"))
+                else:
+                    self.assertEqual(xml_signature(before.find(line)), xml_signature(after.find(line)))
+        review_revision(doc, proposal["id"], "approve", base)
+        reopened = canvas.open(doc, "main", proposal["id"], 1)
+        self.assertIsNone(ImageChops.difference(final_raster, Image.open(reopened["image"]).convert("RGB")).getbbox())
         self.assertEqual(get_preview_info(doc, proposal["id"], base)["page_counts"], [1, 1])
         _, image = render_document_page(doc, proposal["id"])
         self.assertTrue(image.data.startswith(b"\x89PNG"))
@@ -526,6 +653,10 @@ class HangulTableCellTests(unittest.TestCase):
                                 editor.page(1, "edit_table_layout", value={"address": table["address"],
                                     "coordinate": [0, 0], "digest": opened["edit_digest"],
                                     "change": "horizontal", "value": "right"})
+                            with self.assertRaises(ValueError):
+                                editor.page(1, "edit_table_layout", value={"address": table["address"],
+                                    "coordinate": [0, 0], "digest": opened["edit_digest"],
+                                    "change": "background", "value": "#FCE8AF"})
                         self.assertEqual(editor.position, 0)
                         self.assertEqual(editor.data, original)
                     finally:
