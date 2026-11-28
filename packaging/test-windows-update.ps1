@@ -93,6 +93,25 @@ try {
     & $winPS -NoProfile -NonInteractive -EncodedCommand $encoded
     if ($LASTEXITCODE -eq 0) { throw "Unsigned setup was accepted." }
 
+    $env:GITDOC_UPDATE_SETUP = $success
+    $env:GITDOC_UPDATE_SHA256 = (Get-FileHash -Algorithm SHA256 $success).Hash.ToLowerInvariant()
+    & $winPS -NoProfile -NonInteractive -EncodedCommand $encoded
+    if ($LASTEXITCODE -ne 0) { throw "The signed fixture failed verification." }
+    $env:GITDOC_UPDATE_SIGNERS = '0' * 64
+    & $winPS -NoProfile -NonInteractive -EncodedCommand $encoded
+    if ($LASTEXITCODE -eq 0) { throw "An unexpected signer was accepted." }
+    $env:GITDOC_UPDATE_SIGNERS = $pin
+    $tampered = Join-Path $testRoot "tampered.exe"
+    $bytes = [IO.File]::ReadAllBytes($success)
+    $bytes[512] = $bytes[512] -bxor 1
+    [IO.File]::WriteAllBytes($tampered, $bytes)
+    $env:GITDOC_UPDATE_SETUP = $tampered
+    & $winPS -NoProfile -NonInteractive -EncodedCommand $encoded
+    if ($LASTEXITCODE -eq 0) { throw "A tampered file was accepted." }
+    $env:GITDOC_UPDATE_SHA256 = (Get-FileHash -Algorithm SHA256 $tampered).Hash.ToLowerInvariant()
+    & $winPS -NoProfile -NonInteractive -EncodedCommand $encoded
+    if ($LASTEXITCODE -eq 0) { throw "A tampered file with a replacement digest was accepted." }
+
     function Exercise-Fixture($setupPath, $expected) {
         $stage = Join-Path $testRoot ([guid]::NewGuid())
         New-Item -ItemType Directory -Path $stage | Out-Null

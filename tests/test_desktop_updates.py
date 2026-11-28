@@ -1,6 +1,5 @@
 import hashlib
 import io
-import os
 import subprocess
 import tempfile
 import unittest
@@ -89,33 +88,3 @@ class WindowsUpdatesTests(unittest.TestCase):
                     launch.assert_called_once()
                     self.assertEqual(launch.call_args.kwargs["env"]["GITDOC_UPDATE_PARENT"], "123")
                     self.assertEqual((stage/"GitDoc-setup.exe").read_bytes(), INSTALLER)
-
-    @unittest.skipUnless(os.name == "nt", "Windows Authenticode platform verification")
-    def test_windows_signature_check_uses_platform_trust_and_signer_pin(self):
-        import base64
-
-        script = (Path(__file__).resolve().parents[1]/"desktop/windows-update.ps1").read_text("utf-8")
-        with tempfile.TemporaryDirectory() as directory:
-            stage = Path(directory)
-            setup = updates.powershell()
-            digest = hashlib.file_digest(setup.open("rb"), "sha256").hexdigest()
-            query = """
-$signature = Get-AuthenticodeSignature -LiteralPath $env:GITDOC_UPDATE_SETUP
-if ($signature.Status -ne 'Valid') { exit 1 }
-$hash = [Security.Cryptography.SHA256]::Create().ComputeHash($signature.SignerCertificate.RawData)
-[Console]::Write([BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant())
-"""
-            def ps(code, **env):
-                encoded = base64.b64encode(code.encode("utf-16-le")).decode("ascii")
-                command = [str(setup), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
-                return subprocess.run(command, capture_output=True, timeout=45, env=dict(
-                    os.environ, GITDOC_UPDATE_SETUP=str(setup), GITDOC_UPDATE_STAGE=str(stage),
-                    GITDOC_UPDATE_PATH=str(stage), GITDOC_UPDATE_MODE="verify", **env))
-
-            platform_signature = ps(query)
-            self.assertEqual(platform_signature.returncode, 0)
-            pin = platform_signature.stdout.decode("ascii")
-            self.assertRegex(pin, r"^[0-9a-f]{64}$")
-            self.assertEqual(ps(script, GITDOC_UPDATE_SHA256=digest, GITDOC_UPDATE_SIGNERS=pin).returncode, 0)
-            self.assertNotEqual(ps(script, GITDOC_UPDATE_SHA256=digest, GITDOC_UPDATE_SIGNERS="0"*64).returncode, 0)
-            self.assertNotEqual(ps(script, GITDOC_UPDATE_SHA256="0"*64, GITDOC_UPDATE_SIGNERS=pin).returncode, 0)
