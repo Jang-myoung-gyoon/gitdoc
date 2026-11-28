@@ -35,7 +35,7 @@ jobs:
       - name: Install the document converters
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreoffice-writer libreoffice-impress poppler-utils
+          sudo apt-get install -y libreoffice-writer libreoffice-impress poppler-utils fonts-nanum
       - &install-rhwp
         name: Install rhwp 0.9.0 for native Hangul tests
         run: |
@@ -53,6 +53,9 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_document_objects.py -v
           python -m unittest discover -s tests -p test_presentation_edit.py -v
+          python -m unittest discover -s tests -p test_blank_documents.py -v
+          python -m unittest discover -s tests -p test_hangul_format.py -v
+          python -m unittest discover -s tests -p test_hangul_table_cells.py -v
 
   desktop-toolbar:
     runs-on: macos-15

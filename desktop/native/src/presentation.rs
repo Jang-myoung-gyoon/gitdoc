@@ -1,4 +1,6 @@
+mod hangul_ribbon;
 mod shape_tools;
+mod table_cells;
 mod workspace;
 
 use crate::editor_fonts::{Fonts, Span, change_bounds};
@@ -45,8 +47,10 @@ struct Object {
     text: Option<String>,
     name: String,
     align: Vec<String>,
+    hangul_format: bool,
     fonts: Vec<Span>,
     baselines: Vec<(usize, f32, f32)>,
+    glyph_boxes: Vec<(usize, [f32; 4])>,
     font_reference: String,
 }
 
@@ -62,9 +66,11 @@ impl Object {
             parent: value["parent"].as_u64(),
             text: value["text"].as_str().map(str::to_owned),
             name: value["name"].as_str().unwrap_or("").to_owned(),
+            hangul_format: value["hangul_format"] == true,
             align: serde_json::from_value(value["align"].clone()).unwrap_or_default(),
             fonts: serde_json::from_value(value["fonts"].clone()).unwrap_or_default(),
             baselines: serde_json::from_value(value["baselines"].clone()).unwrap_or_default(),
+            glyph_boxes: serde_json::from_value(value["glyph_boxes"].clone()).unwrap_or_default(),
             font_reference: value["text"].as_str().unwrap_or("").into(),
         })
     }
@@ -79,6 +85,14 @@ struct PageTable {
     label: String,
     rows: u32,
     columns: u32,
+    #[serde(default)]
+    cells: Vec<table_cells::PageCell>,
+    #[serde(default)]
+    editable_grid: bool,
+    #[serde(default)]
+    layout_grid: bool,
+    #[serde(default)]
+    subdivision: bool,
 }
 
 struct Text {
@@ -87,6 +101,7 @@ struct Text {
     value: String,
     focus: bool,
     cursor: Option<usize>,
+    rendered_range: Option<text::CCursorRange>,
 }
 
 pub enum Command {
@@ -123,6 +138,7 @@ pub struct Editor {
     pending_target: Option<Target>,
     pending_event: Option<Event>,
     object_drag: Option<Vec2>,
+    hangul_drag: Option<(Target, text::CCursor)>,
     resize_drag: Option<Vec2>,
     session: Id,
     history_page: usize,
@@ -141,8 +157,17 @@ pub struct Editor {
     page_shapes: Vec<PageShape>,
     selected_shape: Option<usize>,
     shape_size: [u32; 2],
+    hangul_tab: hangul_ribbon::HangulTab,
+    hangul_fonts: Vec<String>,
     edit_digest: String,
     selected_table: Option<usize>,
+    selected_cell: Option<usize>,
+    cell_range_end: Option<usize>,
+    cell_dimensions_mm: [u32; 2],
+    cell_paint: table_cells::CellPaint,
+    subdivision_counts: [u32; 2],
+    cell_draft: Option<table_cells::CellDraft>,
+    grid_removal: Option<table_cells::GridRemoval>,
     reveal_table: bool,
     reason: String,
     saving: bool,
@@ -173,6 +198,7 @@ impl Editor {
             pending_target: None,
             pending_event: None,
             object_drag: None,
+            hangul_drag: None,
             resize_drag: None,
             session,
             history_page: 0,
@@ -191,8 +217,17 @@ impl Editor {
             page_shapes: Vec::new(),
             selected_shape: None,
             shape_size: [0, 0],
+            hangul_tab: Default::default(),
+            hangul_fonts: Vec::new(),
             edit_digest: String::new(),
             selected_table: None,
+            selected_cell: None,
+            cell_range_end: None,
+            cell_dimensions_mm: [25, 10],
+            cell_paint: table_cells::CellPaint::default(),
+            subdivision_counts: [2, 2],
+            cell_draft: None,
+            grid_removal: None,
             reveal_table: false,
             reason: String::new(),
             saving: false,
@@ -258,13 +293,30 @@ impl Editor {
                 .iter()
                 .any(|item| item.target.id == *id && item.parent.is_none())
         });
+        self.hangul_fonts =
+            serde_json::from_value(result["hangul_fonts"].clone()).unwrap_or_default();
         self.page_tables = serde_json::from_value(result["tables"].clone()).unwrap_or_default();
         self.page_shapes = serde_json::from_value(result["shapes"].clone()).unwrap_or_default();
-        self.selected_shape = None;
+        self.selected_shape = serde_json::from_value::<Vec<u32>>(result["shape_selection"].clone())
+            .ok()
+            .and_then(|address| {
+                self.page_shapes
+                    .iter()
+                    .position(|shape| shape.address == address)
+            });
+        if let Some(index) = self.selected_shape {
+            self.shape_size = self.page_shapes[index].size;
+        }
         self.edit_digest = result["edit_digest"].as_str().unwrap_or_default().into();
         self.selected_table = None;
+        self.selected_cell = None;
+        self.cell_range_end = None;
+        self.restore_table_selection(&result["table_selection"]);
+        self.cell_draft = None;
+        self.grid_removal = None;
         self.reveal_table = false;
         self.object_drag = None;
+        self.hangul_drag = None;
         self.resize_drag = None;
         self.selected = Target::read(&result["selected"])
             .or(self.pending_target.take())
@@ -272,6 +324,19 @@ impl Editor {
         self.text = None;
         if let Some(target) = self.next_text.take() {
             self.start_text(target, None);
+            if let Ok([first, last]) =
+                serde_json::from_value::<[usize; 2]>(result["hangul_selection"].clone())
+            {
+                let id = text_id(self.session, self.history_page, target);
+                let mut state = TextEdit::load_state(ctx, id).unwrap_or_default();
+                let range =
+                    text::CCursorRange::two(text::CCursor::new(first), text::CCursor::new(last));
+                state.cursor.set_char_range(Some(range));
+                state.store(ctx, id);
+                if let Some(edit) = &mut self.text {
+                    edit.rendered_range = Some(range);
+                }
+            }
         }
         self.waiting = false;
         self.error = None;
@@ -302,10 +367,11 @@ impl Editor {
 
     fn selection(&self, ctx: &Context) -> Option<[usize; 2]> {
         let text = self.text.as_ref()?;
-        let range =
+        let range = text.rendered_range.or_else(|| {
             TextEdit::load_state(ctx, text_id(self.session, self.history_page, text.target))?
                 .cursor
-                .char_range()?;
+                .char_range()
+        })?;
         let [first, last] = range.sorted_cursors();
         Some([first.index, last.index])
     }
@@ -371,12 +437,12 @@ impl Editor {
         });
     }
 
-    fn table_tools(&mut self, ui: &mut Ui, action: &mut Option<(&str, Value)>) {
+    fn table_tools(&mut self, ui: &mut Ui, action: &mut Option<(&'static str, Value)>) {
         if self.page_tables.is_empty() {
             return;
         }
-        ui.strong("표 레이아웃");
         let menu = if self.format == Format::Word {
+            ui.strong("표 레이아웃");
             "문서 표"
         } else {
             "기존 표"
@@ -394,12 +460,17 @@ impl Editor {
                     .clicked()
                 {
                     self.selected_table = Some(index);
+                    self.selected_cell = None;
+                    self.cell_range_end = None;
                     self.selected_shape = None;
                     self.reveal_table = true;
                     ui.close();
                 }
             }
         });
+        self.table_grid_tools(ui, action);
+        self.table_cell_tools(ui, action);
+        self.table_layout_tools(ui, action);
         if let Some(table) = self
             .selected_table
             .and_then(|index| self.page_tables.get(index))
@@ -434,6 +505,11 @@ impl Editor {
                     | "delete_slide"
                     | "delete_object"
                     | "delete_table"
+                    | "edit_table_cell"
+                    | "edit_table_grid"
+                    | "edit_table_span"
+                    | "edit_table_layout"
+                    | "edit_table_subdivision"
                     | "delete_shape"
                     | "shape_up"
                     | "shape_down"
@@ -488,7 +564,71 @@ impl Editor {
             value,
             focus: true,
             cursor,
+            rendered_range: None,
         });
+    }
+
+    fn track_hangul_selection(&mut self, ui: &Ui, canvas: Rect) -> bool {
+        if self.format != Format::Hangul || self.waiting || self.text_edit().is_some() {
+            self.hangul_drag = None;
+            return false;
+        }
+        let (position, pressed, released, down, shift) = ui.input(|input| {
+            let mouse = PointerButton::Primary;
+            (
+                input.pointer.interact_pos(),
+                input.pointer.button_pressed(mouse),
+                input.pointer.button_released(mouse),
+                input.pointer.button_down(mouse),
+                input.modifiers.shift,
+            )
+        });
+        if pressed
+            && ui.rect_contains_pointer(canvas)
+            && let Some(point) = position
+            && let Some(target) = self.hit(canvas, point)
+            && let Some(cursor) = self
+                .objects
+                .iter()
+                .find(|object| object.target == target)
+                .and_then(|object| object.rendered_cursor(canvas, point))
+        {
+            let anchor = self
+                .text
+                .as_ref()
+                .filter(|edit| edit.target == target && shift)
+                .and_then(|edit| edit.rendered_range)
+                .map_or(cursor, |range| range.secondary);
+            if self.text.as_ref().is_none_or(|edit| edit.target != target) {
+                self.start_text(target, None);
+            }
+            if let Some(edit) = &mut self.text {
+                edit.focus = true;
+            }
+            self.selected_table = None;
+            self.selected_cell = None;
+            self.selected_shape = None;
+            self.hangul_drag = Some((target, anchor));
+        }
+        let Some((target, anchor)) = self.hangul_drag else {
+            return false;
+        };
+        if let Some(point) = position
+            && let Some(object) = self.objects.iter().find(|object| object.target == target)
+            && let Some(cursor) = object.rendered_cursor(canvas, point)
+            && let Some(edit) = self.text.as_mut().filter(|edit| edit.target == target)
+        {
+            let range = text::CCursorRange::two(anchor, cursor);
+            edit.rendered_range = Some(range);
+            let id = text_id(self.session, self.history_page, target);
+            let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+            state.cursor.set_char_range(Some(range));
+            state.store(ui.ctx(), id);
+        }
+        if released || !down {
+            self.hangul_drag = None;
+        }
+        true
     }
 
     fn select(
@@ -550,6 +690,9 @@ impl Editor {
     }
 
     fn tool(&mut self, ui: &mut Ui) -> Option<(&'static str, Value)> {
+        if self.format == Format::Hangul {
+            return self.hangul_tools(ui);
+        }
         let mut action = None;
         let text = self.selected.is_some_and(|target| {
             self.objects
@@ -602,9 +745,6 @@ impl Editor {
                     || action = Some(("paste", Value::Null)),
                 );
                 ui.separator();
-                if self.format == Format::Hangul {
-                    return;
-                }
                 ui.add_enabled_ui(text, |ui| {
                     let font_button = ui.add_sized(
                         [140.0, ui.spacing().interact_size.y],
@@ -853,6 +993,12 @@ impl Editor {
         if self.waiting {
             return command;
         }
+        if self.grid_removal.is_some() {
+            return self.grid_dialog(ui.ctx());
+        }
+        if self.cell_draft.is_some() {
+            return self.cell_dialog(ui.ctx());
+        }
         if let Some(modal) = self.dialog(ui.ctx()) {
             return Some(modal);
         }
@@ -986,7 +1132,7 @@ impl Editor {
             self.focus_reason = true;
             ctx.request_repaint();
         }
-        if self.selected.is_some() && self.format != Format::Hangul {
+        if self.selected.is_some() && (self.format != Format::Hangul || self.can_format_hangul()) {
             for (key, tool) in [(Key::B, "bold"), (Key::I, "italic"), (Key::U, "underline")] {
                 if consume(Modifiers::COMMAND, key) && self.text.is_some() {
                     return Some((tool, Value::Null));
@@ -1078,6 +1224,7 @@ impl Editor {
             ui.id().with("slide-canvas"),
             Sense::click_and_drag(),
         );
+        let mapped_pointer = self.track_hangul_selection(ui, canvas);
         let pointer = response
             .hover_pos()
             .or_else(|| response.interact_pointer_pos());
@@ -1092,6 +1239,7 @@ impl Editor {
             .and_then(|table| table.bounds)
         {
             let bounds = project(canvas, bounds);
+            let bounds = self.selected_cell_bounds(canvas).unwrap_or(bounds);
             if std::mem::take(&mut self.reveal_table) && !ui.clip_rect().contains_rect(bounds) {
                 ui.scroll_to_rect(bounds, Some(Align::Center));
             }
@@ -1274,7 +1422,14 @@ impl Editor {
                     .layout(Layout::top_down(Align::Min)),
             );
             child.set_clip_rect(editor_visible);
-            TextEdit::multiline(&mut edit.value)
+            let exact_geometry = self.format == Format::Hangul
+                && !object.glyph_boxes.is_empty()
+                && edit.value == edit.original;
+            if exact_geometry {
+                child.visuals_mut().selection.bg_fill = Color32::TRANSPARENT;
+                child.visuals_mut().text_cursor.stroke = Stroke::NONE;
+            }
+            let rendered = TextEdit::multiline(&mut edit.value)
                 .id(id)
                 .font(FontId::proportional(font_size))
                 .margin(0)
@@ -1283,9 +1438,25 @@ impl Editor {
                 .desired_rows(1)
                 .text_color(foreground)
                 .char_limit(20000)
-                .interactive(!self.waiting)
+                .interactive(!self.waiting && !mapped_pointer)
                 .layouter(&mut layout)
                 .show(&mut child);
+            if exact_geometry && edit.value == edit.original {
+                if !mapped_pointer
+                    && rendered.response.has_focus()
+                    && let Some(range) = rendered.cursor_range
+                {
+                    edit.rendered_range = Some(range);
+                }
+                if let Some(range) = edit.rendered_range {
+                    object.paint_rendered_selection(
+                        ui,
+                        canvas,
+                        range,
+                        rendered.response.has_focus() || mapped_pointer,
+                    );
+                }
+            }
             if localized || edit.value != edit.original {
                 ui.painter()
                     .set(background, Shape::rect_filled(ink_area, 0.0, color));
@@ -1346,16 +1517,11 @@ impl Editor {
             }
             return None;
         }
-        if response.clicked() && !self.waiting {
+        if response.clicked() && !self.waiting && !mapped_pointer {
             self.selected_shape = None;
             if self.format == Format::Hangul {
-                self.selected_table = pointer.and_then(|point| {
-                    self.page_tables.iter().position(|table| {
-                        table
-                            .bounds
-                            .is_some_and(|bounds| project(canvas, bounds).contains(point))
-                    })
-                });
+                let extend = ui.input(|input| input.modifiers.shift);
+                self.select_table_at(canvas, pointer.filter(|_| hit.is_none()), extend);
             }
             if self.selected_table.is_some() && hit.is_none() {
                 return self.select(ui.ctx(), None, false, None);
@@ -1454,6 +1620,78 @@ fn contrast(color: Color32) -> Color32 {
 }
 
 impl Object {
+    fn rendered_cursor(&self, canvas: Rect, pointer: Pos2) -> Option<text::CCursor> {
+        let distance = |rect: Rect| {
+            let vertical = (rect.top() - pointer.y)
+                .max(pointer.y - rect.bottom())
+                .max(0.0);
+            (vertical, (rect.center().x - pointer.x).abs())
+        };
+        let (index, glyph) = self
+            .glyph_boxes
+            .iter()
+            .map(|(index, bounds)| (*index, project(canvas, *bounds)))
+            .min_by(|(_, a), (_, b)| {
+                let a = distance(*a);
+                let b = distance(*b);
+                a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1))
+            })?;
+        let trailing = pointer.x >= glyph.center().x;
+        Some(text::CCursor {
+            index: index + usize::from(trailing),
+            prefer_next_row: !trailing,
+        })
+    }
+
+    fn paint_rendered_selection(
+        &self,
+        ui: &Ui,
+        canvas: Rect,
+        range: text::CCursorRange,
+        focused: bool,
+    ) {
+        let [first, last] = range.sorted_cursors();
+        let painter = ui.painter().with_clip_rect(canvas);
+        if first.index != last.index {
+            let shade = Color32::from_rgba_unmultiplied(61, 124, 232, 76);
+            for (_, bounds) in self
+                .glyph_boxes
+                .iter()
+                .filter(|(offset, _)| (first.index..last.index).contains(offset))
+            {
+                painter.rect_filled(project(canvas, *bounds), 0.0, shade);
+            }
+        } else if focused {
+            let cursor = range.primary;
+            let next = self
+                .glyph_boxes
+                .iter()
+                .find(|(offset, _)| *offset == cursor.index);
+            let previous = self
+                .glyph_boxes
+                .iter()
+                .rev()
+                .find(|(offset, _)| *offset < cursor.index);
+            let position = if cursor.prefer_next_row {
+                next.or(previous)
+            } else {
+                previous.or(next)
+            };
+            if let Some((offset, bounds)) = position {
+                let rect = project(canvas, *bounds);
+                let x = if *offset == first.index {
+                    rect.left()
+                } else {
+                    rect.right()
+                };
+                painter.line_segment(
+                    [pos2(x, rect.top()), pos2(x, rect.bottom())],
+                    ui.visuals().text_cursor.stroke,
+                );
+            }
+        }
+    }
+
     fn text_layout(
         &self,
         fonts: &Fonts,

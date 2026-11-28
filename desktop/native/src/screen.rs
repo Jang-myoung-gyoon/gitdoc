@@ -34,6 +34,40 @@ fn status(value: &Value) -> &'static str {
     }
 }
 
+fn library_heading(ui: &mut Ui) -> (Response, Response) {
+    ui.heading("문서함");
+    ui.horizontal_wrapped(|ui| {
+        (
+            ui.button("＋ 문서 등록")
+                .on_hover_text("파일을 선택해 문서함에 등록합니다."),
+            ui.button("＋ 새 문서")
+                .on_hover_text("빈 문서를 만들어 문서함에 추가합니다."),
+        )
+    })
+    .inner
+}
+
+fn blank_format(ui: &mut Ui, format: &mut String) {
+    ui.label("파일 형식");
+    ComboBox::from_id_salt("blank-format")
+        .selected_text(format.to_ascii_uppercase())
+        .show_ui(ui, |ui| {
+            for (extension, label) in [
+                ("docx", "DOCX · 문서"),
+                ("pptx", "PPTX · 프레젠테이션"),
+                ("xlsx", "XLSX · 스프레드시트"),
+                ("pdf", "PDF · 페이지"),
+                ("hwp", "HWP · 한글"),
+                ("hwpx", "HWPX · 한글"),
+            ] {
+                ui.selectable_value(format, extension.into(), label);
+            }
+        });
+    if matches!(format.as_str(), "hwp" | "hwpx") {
+        ui.weak("한글 빈 문서를 만들려면 rhwp 0.9.0 이상이 필요합니다.");
+    }
+}
+
 fn saved_message(result: &Value) -> &'static str {
     if result["status"] == "pending" {
         "수정안을 검토 대기로 저장했습니다."
@@ -45,6 +79,7 @@ fn saved_message(result: &Value) -> &'static str {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Action {
     Register,
+    CreateBlank,
     Branch,
     Submit,
     Edit,
@@ -558,11 +593,13 @@ impl GitDoc {
                     self.pane.index_failures += pages.saturating_sub(self.pane.indexed_through);
                     self.pane.indexed_through = pages;
                 }
-                if matches!(reply.op, "edit" | "rewind" | "edit_contents")
-                    && let Some(form) = self
-                        .form
-                        .as_mut()
-                        .filter(|form| form.submitting || form.mode == "blocks")
+                if matches!(
+                    reply.op,
+                    "edit" | "rewind" | "edit_contents" | "create_blank"
+                ) && let Some(form) = self
+                    .form
+                    .as_mut()
+                    .filter(|form| form.submitting || form.mode == "blocks")
                 {
                     form.submitting = false;
                     form.error = Some(error);
@@ -716,7 +753,15 @@ impl GitDoc {
                 self.comparison = result;
                 self.open_view(ids, Destination::default());
             }
+            "create_blank" => {
+                self.form = None;
+                self.query.clear();
+                self.refresh();
+                self.open_doc(id(&result["document_id"]), Destination::default());
+                self.notify("빈 문서를 만들었습니다.", false);
+            }
             "register" => {
+                self.query.clear();
                 self.refresh();
                 self.open_doc(id(&result), Destination::default());
                 self.notify("문서를 등록했습니다.", false);
@@ -872,7 +917,16 @@ impl GitDoc {
                 if self.deck.is_some() {
                     ui.disable();
                 }
-                ui.heading("문서함");
+                let (register, blank) = library_heading(ui);
+                if register.clicked() {
+                    self.register_form(None);
+                }
+                if blank.clicked() {
+                    self.open_form(Action::CreateBlank, "새 문서", json!({}));
+                    if let Some(form) = &mut self.form {
+                        form.kind = "docx".into();
+                    }
+                }
                 let search =
                     ui.add(TextEdit::singleline(&mut self.query).hint_text("제목 또는 파일명"));
                 if search.changed() {
@@ -2033,13 +2087,16 @@ impl GitDoc {
                         form.file = Some(path);
                     }
                 }
-                if matches!(form.action, Action::Branch | Action::Register) {
-                    ui.label(if form.action == Action::Register {
+                if matches!(form.action, Action::Branch | Action::Register | Action::CreateBlank) {
+                    ui.label(if matches!(form.action, Action::Register | Action::CreateBlank) {
                         "문서 제목"
                     } else {
                         "브랜치 이름"
                     });
                     ui.text_edit_singleline(&mut form.name);
+                }
+                if form.action == Action::CreateBlank {
+                    blank_format(ui, &mut form.kind);
                 }
                 if form.action == Action::Rewind {
                     ui.label(format!("{} 브랜치의 확정본을 {}으로 옮깁니다.",
@@ -2161,7 +2218,7 @@ impl GitDoc {
                     form.action,
                     Action::Submit | Action::Merge | Action::Restore
                 );
-                let required_name = matches!(form.action, Action::Register | Action::Branch);
+                let required_name = matches!(form.action, Action::Register | Action::CreateBlank | Action::Branch);
                 let mut submit_from_reason = false;
                 if required_reason || matches!(form.action, Action::Edit | Action::Approve | Action::Reject) {
                     let label = ui.label(if required_reason {
@@ -2188,6 +2245,7 @@ impl GitDoc {
                 ui.horizontal(|ui| {
                     save = ui.add_enabled(valid, Button::new(match form.action {
                         Action::Edit => "수정안 저장",
+                        Action::CreateBlank => "만들기",
                         _ => "확인",
                     })).clicked() || valid && submit_from_reason;
                     cancel = ui.button("취소").clicked();
@@ -2213,6 +2271,11 @@ impl GitDoc {
                 Action::Register => {
                     args["title"] = json!(form.name);
                     "register"
+                }
+                Action::CreateBlank => {
+                    args["title"] = json!(form.name);
+                    args["extension"] = json!(form.kind);
+                    "create_blank"
                 }
                 Action::Branch => {
                     args["name"] = json!(form.name);
@@ -2264,7 +2327,10 @@ impl GitDoc {
             ) {
                 args["reason"] = json!(form.reason);
             }
-            if matches!(form.action, Action::Edit | Action::Rewind) {
+            if matches!(
+                form.action,
+                Action::Edit | Action::Rewind | Action::CreateBlank
+            ) {
                 let sent = self.request(operation, 0, args);
                 if let Some(form) = &mut self.form {
                     form.submitting = sent;
@@ -2408,6 +2474,75 @@ fn sheet_changes(books: &[Value], names: &[String]) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_create_button_responds_at_narrow_width() {
+        let ctx = Context::default();
+        let mut clicked = false;
+        let mut position = Pos2::ZERO;
+        let mut frame = |events| {
+            let output = ctx.run(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(220.0, 340.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    CentralPanel::default().show(ctx, |ui| {
+                        let (_, response) = library_heading(ui);
+                        clicked = response.clicked();
+                        position = response.rect.center();
+                    });
+                },
+            );
+            (clicked, position, output)
+        };
+        let (_, point, output) = frame(vec![]);
+        assert!(point.x < 220.0);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, epaint::Shape::Text(text) if text.galley.job.text == "＋ 새 문서")
+        }));
+        let mouse = |pressed| Event::PointerButton {
+            pos: point,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        assert!(!frame(vec![Event::PointerMoved(point), mouse(true)]).0);
+        assert!(frame(vec![mouse(false)]).0);
+    }
+
+    #[test]
+    fn new_document_format_menu_selects_both_hangul_extensions() {
+        let ctx = Context::default();
+        let frame = |format: &mut String, events| {
+            ctx.run(RawInput { events, ..RawInput::default() }, |ctx| {
+                CentralPanel::default().show(ctx, |ui| blank_format(ui, format));
+            })
+        };
+        let text_center = |output: &FullOutput, title: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                epaint::Shape::Text(text) if text.galley.job.text == title =>
+                    Some(text.pos + text.galley.size() / 2.0),
+                _ => None,
+            }).unwrap_or_else(|| panic!("Missing format control {title}"))
+        };
+        let click = |format: &mut String, point| {
+            for pressed in [true, false] {
+                frame(format, vec![Event::PointerMoved(point), Event::PointerButton {
+                    pos: point, pressed, button: PointerButton::Primary, modifiers: Modifiers::NONE,
+                }]);
+            }
+        };
+        let mut format = "docx".to_owned();
+        for (active, label, expected) in [("DOCX", "HWP · 한글", "hwp"), ("HWP", "HWPX · 한글", "hwpx")] {
+            let popup = text_center(&frame(&mut format, vec![]), active);
+            click(&mut format, popup);
+            let option = text_center(&frame(&mut format, vec![]), label);
+            click(&mut format, option);
+            assert_eq!(format, expected);
+        }
+    }
+
     #[test]
     fn spreadsheet_addresses_are_bounded() {
         assert_eq!(cell_position("AB92"), Some((91, 27)));

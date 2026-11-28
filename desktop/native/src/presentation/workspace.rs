@@ -498,6 +498,29 @@ mod tests {
             editor.table = [3, 4];
             frame(&ctx, &mut editor, size, vec![]);
             let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            let ui = if format == Format::Hangul {
+                editor.objects[0].glyph_boxes = vec![
+                    (0, [0.20, 0.30, 0.22, 0.32]),
+                    (1, [0.22, 0.30, 0.24, 0.32]),
+                    (2, [0.24, 0.30, 0.26, 0.32]),
+                    (3, [0.26, 0.30, 0.28, 0.32]),
+                ];
+                let texture = editor.image.as_ref().unwrap().id();
+                let canvas = ui
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+                        _ => None,
+                    })
+                    .unwrap();
+                let caret = canvas.min + canvas.size() * vec2(0.239, 0.31);
+                assert!(click(&ctx, &mut editor, size, caret).is_none());
+                assert_eq!(editor.selection(&ctx), Some([2, 2]));
+                frame(&ctx, &mut editor, size, vec![]).0
+            } else {
+                ui
+            };
             find_text(&ui.shapes, extension);
             let table = find_text(
                 &ui.shapes,
@@ -512,7 +535,8 @@ mod tests {
             let insert = find_text(&menu.shapes, "표 삽입");
             assert!(matches!(click(&ctx, &mut editor, size, insert),
                              Some(Command::Page(params)) if params["operation"] == "table"
-                                 && params["value"] == json!([3, 4])));
+                                 && params["value"] == json!([3, 4])
+                                 && (format != Format::Hangul || params["selection"] == json!([2, 2]))));
             editor.waiting = false;
             let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
             let shape = find_text(
@@ -528,7 +552,8 @@ mod tests {
             let arrow = find_text(&menu.shapes, "화살표");
             assert!(matches!(click(&ctx, &mut editor, size, arrow),
                              Some(Command::Page(params)) if params["operation"] == "shape"
-                                 && params["value"] == "arrow"));
+                                 && params["value"] == "arrow"
+                                 && (format != Format::Hangul || params["selection"] == json!([2, 2]))));
         }
     }
 
@@ -613,6 +638,179 @@ mod tests {
     }
 
     #[test]
+    fn hangul_ribbon_reselects_and_moves_the_exact_inline_shape() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 720.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "before-move".into();
+        let first = json!({"address":[0,0,0], "character":3, "kind":"rectangle",
+                           "size":[12,8], "move_up":true, "move_down":true, "resize":true});
+        let mut second = json!({"address":[0,0,1], "character":4, "kind":"rectangle",
+                                "size":[12,8], "move_up":true, "move_down":true, "resize":true});
+        editor.page_shapes = serde_json::from_value(json!([first, second])).unwrap();
+        frame(&ctx, &mut editor, size, vec![]);
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let menu = find_text(&display.shapes, "도형 선택");
+        assert!(click(&ctx, &mut editor, size, menu).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let row = find_text(
+            &display.shapes,
+            "사각형 · 구역 1 · 문단 1 · 도형 2 · 4번째 글자 뒤 · 12×8 mm",
+        );
+        assert!(click(&ctx, &mut editor, size, row).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let backward = find_text(&display.shapes, "← 한 글자 앞");
+        assert!(
+            matches!(click(&ctx, &mut editor, size, backward), Some(Command::Page(params))
+            if params["operation"] == "shape_up" && params["value"]["address"] == json!([0,0,1]))
+        );
+
+        let image =
+            std::env::temp_dir().join(format!("gitdoc-inline-shape-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([255; 4]))
+            .save(&image)
+            .unwrap();
+        second["character"] = json!(3);
+        second["move_up"] = json!(false);
+        let result = editor.update(
+            &ctx,
+            &json!({
+                "page":1, "count":1, "image":image, "edit_digest":"after-move",
+                "shapes":[first, second], "shape_selection":[0,0,1], "dirty":true, "undo":true
+            }),
+        );
+        std::fs::remove_file(image).unwrap();
+        result.unwrap();
+        assert_eq!(editor.selected_shape, Some(1));
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let backward = find_text(&display.shapes, "← 한 글자 앞");
+        assert!(click(&ctx, &mut editor, size, backward).is_none());
+        editor.shape_size = [22, 10];
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let resize = find_text(&display.shapes, "크기 적용");
+        assert!(
+            matches!(click(&ctx, &mut editor, size, resize), Some(Command::Page(params))
+            if params["operation"] == "shape_size"
+                && params["value"] == json!({"address":[0,0,1], "digest":"after-move", "size":[22,10]}))
+        );
+    }
+
+    #[test]
+    fn hangul_formatting_tab_routes_a_narrow_toolbar_click_to_the_selected_paragraph() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.objects[0].hangul_format = true;
+        let target = editor.objects[0].target;
+        editor.start_text(target, None);
+        let id = crate::presentation::text_id(editor.session, editor.history_page, target);
+        let mut state = TextEdit::load_state(&ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(text::CCursorRange::two(
+            text::CCursor::new(1),
+            text::CCursor::new(3),
+        )));
+        state.store(&ctx, id);
+        frame(&ctx, &mut editor, size, vec![]);
+        let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+        let tabs = find_text(&ui.shapes, "서식");
+        assert!(click(&ctx, &mut editor, size, tabs).is_none());
+        let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+        let bold = find_text(&ui.shapes, "B 진하게");
+        assert!(matches!(click(&ctx, &mut editor, size, bold),
+            Some(Command::Page(params)) if params["operation"] == "bold"
+                && params["target"]["id"] == 1 && params["selection"] == json!([1, 3])));
+
+        let file =
+            std::env::temp_dir().join(format!("gitdoc-format-test-{}.png", std::process::id()));
+        image::RgbaImage::new(2, 2).save(&file).unwrap();
+        let updated = editor.update(
+            &ctx,
+            &json!({
+                "image": file, "width": 612, "height": 792, "page": 1, "count": 3,
+                "objects": [{"id": 1, "box": [0.2, 0.3, 0.8, 0.4], "text": "Body",
+                             "name": "Body", "hangul_format": true}],
+                "hangul_selection": [1, 3]
+            }),
+        );
+        std::fs::remove_file(file).unwrap();
+        updated.unwrap();
+        assert_eq!(editor.selection(&ctx), Some([1, 3]));
+    }
+
+    #[test]
+    fn reverse_drag_uses_the_rendered_lines_and_keeps_selection_through_the_color_menu() {
+        let ctx = Context::default();
+        let size = vec2(850.0, 950.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.zoom = 125.0;
+        editor.objects[0] = Object::read(&json!({
+            "id": 1, "box": [0.2, 0.25, 0.8, 0.39], "ink": [0.20, 0.25, 0.30, 0.39],
+            "text": "한A 글\nB끝", "name": "한A 글", "hangul_format": true,
+            "glyph_boxes": [[0,[0.20,0.26,0.22,0.28]],[1,[0.22,0.26,0.24,0.28]],
+                [3,[0.26,0.26,0.28,0.28]], [5,[0.20,0.32,0.22,0.34]],
+                [6,[0.22,0.32,0.24,0.34]]]
+        }))
+        .unwrap();
+        let texture = editor.image.as_ref().unwrap().id();
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let canvas = display
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                epaint::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+            .expect("rendered page texture");
+        let point = |x, y| canvas.min + canvas.size() * vec2(x, y);
+        let start = point(0.237, 0.33);
+        let end = point(0.223, 0.27);
+        let mouse = |pos, pressed| Event::PointerButton {
+            pos,
+            pressed,
+            button: PointerButton::Primary,
+            modifiers: Modifiers::NONE,
+        };
+        assert!(
+            frame(
+                &ctx,
+                &mut editor,
+                size,
+                vec![Event::PointerMoved(start), mouse(start, true)]
+            )
+            .1
+            .is_none()
+        );
+        assert_eq!(editor.selection(&ctx), Some([7, 7]));
+        assert!(
+            frame(&ctx, &mut editor, size, vec![Event::PointerMoved(end)])
+                .1
+                .is_none()
+        );
+        assert!(
+            frame(&ctx, &mut editor, size, vec![mouse(end, false)])
+                .1
+                .is_none()
+        );
+        assert_eq!(editor.selection(&ctx), Some([1, 7]));
+        assert_eq!(editor.image.as_ref().unwrap().id(), texture);
+        assert!(!editor.changed());
+
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let tab = find_text(&display.shapes, "서식");
+        assert!(click(&ctx, &mut editor, size, tab).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let colors = find_text(&display.shapes, "글자 색");
+        assert!(click(&ctx, &mut editor, size, colors).is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        let blue = find_text(&display.shapes, "파랑");
+        assert!(
+            matches!(click(&ctx, &mut editor, size, blue), Some(Command::Page(params))
+            if params["operation"] == "color" && params["value"] == "1852A3"
+                && params["selection"] == json!([1,7]) && params["text_edit"].is_null())
+        );
+    }
+
+    #[test]
     fn table_toolbar_selects_and_deletes_one_table() {
         for (format, menu_name, address) in [
             (Format::Hangul, "기존 표", vec![0, 3, 2]),
@@ -629,6 +827,10 @@ mod tests {
                     label: String::new(),
                     rows: 2,
                     columns: 3,
+                    cells: vec![],
+                    editable_grid: false,
+                    layout_grid: false,
+                    subdivision: false,
                 },
                 PageTable {
                     address: address.clone(),
@@ -636,11 +838,19 @@ mod tests {
                     label: String::new(),
                     rows: 4,
                     columns: 2,
+                    cells: vec![],
+                    editable_grid: false,
+                    layout_grid: false,
+                    subdivision: false,
                 },
             ];
             frame(&ctx, &mut editor, size, vec![]);
-            let (ui, _) = frame(&ctx, &mut editor, size, vec![]);
-            find_text(&ui.shapes, "표 레이아웃");
+            let (mut ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            let layout = find_text(&ui.shapes, "표 레이아웃");
+            if format == Format::Hangul {
+                assert!(click(&ctx, &mut editor, size, layout).is_none());
+                (ui, _) = frame(&ctx, &mut editor, size, vec![]);
+            }
             let tables = find_text(&ui.shapes, menu_name);
             assert!(click(&ctx, &mut editor, size, tables).is_none());
             let (menu, _) = frame(&ctx, &mut editor, size, vec![]);
@@ -652,6 +862,317 @@ mod tests {
                              Some(Command::Page(params)) if params["operation"] == "delete_table"
                                  && params["value"] == json!({"address": address, "digest": "snapshot"})));
         }
+    }
+
+    #[test]
+    fn hangul_cell_edit_uses_exact_row_and_column_from_the_narrow_ribbon() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 2, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 1, "columns": 2, "cells": [
+                {"coordinate": [0, 0], "text": "Same", "box": [0.1, 0.44, 0.45, 0.54]},
+                {"coordinate": [0, 1], "text": "Same", "box": [0.45, 0.44, 0.8, 0.54]}
+            ]
+        }]))
+        .unwrap();
+
+        frame(&ctx, &mut editor, size, vec![]);
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        let layout = find_text(&output.shapes, "표 레이아웃");
+        assert!(click(&ctx, &mut editor, size, layout).is_none());
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "기존 표")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "표 1 · 1행 × 2열")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "셀 선택")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "1행 2열")
+            )
+            .is_none()
+        );
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "셀 내용 편집")
+            )
+            .is_none()
+        );
+        assert!(editor.cell_draft.is_some());
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(click(&ctx, &mut editor, size, find_text(&output.shapes, "취소")).is_none());
+        assert!(editor.cell_draft.is_none());
+
+        let (output, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(
+            click(
+                &ctx,
+                &mut editor,
+                size,
+                find_text(&output.shapes, "셀 내용 편집")
+            )
+            .is_none()
+        );
+        frame(&ctx, &mut editor, size, vec![]);
+        let select_all = Event::Key {
+            key: Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        let (output, _) = frame(
+            &ctx,
+            &mut editor,
+            size,
+            vec![select_all, Event::Text("새 값".into())],
+        );
+        assert!(
+            matches!(click(&ctx, &mut editor, size, find_text(&output.shapes, "셀에 적용")),
+            Some(Command::Page(params)) if params["operation"] == "edit_table_cell"
+                && params["value"] == json!({
+                    "address": [0, 2, 1], "coordinate": [0, 1], "text": "새 값", "digest": "snapshot"
+                }))
+        );
+
+        editor.select_table_at(
+            Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)),
+            Some(pos2(25.0, 50.0)),
+            false,
+        );
+        assert_eq!(editor.selected_cell, Some(0));
+        assert!(editor.hangul_tab == crate::presentation::hangul_ribbon::HangulTab::Table);
+    }
+
+    #[test]
+    fn hangul_grid_ribbon_adds_relative_to_cell_and_confirms_removal() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "grid-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 3, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 2, "columns": 2, "editable_grid": true, "cells": [
+                {"coordinate": [1, 0], "text": "Same", "box": [0.1, 0.49, 0.45, 0.54]},
+                {"coordinate": [1, 1], "text": "Same", "box": [0.45, 0.49, 0.8, 0.54]}
+            ]
+        }]))
+        .unwrap();
+
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        frame(&ctx, &mut editor, size, vec![]);
+        for label in [
+            "표 레이아웃",
+            "기존 표",
+            "표 1 · 2행 × 2열",
+            "셀 선택",
+            "2행 2열",
+            "줄/칸 편집",
+        ] {
+            assert!(press(&mut editor, label).is_none());
+        }
+        assert!(
+            matches!(press(&mut editor, "오른쪽에 칸 추가"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_grid" && params["value"] == json!({
+                "address": [0, 3, 1], "coordinate": [1, 1], "digest": "grid-snapshot", "change": "col_right"
+            }))
+        );
+        editor.waiting = false;
+
+        for label in ["줄/칸 편집", "줄 지우기", "취소"] {
+            assert!(press(&mut editor, label).is_none());
+        }
+        assert!(editor.grid_removal.is_none());
+        assert!(press(&mut editor, "줄/칸 편집").is_none());
+        assert!(press(&mut editor, "줄 지우기").is_none());
+        assert!(
+            matches!(press(&mut editor, "지우기"), Some(Command::Page(params))
+            if params["value"] == json!({
+                "address": [0, 3, 1], "coordinate": [1, 1], "digest": "grid-snapshot", "change": "row_delete",
+                "confirmed": true
+            }))
+        );
+    }
+
+    #[test]
+    fn hangul_subdivision_ribbon_sends_counts_for_one_cell() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "subdivision-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address":[0,2,1], "box":[0.1,0.44,0.8,0.54], "rows":1, "columns":2,
+            "subdivision":true, "editable_grid":true,
+            "cells":[{"coordinate":[0,0], "text":"A", "box":[0.1,0.44,0.45,0.54]},
+                     {"coordinate":[0,1], "text":"B", "box":[0.45,0.44,0.8,0.54]}]
+        }]))
+        .unwrap();
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        editor.select_table_at(canvas, Some(pos2(67.0, 50.0)), false);
+        frame(&ctx, &mut editor, size, vec![]);
+        editor.subdivision_counts = [1, 1];
+        assert!(press(&mut editor, "행·열로 나누기").is_none());
+        assert!(press(&mut editor, "나누기 적용").is_none());
+        editor.subdivision_counts = [3, 2];
+        assert!(press(&mut editor, "행·열로 나누기").is_none());
+        assert!(
+            matches!(press(&mut editor, "나누기 적용"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_subdivision" && params["value"] ==
+                json!({"address":[0,2,1], "coordinate":[0,1], "digest":"subdivision-snapshot",
+                       "rows":3, "columns":2}))
+        );
+    }
+
+    #[test]
+    fn hangul_cell_layout_ribbon_sends_range_alignment_and_dimensions() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "layout-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address":[0,2,1], "box":[0.1,0.44,0.8,0.54], "rows":1, "columns":2,
+            "layout_grid":true, "editable_grid":true,
+            "cells":[{"coordinate":[0,0], "text":"A", "layout":true, "box":[0.1,0.44,0.45,0.54]},
+                     {"coordinate":[0,1], "text":"B", "layout":true, "box":[0.45,0.44,0.8,0.54]}]
+        }]))
+        .unwrap();
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        editor.select_table_at(canvas, Some(pos2(25.0, 50.0)), false);
+        editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), true);
+        frame(&ctx, &mut editor, size, vec![]);
+        for (menu, button, change, value) in [
+            ("가로 맞춤", "오른쪽", "horizontal", json!("right")),
+            ("세로 맞춤", "아래", "vertical", json!("BOTTOM")),
+            ("셀 크기", "너비 적용", "width", json!(25)),
+            ("셀 크기", "높이 적용", "height", json!(10)),
+            (
+                "셀 테두리",
+                "테두리 적용",
+                "border",
+                json!({"side":"all", "style":"solid", "width":"0.3", "color":"#000000"}),
+            ),
+            ("셀 배경", "배경색 적용", "background", json!("#FCE8AF")),
+            ("셀 배경", "배경 없음", "background", json!(null)),
+        ] {
+            assert!(press(&mut editor, menu).is_none());
+            assert!(
+                matches!(press(&mut editor, button), Some(Command::Page(params))
+                if params["operation"] == "edit_table_layout" && params["value"] ==
+                    json!({"address":[0,2,1], "coordinate":[0,0], "end":[0,1],
+                           "digest":"layout-snapshot", "change":change, "value":value}))
+            );
+            editor.waiting = false;
+        }
+        editor.page_tables[0].layout_grid = false;
+        assert!(press(&mut editor, "셀 크기").is_none());
+        let (display, _) = frame(&ctx, &mut editor, size, vec![]);
+        assert!(!display.shapes.iter().any(|s| matches!(&s.shape,
+            Shape::Text(text) if text.galley.job.text == "높이 적용")));
+    }
+
+    #[test]
+    fn hangul_cell_range_controls_route_merge_and_split_in_a_narrow_ribbon() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "span-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 2, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 1, "columns": 2, "editable_grid": true,
+            "cells": [ {"coordinate": [0, 0], "text": "same", "box": [0.1, 0.44, 0.45, 0.54]},
+                       {"coordinate": [0, 1], "text": "same", "box": [0.45, 0.44, 0.8, 0.54]} ]
+        }]))
+        .unwrap();
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        frame(&ctx, &mut editor, size, vec![]);
+        for label in [
+            "표 레이아웃",
+            "기존 표",
+            "표 1 · 1행 × 2열",
+            "셀 선택",
+            "1행 1열",
+            "범위 끝 선택",
+            "1행 2열",
+        ] {
+            assert!(press(&mut editor, label).is_none());
+        }
+        assert!(press(&mut editor, "범위 해제").is_none());
+        assert!(editor.cell_range_end.is_none());
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        editor.select_table_at(canvas, Some(pos2(25.0, 50.0)), false);
+        editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), true);
+        let bounds = editor.selected_cell_bounds(canvas).unwrap();
+        assert!(bounds.contains(pos2(25.0, 50.0)) && bounds.contains(pos2(70.0, 50.0)));
+        assert!(
+            matches!(press(&mut editor, "셀 합치기"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_span" && params["value"] == json!({
+                "address": [0, 2, 1], "coordinate": [0, 0], "end": [0, 1],
+                "digest": "span-snapshot", "change": "merge"
+            }))
+        );
+
+        editor.waiting = false;
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 2, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 1, "columns": 2, "editable_grid": false,
+            "cells": [{"coordinate": [0, 0], "text": "", "span": [1, 2], "split": true, "box": [0.1, 0.44, 0.8, 0.54]}]
+        }])).unwrap();
+        editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), false);
+        assert!(
+            matches!(press(&mut editor, "병합 셀 나누기"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_span" && params["value"] == json!({
+                "address": [0, 2, 1], "coordinate": [0, 0], "digest": "span-snapshot", "change": "split"
+            }))
+        );
     }
 
     #[test]
