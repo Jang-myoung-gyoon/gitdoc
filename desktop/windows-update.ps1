@@ -1,5 +1,8 @@
 # Executed from the installed updater with fixed code and data-only environment variables.
 $ErrorActionPreference = "Stop"
+# Do not inherit module search paths from another PowerShell installation or the user profile.
+$env:PSModulePath = Join-Path $PSHOME "Modules"
+Import-Module (Join-Path $env:PSModulePath "Microsoft.PowerShell.Security") -ErrorAction Stop
 $setup = [IO.Path]::GetFullPath($env:GITDOC_UPDATE_SETUP)
 $stage = [IO.Path]::GetFullPath($env:GITDOC_UPDATE_STAGE)
 $install = [IO.Path]::GetFullPath($env:GITDOC_UPDATE_PATH)
