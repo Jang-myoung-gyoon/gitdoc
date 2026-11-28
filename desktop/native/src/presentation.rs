@@ -154,6 +154,7 @@ pub struct Editor {
     edit_digest: String,
     selected_table: Option<usize>,
     selected_cell: Option<usize>,
+    cell_range_end: Option<usize>,
     cell_draft: Option<table_cells::CellDraft>,
     grid_removal: Option<table_cells::GridRemoval>,
     reveal_table: bool,
@@ -209,6 +210,7 @@ impl Editor {
             edit_digest: String::new(),
             selected_table: None,
             selected_cell: None,
+            cell_range_end: None,
             cell_draft: None,
             grid_removal: None,
             reveal_table: false,
@@ -284,6 +286,7 @@ impl Editor {
         self.edit_digest = result["edit_digest"].as_str().unwrap_or_default().into();
         self.selected_table = None;
         self.selected_cell = None;
+        self.cell_range_end = None;
         self.cell_draft = None;
         self.grid_removal = None;
         self.reveal_table = false;
@@ -429,6 +432,7 @@ impl Editor {
                 {
                     self.selected_table = Some(index);
                     self.selected_cell = None;
+                    self.cell_range_end = None;
                     self.selected_shape = None;
                     self.reveal_table = true;
                     ui.close();
@@ -436,7 +440,7 @@ impl Editor {
             }
         });
         self.table_grid_tools(ui, action);
-        self.table_cell_tools(ui);
+        self.table_cell_tools(ui, action);
         if let Some(table) = self
             .selected_table
             .and_then(|index| self.page_tables.get(index))
@@ -473,6 +477,7 @@ impl Editor {
                     | "delete_table"
                     | "edit_table_cell"
                     | "edit_table_grid"
+                    | "edit_table_span"
                     | "delete_shape"
                     | "shape_up"
                     | "shape_down"
@@ -1137,9 +1142,7 @@ impl Editor {
             .and_then(|table| table.bounds)
         {
             let bounds = project(canvas, bounds);
-            let bounds = self
-                .selected_table_cell()
-                .map_or(bounds, |cell| project(canvas, cell.bounds));
+            let bounds = self.selected_cell_bounds(canvas).unwrap_or(bounds);
             if std::mem::take(&mut self.reveal_table) && !ui.clip_rect().contains_rect(bounds) {
                 ui.scroll_to_rect(bounds, Some(Align::Center));
             }
@@ -1397,7 +1400,8 @@ impl Editor {
         if response.clicked() && !self.waiting {
             self.selected_shape = None;
             if self.format == Format::Hangul {
-                self.select_table_at(canvas, pointer.filter(|_| hit.is_none()));
+                let extend = ui.input(|input| input.modifiers.shift);
+                self.select_table_at(canvas, pointer.filter(|_| hit.is_none()), extend);
             }
             if self.selected_table.is_some() && hit.is_none() {
                 return self.select(ui.ctx(), None, false, None);

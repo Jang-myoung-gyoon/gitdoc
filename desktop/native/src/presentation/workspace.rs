@@ -813,6 +813,7 @@ mod tests {
         editor.select_table_at(
             Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)),
             Some(pos2(25.0, 50.0)),
+            false,
         );
         assert_eq!(editor.selected_cell, Some(0));
         assert!(editor.hangul_tab == crate::presentation::hangul_ribbon::HangulTab::Table);
@@ -867,6 +868,65 @@ mod tests {
             if params["value"] == json!({
                 "address": [0, 3, 1], "coordinate": [1, 1], "digest": "grid-snapshot", "change": "row_delete",
                 "confirmed": true
+            }))
+        );
+    }
+
+    #[test]
+    fn hangul_cell_range_controls_route_merge_and_split_in_a_narrow_ribbon() {
+        let ctx = Context::default();
+        let size = vec2(560.0, 650.0);
+        let mut editor = fixture(Format::Hangul, &ctx);
+        editor.edit_digest = "span-snapshot".into();
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 2, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 1, "columns": 2, "editable_grid": true,
+            "cells": [ {"coordinate": [0, 0], "text": "same", "box": [0.1, 0.44, 0.45, 0.54]},
+                       {"coordinate": [0, 1], "text": "same", "box": [0.45, 0.44, 0.8, 0.54]} ]
+        }]))
+        .unwrap();
+        let press = |editor: &mut Editor, label| {
+            let (output, _) = frame(&ctx, editor, size, vec![]);
+            click(&ctx, editor, size, find_text(&output.shapes, label))
+        };
+        frame(&ctx, &mut editor, size, vec![]);
+        for label in [
+            "표 레이아웃",
+            "기존 표",
+            "표 1 · 1행 × 2열",
+            "셀 선택",
+            "1행 1열",
+            "범위 끝 선택",
+            "1행 2열",
+        ] {
+            assert!(press(&mut editor, label).is_none());
+        }
+        assert!(press(&mut editor, "범위 해제").is_none());
+        assert!(editor.cell_range_end.is_none());
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        editor.select_table_at(canvas, Some(pos2(25.0, 50.0)), false);
+        editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), true);
+        let bounds = editor.selected_cell_bounds(canvas).unwrap();
+        assert!(bounds.contains(pos2(25.0, 50.0)) && bounds.contains(pos2(70.0, 50.0)));
+        assert!(
+            matches!(press(&mut editor, "셀 합치기"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_span" && params["value"] == json!({
+                "address": [0, 2, 1], "coordinate": [0, 0], "end": [0, 1],
+                "digest": "span-snapshot", "change": "merge"
+            }))
+        );
+
+        editor.waiting = false;
+        editor.page_tables = serde_json::from_value(json!([{
+            "address": [0, 2, 1], "box": [0.1, 0.44, 0.8, 0.54],
+            "rows": 1, "columns": 2, "editable_grid": false,
+            "cells": [{"coordinate": [0, 0], "text": "", "span": [1, 2], "box": [0.1, 0.44, 0.8, 0.54]}]
+        }])).unwrap();
+        editor.select_table_at(canvas, Some(pos2(70.0, 50.0)), false);
+        assert!(
+            matches!(press(&mut editor, "셀 나누기"), Some(Command::Page(params))
+            if params["operation"] == "edit_table_span" && params["value"] == json!({
+                "address": [0, 2, 1], "coordinate": [0, 0], "digest": "span-snapshot", "change": "split"
             }))
         );
     }

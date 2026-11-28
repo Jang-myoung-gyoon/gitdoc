@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -242,10 +243,16 @@ class HangulTableCellTests(unittest.TestCase):
                 table = source_table(root, exported_tables(path)[1])
                 grid_cells(table)[0, 0].set("protect", "1")
                 (folder/"protected.hwpx").write_bytes(rewrite_package(archive, {part: root}))
+                grid_cells(table)[0, 0].set("protect", "0")
+                nested = deepcopy(source_table(root, exported_tables(path)[0]))
+                nested.set("id", "99")
+                grid_cells(table)[0, 0].find(f"{HANGUL}subList/{HANGUL}p/{HANGUL}run").append(nested)
+                (folder/"nested.hwpx").write_bytes(rewrite_package(archive, {part: root}))
 
             for filename, message, change in (
                 ("merged.hwp", "병합", "row_below"), ("merged.hwpx", "병합", "row_below"),
-                ("protected.hwpx", "보호", "row_below"), ("source.hwp", "쪽 너비", "col_right"),
+                ("protected.hwpx", "보호", "row_below"), ("nested.hwpx", "셀", "row_below"),
+                ("source.hwp", "쪽 너비", "col_right"),
                 ("source.hwpx", "쪽 너비", "col_right"),
             ):
                 with self.subTest(filename=filename):
@@ -259,7 +266,114 @@ class HangulTableCellTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, message):
                             editor.page(1, "edit_table_grid", value={"address": table["address"], "coordinate": [1, 1],
                                                                    "digest": opened["edit_digest"], "change": change})
+                        if not filename.startswith("source."):
+                            with self.assertRaises(ValueError):
+                                editor.page(1, "edit_table_span", value={
+                                    "address": table["address"], "coordinate": [1, 1], "end": [1, 2],
+                                    "digest": opened["edit_digest"], "change": "merge",
+                                })
                         self.assertEqual(editor.position, 0)
                         self.assertEqual(editor.data, original)
                     finally:
                         editor.close()
+
+    def test_merge_and_split_preserve_order_and_styles_in_both_formats(self):
+        try:
+            rhwp_command()
+        except PreviewError as error:
+            self.skipTest(str(error))
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            self.fixture(folder)
+            rhwp(["edit", "insert-row", "source.hwp", "--table", "1", "--row", "1", "--below",
+                  "-o", "three-rows.hwp"], folder)
+            rhwp(["edit", "set-cell", "three-rows.hwp", "--table", "1", "--row", "2", "--col", "0",
+                  "--text", "셋째 줄 왼쪽", "-o", "bottom-left.hwp"], folder)
+            rhwp(["edit", "set-cell", "bottom-left.hwp", "--table", "1", "--row", "2", "--col", "1",
+                  "--text", "셋째 줄 오른쪽", "-o", "bottom-right.hwp"], folder)
+            rhwp(["edit", "apply-char-format-in-cell", "bottom-right.hwp", "--table", "1", "--row", "1",
+                  "--col", "0", "--props", '{"bold":true}', "-o", "span.hwp"], folder)
+            rhwp(["export-hwpx", "span.hwp", "span.hwpx"], folder)
+            with patch.object(store, "DATABASE", folder/"span.sqlite3"):
+                store.initialize()
+                store.set_desktop_review(True)
+                for extension in ("hwp", "hwpx"):
+                    with self.subTest(extension=extension):
+                        self.exercise_span(folder, extension)
+
+    def exercise_span(self, folder, extension):
+        def styles(table, coordinate):
+            cell = grid_cells(table)[coordinate]
+            return [(run.find(HANGUL + "t").text, run.get("charPrIDRef"), para.get("paraPrIDRef"))
+                    for para in cell.findall(f"{HANGUL}subList/{HANGUL}p")
+                    for run in para.findall(HANGUL + "run")]
+
+        path = folder/f"span.{extension}"
+        original = path.read_bytes()
+        native = exported_tables(path)
+        address = [native[1][key] for key in ("section", "paragraph", "control")]
+        with open_package(hangul_xml(path)) as archive:
+            table = source_table(parse_part(archive, "Contents/section0.xml"), native[1])
+            expected = sum((styles(table, key) for key in ((1, 0), (1, 1), (2, 0), (2, 1))), [])
+        self.assertEqual([text for text, *_ in expected], ["같은 값", "같은 값", "셋째 줄 왼쪽", "셋째 줄 오른쪽"])
+        self.assertNotEqual(expected[0][1], expected[1][1])
+        entry = register_document(str(path), f"Span QA {extension}")["version"]
+        doc, base = entry["document_id"], entry["id"]
+        canvas = CanvasSession()
+        self.addCleanup(canvas.close)
+        page = canvas.open(doc, "main", base, 1)
+
+        def edit(page, change, coordinate, **params):
+            return canvas.page(number=1, operation="edit_table_span", value={
+                "address": address, "digest": page["edit_digest"], "change": change, "coordinate": coordinate, **params,
+            })
+
+        with self.assertRaisesRegex(ValueError, "서식"):
+            edit(page, "merge", [0, 0], end=[1, 1])
+        for bad in ([5, 0], [0, False], [1, 0]):
+            with self.assertRaises(ValueError):
+                edit(page, "merge", [1, 0], end=bad)
+        self.assertEqual(canvas.working.data, original)
+        before = Image.open(page["image"]).convert("RGB")
+        merged = edit(page, "merge", [2, 1], end=[1, 0])
+        self.assertIsNotNone(ImageChops.difference(before, Image.open(merged["image"]).convert("RGB")).getbbox())
+        self.assertIn([2, 2], [item.get("span") for item in merged["tables"][1]["cells"]])
+        with self.assertRaises(ValueError):
+            edit(page, "merge", [2, 1], end=[1, 0])
+        with self.assertRaises(ValueError):
+            edit(merged, "merge", [1, 0], end=[2, 2])
+        self.assertFalse(canvas.page(number=1, operation="undo")["dirty"])
+        self.assertEqual(canvas.working.data, original)
+        self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
+        merge_version = canvas.save("Merge selected cells", 1)["id"]
+        review_revision(doc, merge_version, "approve", base)
+        merged = canvas.open(doc, "main", merge_version, 1)
+        self.assertIn([2, 2], [item.get("span") for item in merged["tables"][1]["cells"]])
+
+        split = edit(merged, "split", [1, 0])
+        self.assertFalse(any(item.get("span") for item in split["tables"][1]["cells"]))
+        self.assertFalse(canvas.page(number=1, operation="undo")["dirty"])
+        self.assertTrue(canvas.page(number=1, operation="redo")["dirty"])
+        split_version = canvas.save("Split merged cells", 1)["id"]
+        review_revision(doc, split_version, "approve", merge_version)
+        reopened = canvas.open(doc, "main", split_version, 1)
+        self.assertIn("표 주변 본문", [item["text"] for item in reopened["objects"]])
+        with store.database(readonly=True) as db:
+            self.assertEqual(store.find_version(db, doc, base, "content")["content"], original)
+            for version, merged_flag in ((merge_version, True), (split_version, False)):
+                saved = store.find_version(db, doc, version, "content, extension")
+                self.assertEqual(saved["extension"], extension)
+                output = folder/f"span-{version}.{extension}"
+                output.write_bytes(saved["content"])
+                grid = exported_tables(output)
+                self.assertEqual(grid[0], native[0])
+                self.assertEqual((grid[1]["rows"], grid[1]["cols"]), (3, 3))
+                by_address = {(cell["row"], cell["col"]): cell for cell in grid[1]["cells"]}
+                self.assertEqual(by_address[1, 0]["colSpan"], 2 if merged_flag else 1)
+                if not merged_flag:
+                    self.assertEqual([by_address[key]["text"] for key in ((1, 1), (2, 0), (2, 1))], ["", "", ""])
+                with open_package(hangul_xml(output)) as archive:
+                    table = source_table(parse_part(archive, "Contents/section0.xml"), grid[1])
+                    self.assertEqual(styles(table, (1, 0)), expected)
+        _, image = render_document_page(doc, split_version)
+        self.assertTrue(image.data.startswith(b"\x89PNG"))

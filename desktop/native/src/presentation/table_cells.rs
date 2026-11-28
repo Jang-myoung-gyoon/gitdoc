@@ -8,12 +8,16 @@ pub(super) struct PageCell {
     text: String,
     #[serde(rename = "box")]
     pub(super) bounds: [f32; 4],
+    span: Option<[u32; 2]>,
 }
 
 impl PageCell {
     fn name(&self) -> String {
         let [row, col] = self.coordinate;
-        format!("{}행 {}열", row + 1, col + 1)
+        match self.span {
+            Some([rows, columns]) => format!("{}행 {}열 · 병합 {rows}×{columns}", row + 1, col + 1),
+            None => format!("{}행 {}열", row + 1, col + 1),
+        }
     }
 }
 
@@ -45,9 +49,20 @@ impl Editor {
             .get(self.selected_cell?)
     }
 
-    pub(super) fn select_table_at(&mut self, canvas: Rect, pointer: Option<Pos2>) {
+    pub(super) fn selected_cell_bounds(&self, canvas: Rect) -> Option<Rect> {
+        let first = project(canvas, self.selected_table_cell()?.bounds);
+        let end = self
+            .cell_range_end
+            .and_then(|index| self.page_tables.get(self.selected_table?)?.cells.get(index));
+        Some(end.map_or(first, |cell| first.union(project(canvas, cell.bounds))))
+    }
+
+    pub(super) fn select_table_at(&mut self, canvas: Rect, pointer: Option<Pos2>, extend: bool) {
+        let first = self.selected_cell;
+        let selected = self.selected_table;
         self.selected_table = None;
         self.selected_cell = None;
+        self.cell_range_end = None;
         let Some(point) = pointer else { return };
         let mut tables = self.page_tables.iter().enumerate().filter(|(_, table)| {
             table
@@ -68,6 +83,15 @@ impl Editor {
                 && cells.next().is_none()
             {
                 self.selected_cell = Some(index);
+                if extend
+                    && selected == self.selected_table
+                    && table.editable_grid
+                    && let Some(anchor) = first
+                    && anchor != index
+                {
+                    self.selected_cell = first;
+                    self.cell_range_end = Some(index);
+                }
             }
         }
     }
@@ -84,7 +108,10 @@ impl Editor {
             return;
         };
         let coordinate = self.selected_table_cell().map(|cell| cell.coordinate);
-        let enabled = table.editable_grid && coordinate.is_some() && self.text_edit().is_none();
+        let enabled = table.editable_grid
+            && coordinate.is_some()
+            && self.cell_range_end.is_none()
+            && self.text_edit().is_none();
         ui.add_enabled_ui(enabled, |ui| {
             ui.menu_button("줄/칸 편집", |ui| {
                 for (label, change) in [
@@ -125,7 +152,7 @@ impl Editor {
             .on_disabled_hover_text(if !table.editable_grid {
                 "병합·보호 셀 또는 복잡한 표 구조가 있으면 줄과 칸을 편집할 수 없습니다."
             } else {
-                "본문 입력을 먼저 반영하고 표의 셀을 선택하세요."
+                "본문 입력을 먼저 반영하고 표의 셀 하나를 선택하세요."
             });
         });
     }
@@ -162,7 +189,11 @@ impl Editor {
         None
     }
 
-    pub(super) fn table_cell_tools(&mut self, ui: &mut Ui) {
+    pub(super) fn table_cell_tools(
+        &mut self,
+        ui: &mut Ui,
+        action: &mut Option<(&'static str, Value)>,
+    ) {
         if self.format != Format::Hangul {
             return;
         }
@@ -176,9 +207,7 @@ impl Editor {
             .map_or_else(|| "셀 선택".into(), PageCell::name);
         if table.cells.is_empty() {
             ui.add_enabled(false, Button::new(label))
-                .on_disabled_hover_text(
-                    "이 페이지에서 편집 가능한 한 줄 텍스트 셀을 찾지 못했습니다.",
-                );
+                .on_disabled_hover_text("이 페이지에서 편집 가능한 셀을 찾지 못했습니다.");
             return;
         }
         ui.menu_button(label, |ui| {
@@ -189,6 +218,7 @@ impl Editor {
                         .clicked()
                     {
                         self.selected_cell = Some(index);
+                        self.cell_range_end = None;
                         self.reveal_table = true;
                         ui.close();
                     }
@@ -197,7 +227,78 @@ impl Editor {
         })
         .response
         .on_hover_text("행과 열로 셀을 선택합니다. 페이지에서 셀을 눌러 선택할 수도 있습니다.");
-        let text = self.selected_table_cell().map(|cell| cell.text.clone());
+        let selected = self.selected_cell;
+        let last = self.cell_range_end;
+        let selection = selected.map(|index| &table.cells[index]);
+        let editable = self.text_edit().is_none();
+        if table.editable_grid
+            && let Some(index) = selected
+        {
+            ui.menu_button("범위 끝 선택", |ui| {
+                ScrollArea::vertical()
+                    .id_salt("range-end")
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        for (end, cell) in table
+                            .cells
+                            .iter()
+                            .enumerate()
+                            .filter(|(end, _)| *end != index)
+                        {
+                            if ui
+                                .selectable_label(last == Some(end), cell.name())
+                                .clicked()
+                            {
+                                self.cell_range_end = Some(end);
+                                self.reveal_table = true;
+                                ui.close();
+                            }
+                        }
+                    });
+            })
+            .response
+            .on_hover_text(
+                "두 셀 사이의 직사각형 범위를 선택합니다. Shift를 누른 채 끝 셀을 눌러도 됩니다.",
+            );
+        }
+        let last = self.cell_range_end.map(|index| &table.cells[index]);
+        if let (Some(first), Some(last)) = (selection, last) {
+            ui.label(format!("{} ↔ {}", first.name(), last.name()));
+            button(
+                ui,
+                editable,
+                "셀 합치기",
+                "선택 범위의 내용을 첫 셀에 문단 순서로 합칩니다.",
+                || {
+                    *action = Some((
+                        "edit_table_span",
+                        json!({"address": table.address, "digest": self.edit_digest,
+                    "coordinate": first.coordinate, "end": last.coordinate, "change": "merge"}),
+                    ));
+                },
+            );
+            if ui.button("범위 해제").clicked() {
+                self.cell_range_end = None;
+            }
+            return;
+        }
+        if let Some(cell) = selection.filter(|cell| cell.span.is_some()) {
+            button(
+                ui,
+                editable,
+                "셀 나누기",
+                "기존 줄·칸 경계로 나누고 내용은 왼쪽 위 셀에 둡니다.",
+                || {
+                    *action = Some((
+                        "edit_table_span",
+                        json!({"address": table.address, "digest": self.edit_digest,
+                    "coordinate": cell.coordinate, "change": "split"}),
+                    ));
+                },
+            );
+            return;
+        }
+        let text = selection.map(|cell| cell.text.clone());
         button(
             ui,
             text.is_some() && self.text_edit().is_none(),

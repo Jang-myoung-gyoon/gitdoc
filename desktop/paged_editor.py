@@ -19,8 +19,8 @@ from desktop.document_objects import (
 from desktop.editor_fonts import use_rendered_fonts
 from desktop.exporting import convert_format
 from desktop.hangul_cells import (
-    GRID_MISMATCH, GRID_OPERATIONS, STALE_CELL, UNSAFE_GRID, cell_catalog, cell_value,
-    replace_cell, verify_cell, verify_grid,
+    GRID_MISMATCH, GRID_OPERATIONS, SPAN_MISMATCH, STALE_CELL, UNSAFE_GRID, UNSAFE_SPAN, cell_catalog, cell_value,
+    replace_cell, verify_cell, verify_grid, verify_span,
 )
 from desktop.hangul_format import CHARACTER, OPERATIONS as HANGUL_FORMATS, format_paragraph, formatting_catalog
 from desktop.shape_editor import apply_shape, prepare_legacy_shapes, shape_catalog
@@ -172,15 +172,35 @@ def exported_tables(source):
     return json.loads(rhwp(["export-tables", str(source), "--json"], source.parent))["tables"]
 
 
-def verify_hwp_streams(source, output, section):
+def edit_native_table(document, output, address, command, args, *, message, allow_resize=False):
+    original = exported_tables(document)
+    index = next((i for i, table in enumerate(original)
+                  if [table["section"], table["paragraph"], table["control"]] == address), None)
+    if index is None:
+        raise ValueError(STALE_CELL)
+    target = original[index]
+    rhwp(["edit", command, str(document), "--table", str(target["index"]),
+          *args, "-o", str(output)], output.parent)
+    updated = exported_tables(output)
+    identity = ["index", "section", "paragraph", "control"]
+    if not allow_resize:
+        identity += ["rows", "cols"]
+    if (len(updated) != len(original) or original[:index] != updated[:index]
+            or original[index+1:] != updated[index+1:]
+            or any(target[key] != updated[index][key] for key in identity)):
+        raise ValueError(message)
+    return target, updated[index], updated
+
+
+def verify_hwp_streams(source, output, section, message=GRID_MISMATCH):
     # The writer may change the target BodyText section. Keep every other OLE stream verbatim.
     with olefile.OleFileIO(io.BytesIO(source)) as old, olefile.OleFileIO(output) as new:
         if old.listdir(streams=True, storages=True) != new.listdir(streams=True, storages=True):
-            raise ValueError(GRID_MISMATCH)
+            raise ValueError(message)
         excluded = ["BodyText", f"Section{section}"]
         if any(old.openstream(path).read() != new.openstream(path).read()
                for path in old.listdir() if path != excluded):
-            raise ValueError(GRID_MISMATCH)
+            raise ValueError(message)
 
 
 def change_hwp(source, original, value, section, paragraph):
@@ -343,11 +363,15 @@ class PagedEditor:
                             pass
                 for table in tables:
                     address = tuple(table["address"])
-                    supported, grid = (native_cells or {}).get(address, ({}, False))
+                    supported, grid, spans = (native_cells or {}).get(address, ({}, False, {}))
                     table["cells"] = [{"coordinate": list(coordinate), "text": supported[coordinate], "box": box}
                                       for coordinate, box in sorted(page_cells[address].items())
                                       if box is not None and coordinate in supported]
                     table["editable_grid"] = grid and len(table["cells"]) == table["rows"] * table["columns"]
+                    table["cells"].extend({"coordinate": list(coordinate), "text": "", "box": box,
+                                           "span": spans[coordinate]}
+                                          for coordinate, box in sorted(page_cells[address].items())
+                                          if box is not None and coordinate in spans)
                 for item in objects:
                     identity = item["id"]
                     item["hangul_format"] = (identity >> 32, (identity & 0xffffffff) - 1) in formatting
@@ -418,29 +442,17 @@ class PagedEditor:
             folder = Path(work)
             document, output = (folder/f"{name}.{self.extension}" for name in ("document", "edited"))
             document.write_bytes(source)
-            original = exported_tables(document)
-            section, paragraph, control = chosen["address"]
-            index = next((i for i, table in enumerate(original)
-                          if (table["section"], table["paragraph"], table["control"])
-                          == (section, paragraph, control)), None)
-            if index is None:
-                raise ValueError(STALE_CELL)
-            native = original[index]
-            flags = ["--table", str(native["index"]), "--" + axis_name, str(coordinate[axis])]
+            flags = ["--" + axis_name, str(coordinate[axis])]
             if direction:
                 flags.append(direction)
-            rhwp(["edit", command, str(document), *flags, "-o", str(output)], folder)
-            after = exported_tables(output)
-            identity = ("index", "section", "paragraph", "control")
-            if (len(after) != len(original) or original[:index] != after[:index]
-                    or original[index+1:] != after[index+1:]
-                    or any(native[key] != after[index][key] for key in identity)):
-                raise ValueError(GRID_MISMATCH)
+            native, modified, after = edit_native_table(
+                document, output, chosen["address"], command, flags,
+                message=GRID_MISMATCH, allow_resize=True)
             binary = self.extension == "hwp"
             rewritten = verify_grid(hangul_xml(document), hangul_xml(output), native,
-                                    after[index], change, coordinate, binary)
+                                    modified, change, coordinate, binary)
             if binary:
-                verify_hwp_streams(source, output, section)
+                verify_hwp_streams(source, output, native["section"])
             else:
                 output.write_bytes(rewritten)
                 if exported_tables(output) != after:
@@ -453,6 +465,45 @@ class PagedEditor:
                 grid = next((table for table in visible if table["address"] == chosen["address"]), None)
                 if grid is None or grid["box"][0] < 0 or grid["box"][2] > 1:
                     raise ValueError("칸을 추가하면 표가 쪽 너비를 벗어납니다.")
+            return output.read_bytes()
+
+    def change_span(self, source, chosen, coordinate, selected, value):
+        change = value.get("change")
+        if change == "merge":
+            end = value.get("end")
+            if (not chosen["editable_grid"] or selected.get("span") or not isinstance(end, list)
+                    or len(end) != 2 or any(type(i) is not int for i in end)
+                    or not any(cell["coordinate"] == end for cell in chosen["cells"]) or end == coordinate):
+                raise ValueError("같은 표에서 병합되지 않은 일반 셀 범위를 선택하세요.")
+            start = tuple(map(min, zip(coordinate, end)))
+            end = tuple(map(max, zip(coordinate, end)))
+        elif change == "split" and selected.get("span") and value.get("end") is None:
+            start = tuple(coordinate)
+            end = tuple(offset + size - 1 for offset, size in zip(start, selected["span"]))
+        else:
+            raise ValueError(UNSAFE_SPAN)
+        if (end[0]-start[0]+1) * (end[1]-start[1]+1) > 1000:
+            raise ValueError("한 번에 1,000개를 초과하는 셀 범위는 편집할 수 없습니다.")
+
+        with tempfile.TemporaryDirectory(dir=self.directory.name) as work:
+            folder = Path(work)
+            document, output = (folder/f"{name}.{self.extension}" for name in ("document", "edited"))
+            document.write_bytes(source)
+            args = ["--row", str(start[0]), "--col", str(start[1])]
+            if change == "merge":
+                args += ["--end-row", str(end[0]), "--end-col", str(end[1])]
+            command = "merge-cells" if change == "merge" else "split-cell"
+            native, modified, after = edit_native_table(
+                document, output, chosen["address"], command, args, message=SPAN_MISMATCH)
+            binary = self.extension == "hwp"
+            rewritten = verify_span(hangul_xml(document), hangul_xml(output), native, modified,
+                                    start, end, change == "split", binary)
+            if binary:
+                verify_hwp_streams(source, output, native["section"], SPAN_MISMATCH)
+            else:
+                output.write_bytes(rewritten)
+                if exported_tables(output) != after:
+                    raise ValueError(SPAN_MISMATCH)
             return output.read_bytes()
 
     def apply(self, source, operation, text_edit, target, value, selection=None):
@@ -494,7 +545,7 @@ class PagedEditor:
             if self.extension == "hwp":
                 return convert_format("hwpx", "hwp", changed)
             return prepare_legacy_shapes(changed) if self.extension == "doc" else changed
-        if operation in ("edit_table_cell", "edit_table_grid") and self.extension in HANGUL_EXTENSIONS:
+        if operation in ("edit_table_cell", "edit_table_grid", "edit_table_span") and self.extension in HANGUL_EXTENSIONS:
             if not isinstance(value, dict):
                 raise ValueError(STALE_CELL)
             address, coordinate = value.get("address"), value.get("coordinate")
@@ -505,8 +556,12 @@ class PagedEditor:
             selected = next((cell for cell in chosen.get("cells", []) if cell["coordinate"] == coordinate), None)
             if selected is None:
                 raise ValueError(STALE_CELL)
+            if operation == "edit_table_span":
+                return self.change_span(source, chosen, coordinate, selected, value)
             if operation == "edit_table_grid":
                 return self.change_grid(source, chosen, coordinate, value)
+            if selected.get("span"):
+                raise ValueError(STALE_CELL)
             value = cell_value(value.get("text"))
             if value == selected["text"]:
                 return source

@@ -1,6 +1,7 @@
 """Resolve editable Hangul table cells against native document coordinates."""
 
 from collections import Counter
+from copy import deepcopy
 
 from lxml import etree
 
@@ -8,6 +9,9 @@ from desktop.document_objects import HANGUL
 from editing import open_package, parse_part, rewrite_package, valid_text
 
 STALE_CELL = "편집할 표 셀을 다시 선택하세요."
+UNSAFE_SPAN = "병합·나누기는 보호되지 않은 일반 셀에서만 사용할 수 있습니다."
+SPAN_STYLES = "선택한 셀의 테두리·여백·정렬 또는 머리글이 달라 서식을 보존한 채 합칠 수 없습니다."
+SPAN_MISMATCH = "셀 내용이나 서식을 확인할 수 없어 병합·나누기를 취소했습니다."
 
 UNSAFE_GRID = "병합되거나 보호된 셀, 또는 복잡한 표 구조에서는 줄·칸을 편집할 수 없습니다."
 GRID_MISMATCH = "줄·칸 편집 결과의 셀 내용과 서식을 확인할 수 없어 변경을 취소했습니다."
@@ -96,7 +100,9 @@ def cell_catalog(data, tables):
             if native is not None:
                 supported = {coordinate: element.text or ""
                              for coordinate, element, _ in source_cells(native, table)}
-                catalog[(*address, table["control"])] = supported, editable_grid(native, table, supported)
+                catalog[(*address, table["control"])] = (
+                    supported, editable_grid(native, table, supported), splittable_cells(native, table),
+                )
     return catalog
 
 
@@ -147,31 +153,37 @@ def verify_cell(expected, actual, table, coordinate):
             raise ValueError(message)
 
 
-def editable_grid(native, table, supported):
+def ordinary_table(native, table):
     size = native.find(HANGUL + "sz")
     rows = native.findall(HANGUL + "tr")
-    if (size is None or size.get("protect", "0") != "0"
-            or any(size.get(axis + "RelTo") != "ABSOLUTE" for axis in ("width", "height"))
-            or any(node.tag not in {HANGUL + kind for kind in ("sz", "pos", "outMargin", "inMargin", "tr")}
-                   for node in native)
-            or len(rows) != table["rows"]):
+    return (size is not None and size.get("protect", "0") == "0"
+            and all(size.get(axis + "RelTo") == "ABSOLUTE" for axis in ("width", "height"))
+            and all(node.tag in {HANGUL + kind for kind in ("sz", "pos", "outMargin", "inMargin", "tr")}
+                    for node in native)
+            and len(rows) == table["rows"] and all(not row.attrib for row in rows))
+
+
+def ordinary_cell(cell):
+    sublist = cell.find(HANGUL + "subList")
+    parts = Counter(node.tag for node in cell)
+    required = {HANGUL + name for name in ("subList", "cellAddr", "cellSpan", "cellSz")}
+    return (cell.tag == HANGUL + "tc" and not cell.get("name") and cell.get("protect", "0") == "0"
+            and sublist is not None and not sublist.get("id")
+            and all(sublist.get(flag, "0") == "0" for flag in (
+                "hasTextRef", "hasNumRef", "linkListIDRef", "linkListNextIDRef"))
+            and required <= parts.keys() <= required | {HANGUL + "cellMargin"}
+            and all(count == 1 for count in parts.values()))
+
+
+def editable_grid(native, table, supported):
+    if not ordinary_table(native, table):
         return False
     height, width = table["rows"], table["cols"]
     if (len(supported) != height * width or len(supported) != len(table["cells"])
             or any(not (0 <= row < height and 0 <= col < width) for row, col in supported)):
         return False
-    for row in rows:
-        if row.attrib or len(row) != table["cols"]:
-            return False
-        for cell in row:
-            sublist = cell.find(HANGUL + "subList")
-            if (cell.tag != HANGUL + "tc" or cell.get("name") or sublist is None or sublist.get("id")
-                    or any(sublist.get(flag, "0") != "0" for flag in (
-                        "hasTextRef", "hasNumRef", "linkListIDRef", "linkListNextIDRef"))
-                    or any(node.tag not in {HANGUL + kind for kind in (
-                        "subList", "cellAddr", "cellSpan", "cellSz", "cellMargin")} for node in cell)):
-                return False
-    return True
+    return all(len(row) == width and all(ordinary_cell(cell) for cell in row)
+               for row in native.findall(HANGUL + "tr"))
 
 
 def xml_signature(node, *, skip=frozenset(), synthetic_ids=False):
@@ -188,9 +200,19 @@ def xml_signature(node, *, skip=frozenset(), synthetic_ids=False):
 
 
 def grid_cells(table):
-    return {(int(address.get("rowAddr")), int(address.get("colAddr"))): cell
-            for cell in table.findall(f"{HANGUL}tr/{HANGUL}tc")
-            for address in cell.findall(HANGUL + "cellAddr")}
+    cells = {}
+    for cell in table.findall(f"{HANGUL}tr/{HANGUL}tc"):
+        addresses = cell.findall(HANGUL + "cellAddr")
+        if len(addresses) != 1:
+            return {}
+        address = tuple(addresses[0].get(key, "") for key in ("rowAddr", "colAddr"))
+        if any(not value.isascii() or not value.isdigit() or len(value) > 5 for value in address):
+            return {}
+        coordinate = tuple(map(int, address))
+        if coordinate in cells:
+            return {}
+        cells[coordinate] = cell
+    return cells
 
 
 def verify_grid(source, staged, before, after, operation, coordinate, binary):
@@ -261,23 +283,170 @@ def verify_grid(source, staged, before, after, operation, coordinate, binary):
             raise ValueError(GRID_MISMATCH)
         # Install only the table. Use the original HWPX cells (and paragraph IDs) for
         # all surviving entries, and assign fresh IDs only to newly created cells.
-        if remaining:
-            used = (int(ident) for part_name in original.namelist()
-                    if part_name.startswith("Contents/section") and part_name.endswith(".xml")
-                    for paragraph in (root if part_name == part else parse_part(original, part_name)).iter(HANGUL + "p")
-                    if (ident := paragraph.get("id", "")).isascii() and ident.isdigit())
-            next_id = max(used, default=0) + 1
-            for key in sorted(remaining):
-                paragraph = new_cells[key].find(f"{HANGUL}subList/{HANGUL}p")
-                if next_id > 0xffffffff:
-                    raise ValueError(GRID_MISMATCH)
-                paragraph.set("id", str(next_id))
-                next_id += 1
-        for old_cell, new_cell in surviving:
-            old_address = old_cell.find(HANGUL + "cellAddr")
-            new_address = new_cell.find(HANGUL + "cellAddr")
-            old_address.attrib.update(new_address.attrib)
-            new_cell.getparent().replace(new_cell, old_cell)
+        preserve_ids(original, root, part, [new_cells[key] for key in sorted(remaining)])
+        preserve_cells(surviving)
+        replacement.tail = table.tail
+        table.getparent().replace(table, replacement)
+        return rewrite_package(original, {part: root})
+
+
+
+def preserve_ids(original, root, part, new_cells):
+    if not new_cells:
+        return
+    used = (int(ident) for part_name in original.namelist()
+            if part_name.startswith("Contents/section") and part_name.endswith(".xml")
+            for paragraph in (root if part_name == part else parse_part(original, part_name)).iter(HANGUL + "p")
+            if (ident := paragraph.get("id", "")).isascii() and ident.isdigit())
+    next_id = max(used, default=0) + 1
+    for cell in new_cells:
+        paragraph = cell.find(f"{HANGUL}subList/{HANGUL}p")
+        if next_id > 0xffffffff:
+            raise ValueError(GRID_MISMATCH)
+        paragraph.set("id", str(next_id))
+        next_id += 1
+
+
+def preserve_cells(surviving):
+    for old_cell, new_cell in surviving:
+        old_address = old_cell.find(HANGUL + "cellAddr")
+        new_address = new_cell.find(HANGUL + "cellAddr")
+        old_address.attrib.update(new_address.attrib)
+        new_cell.getparent().replace(new_cell, old_cell)
+
+
+def plain_paragraphs(cell):
+    if not ordinary_cell(cell):
+        return []
+    paragraphs = cell.find(HANGUL + "subList")
+    for paragraph in paragraphs:
+        runs = paragraph.findall(HANGUL + "run")
+        if (paragraph.tag != HANGUL + "p" or len(runs) != 1 or len(runs[0]) != 1
+                or any(child.tag not in (HANGUL + "run", HANGUL + "linesegarray") for child in paragraph)
+                or runs[0][0].tag != HANGUL + "t" or len(runs[0][0])):
+            return []
+    return list(paragraphs)
+
+
+def splittable_cells(native, table):
+    if not ordinary_table(native, table):
+        return {}
+    spans = [(item["row"], item["col"], item["rowSpan"], item["colSpan"])
+             for item in table["cells"] if item["rowSpan"] > 1 or item["colSpan"] > 1]
+    if not spans:
+        return {}
+    cells = grid_cells(native)
+    result = {}
+    for row, col, rows, cols in spans:
+        if not (1 <= rows <= table["rows"]-row and 1 <= cols <= table["cols"]-col):
+            continue
+        cell = cells.get((row, col))
+        if cell is None or not plain_paragraphs(cell):
+            continue
+        span = cell.find(HANGUL + "cellSpan")
+        if span is not None and span.get("rowSpan") == str(rows) and span.get("colSpan") == str(cols):
+            result[row, col] = [rows, cols]
+    return result
+
+
+def cell_appearance(cell):
+    sublist = cell.find(HANGUL + "subList")
+    flags = dict(cell.attrib)
+    flags.pop("dirty", None)
+    return flags, dict(sublist.attrib), tuple(
+        xml_signature(node) for node in cell if node.tag not in {
+            HANGUL + name for name in ("cellAddr", "cellSpan", "cellSz", "subList")
+        }
+    )
+
+
+def paragraph_signatures(paragraphs):
+    return [xml_signature(p, skip={HANGUL + "linesegarray"}, synthetic_ids=True) for p in paragraphs]
+
+
+def paragraph_nonempty(paragraph):
+    return bool(paragraph.find(f"{HANGUL}run/{HANGUL}t").text)
+
+
+def verify_span(source, staged, before, after, start, end, splitting, binary):
+    part = section_part(before["section"])
+    area = [(row, col) for row in range(start[0], end[0] + 1) for col in range(start[1], end[1] + 1)]
+    if splitting and any(
+            (entry["row"], entry["col"]) != start
+            and entry["row"] <= end[0] and entry["row"] + entry["rowSpan"] > start[0]
+            and entry["col"] <= end[1] and entry["col"] + entry["colSpan"] > start[1]
+            for entry in before["cells"]):
+        raise ValueError(UNSAFE_SPAN)
+    with open_package(source) as original, open_package(staged) as candidate:
+        root, changed = parse_part(original, part), parse_part(candidate, part)
+        table, replacement = source_table(root, before), source_table(changed, after)
+        if (table is None or replacement is None or not ordinary_table(table, before)
+                or not ordinary_table(replacement, after)):
+            raise ValueError(SPAN_MISMATCH)
+        # Combining or redistributing paragraphs can change the computed table height.
+        height = replacement.find(HANGUL + "sz").get("height", "")
+        if not height.isascii() or not height.isdigit() or int(height) <= 0:
+            raise ValueError(SPAN_MISMATCH)
+        table.find(HANGUL + "sz").set("height", height)
+        if xml_signature(table, skip={HANGUL + "tr"}) != xml_signature(replacement, skip={HANGUL + "tr"}):
+            raise ValueError(SPAN_MISMATCH)
+        old, new = grid_cells(table), grid_cells(replacement)
+        if start not in old or start not in new:
+            raise ValueError(SPAN_MISMATCH)
+        unaffected = old.keys() - set(area)
+        expected = unaffected | (set(area) if splitting else {start})
+        if new.keys() != expected or any(
+                xml_signature(old[key], synthetic_ids=True) != xml_signature(new[key], synthetic_ids=True)
+                for key in unaffected):
+            raise ValueError(SPAN_MISMATCH)
+        appearance = cell_appearance(old[start])
+        selected = [old[start]] if splitting else [old[key] for key in area if key in old]
+        if (not splitting and len(selected) != len(area)) or any(not plain_paragraphs(cell) for cell in selected):
+            raise ValueError(UNSAFE_SPAN)
+        if any(cell_appearance(cell) != appearance for cell in selected):
+            raise ValueError(SPAN_STYLES)
+        target_cells = [new[key] for key in area if key in new]
+        if any(not plain_paragraphs(cell) or cell_appearance(cell) != appearance for cell in target_cells):
+            raise ValueError(SPAN_MISMATCH)
+
+        first = plain_paragraphs(old[start])
+        expected_paragraphs = first + [
+            paragraph for cell in selected[1:] for paragraph in plain_paragraphs(cell)
+            if paragraph_nonempty(paragraph)
+        ]
+        blank_style = deepcopy(first[0])
+        blank_style.find(f"{HANGUL}run/{HANGUL}t").text = None
+        if not splitting and any(
+                paragraph_signatures([paragraph]) != paragraph_signatures([blank_style])
+                for cell in selected[1:] for paragraph in plain_paragraphs(cell)
+                if not paragraph_nonempty(paragraph)):
+            raise ValueError(SPAN_STYLES)
+        candidate_paragraphs = plain_paragraphs(new[start])
+        if paragraph_signatures(expected_paragraphs) != paragraph_signatures(candidate_paragraphs):
+            raise ValueError(SPAN_MISMATCH)
+        blanks = target_cells[1:]
+        if any(len(plain_paragraphs(cell)) != 1 or paragraph_nonempty(plain_paragraphs(cell)[0])
+               for cell in blanks):
+            raise ValueError(SPAN_MISMATCH)
+        by_coordinate = {(item["row"], item["col"]): (item["rowSpan"], item["colSpan"]) for item in after["cells"]}
+        shape = (end[0]-start[0]+1, end[1]-start[1]+1)
+        if any(by_coordinate.get(key) != (1, 1) for key in area if splitting) or (
+                not splitting and by_coordinate.get(start) != shape):
+            raise ValueError(SPAN_MISMATCH)
+        if binary:
+            table.getparent().remove(table)
+            replacement.getparent().remove(replacement)
+            if xml_signature(root, synthetic_ids=True) != xml_signature(changed, synthetic_ids=True):
+                raise ValueError(SPAN_MISMATCH)
+            return None
+
+        header = "Contents/header.xml"
+        if xml_signature(parse_part(original, header)) != xml_signature(parse_part(candidate, header)):
+            raise ValueError(SPAN_MISMATCH)
+        preserve_ids(original, root, part, blanks)
+        for paragraph, generated in zip(expected_paragraphs, candidate_paragraphs):
+            generated.getparent().replace(generated, paragraph)
+        preserve_cells((old[key], new[key]) for key in sorted(unaffected))
         replacement.tail = table.tail
         table.getparent().replace(table, replacement)
         return rewrite_package(original, {part: root})
